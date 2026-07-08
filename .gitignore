@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments and caches
+.venv/
+venv/
+env/
+cache/
+
+# External source/build trees
+external/
+build/
+dist/
+*.egg-info/
+
+# Calculation outputs
+runs/
+OUT.*/
+*.log
+*.out
+*.err
+*.dat
+*.traj
+*.xyz
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

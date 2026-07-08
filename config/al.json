@@ -1,0 +1,10 @@
+{
+  "element": "Al",
+  "structure": "fcc",
+  "mass": 26.9815385,
+  "lattice_a_angstrom": 4.05,
+  "pseudopotential": "al.gga.psp",
+  "pseudo_type": "blps",
+  "experimental_melting_k": 933.47,
+  "coexistence_temperatures_k": [880, 920, 940, 980, 1020]
+}

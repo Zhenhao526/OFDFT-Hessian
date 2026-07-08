@@ -1,0 +1,11 @@
+{
+  "element": "Mg",
+  "structure": "hcp",
+  "mass": 24.305,
+  "lattice_a_angstrom": 3.2094,
+  "lattice_c_angstrom": 5.2108,
+  "pseudopotential": "mg.lda.lps",
+  "pseudo_type": "blps",
+  "experimental_melting_k": 923.0,
+  "coexistence_temperatures_k": [870, 900, 930, 960, 1000]
+}

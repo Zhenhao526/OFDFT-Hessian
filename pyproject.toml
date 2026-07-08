@@ -1,0 +1,17 @@
+[project]
+name = "mpn-melting"
+version = "0.1.0"
+description = "Local workflow helpers for MPN-OFDFT melting calculations with ABACUS."
+requires-python = ">=3.9"
+authors = [
+  { name = "MPN melting project" }
+]
+dependencies = []
+
+[project.scripts]
+mpn-melting = "mpn_melting.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+

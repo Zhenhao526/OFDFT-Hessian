@@ -1,0 +1,23 @@
+{
+  "abacus_executable": "/Users/xia/Documents/合金/external/abacus-develop/build-mpn/source/abacus_pw_para",
+  "calculation": "scf",
+  "esolver_type": "ksdft",
+  "basis_type": "pw",
+  "dft_functional": "XC_GGA_X_PBE+XC_GGA_C_PBE",
+  "pseudo_dir": "/Users/xia/Documents/合金/external/abacus-develop/tests/PP_ORB",
+  "pseudo_rcut": 16,
+  "ecutwfc": 20,
+  "scf_thr": 1e-6,
+  "scf_nmax": 100,
+  "symmetry": 0,
+  "cal_force": 1,
+  "cal_stress": 0,
+  "ks_solver": "cg",
+  "device": "cpu",
+  "smearing_method": "gauss",
+  "smearing_sigma": 0.002,
+  "mixing_type": "broyden",
+  "mixing_beta": 0.5,
+  "kmesh": [1, 1, 1],
+  "mpirun_np": 1
+}
