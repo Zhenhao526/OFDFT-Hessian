@@ -6,28 +6,45 @@ repo=${REPO:-$workspace/repository}
 runtime=${RUNTIME:-/home/shenwei01/wt_melting_runtime_20260724}
 root=${RUN_ROOT:-$workspace/runs/step4_rebuild}
 prod=$root/enthalpy_production
-source_analysis=$prod/analysis_T0975_T1050
 extensions=$prod/critical_extensions
-analysis=$prod/analysis_T0975_T1050_extension_round1
+round=${ROUND:-1}
+if ! [[ $round =~ ^[1-9][0-9]*$ ]]; then
+    printf 'ROUND must be a positive integer, got %s\n' "$round" >&2
+    exit 2
+fi
+previous_round=$((round - 1))
+if ((round == 1)); then
+    source_analysis=$prod/analysis_T0975_T1050
+    source_975=$prod/T0975_steps3000
+    source_1050=$prod/T1050_steps3000
+    prior_marker=$workspace/audit/step4_enthalpy_prod_975_1050.needs_extension
+else
+    source_analysis=$prod/analysis_T0975_T1050_extension_round${previous_round}
+    source_975=$extensions/T0975_steps3000_round${previous_round}
+    source_1050=$extensions/T1050_steps3000_round${previous_round}
+    prior_marker=$workspace/audit/step4_enthalpy_extension_round${previous_round}.needs_extension
+fi
+analysis=$prod/analysis_T0975_T1050_extension_round${round}
 config=$repo/config/abacus_wt_node01_local_cpu18.json
 binary=$runtime/build-abacus-wt-cpu/source/abacus_pw_para
 mpirun=$runtime/conda_prefix/bin/mpirun
 selection=$analysis/extension_selection.json
-log=$workspace/audit/step4_enthalpy_extension_round1.log
-done_file=$workspace/audit/step4_enthalpy_extension_round1.done
-failed_file=$workspace/audit/step4_enthalpy_extension_round1.failed
-extension_file=$workspace/audit/step4_enthalpy_extension_round1.needs_extension
+log=$workspace/audit/step4_enthalpy_extension_round${round}.log
+done_file=$workspace/audit/step4_enthalpy_extension_round${round}.done
+failed_file=$workspace/audit/step4_enthalpy_extension_round${round}.failed
+extension_file=$workspace/audit/step4_enthalpy_extension_round${round}.needs_extension
 
 mkdir -p "$extensions" "$analysis" "$workspace/audit"
 rm -f "$done_file" "$failed_file" "$extension_file"
-printf '%s enthalpy_extension_round1_started\n' "$(date -Iseconds)" > "$log"
+printf '%s enthalpy_extension_started round=%s\n' \
+    "$(date -Iseconds)" "$round" > "$log"
 
 mark_failed() {
     local rc=$?
     trap - ERR
     if [[ ! -e $done_file && ! -e $extension_file ]]; then
-        printf '%s enthalpy_extension_round1_failed exit_code=%s\n' \
-            "$(date -Iseconds)" "$rc" | tee -a "$log" "$failed_file"
+        printf '%s enthalpy_extension_failed round=%s exit_code=%s\n' \
+            "$(date -Iseconds)" "$round" "$rc" | tee -a "$log" "$failed_file"
     fi
     exit "$rc"
 }
@@ -36,7 +53,7 @@ trap mark_failed ERR
 test -x "$binary"
 test -x "$mpirun"
 test -s "$source_analysis/discard_convergence_summary.json"
-test -s "$workspace/audit/step4_enthalpy_prod_975_1050.needs_extension"
+test -s "$prior_marker"
 
 env PYTHONPATH="$repo" python3 \
     "$repo/scripts/select_wt_enthalpy_extensions.py" \
@@ -58,8 +75,8 @@ PY
 prepare_extension() {
     local temperature=$1
     local seed=$2
-    local source=$prod/T${temperature}_steps3000
-    local out=$extensions/T${temperature}_steps3000_round1
+    local source=$3
+    local out=$extensions/T${temperature}_steps3000_round${round}
 
     test -s "$source/confirmation_manifest.json"
     test -s "$source/confirmation_summary.json"
@@ -72,12 +89,12 @@ prepare_extension() {
     fi
 }
 
-prepare_extension 0975 2026091975
-prepare_extension 1050 2026092050
+prepare_extension 0975 "$((2026091975 + previous_round * 10000))" "$source_975"
+prepare_extension 1050 "$((2026092050 + previous_round * 10000))" "$source_1050"
 
 roots=(
-    "$extensions/T0975_steps3000_round1"
-    "$extensions/T1050_steps3000_round1"
+    "$extensions/T0975_steps3000_round${round}"
+    "$extensions/T1050_steps3000_round${round}"
 )
 points=(
     "${roots[0]}/solid"
@@ -184,11 +201,11 @@ env PYTHONPATH="$repo" python3 \
 
 (
     cd "$prod"
-    find critical_extensions/T0975_steps3000_round1 \
-        critical_extensions/T1050_steps3000_round1 \
-        analysis_T0975_T1050_extension_round1 \
+    find critical_extensions/T0975_steps3000_round${round} \
+        critical_extensions/T1050_steps3000_round${round} \
+        analysis_T0975_T1050_extension_round${round} \
         -type f -print0 | sort -z | xargs -0 sha256sum
-) > "$prod/SHA256SUMS_extension_round1"
+) > "$prod/SHA256SUMS_extension_round${round}"
 
 status=$(python3 - "$convergence" <<'PY'
 import json
@@ -198,12 +215,12 @@ print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])
 PY
 )
 if [[ $status != verified ]]; then
-    printf '%s enthalpy_extension_round1_needs_extension status=%s\n' \
-        "$(date -Iseconds)" "$status" | tee -a "$log" "$extension_file"
+    printf '%s enthalpy_extension_needs_extension round=%s status=%s\n' \
+        "$(date -Iseconds)" "$round" "$status" | tee -a "$log" "$extension_file"
     trap - ERR
     exit 3
 fi
 
 date -Iseconds > "$done_file"
-printf '%s enthalpy_extension_round1_verified\n' \
-    "$(date -Iseconds)" | tee -a "$log"
+printf '%s enthalpy_extension_verified round=%s\n' \
+    "$(date -Iseconds)" "$round" | tee -a "$log"
