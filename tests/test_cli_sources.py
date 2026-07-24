@@ -4,6 +4,9 @@ from pathlib import Path
 
 from mpn_melting.cli import (
     ANGSTROM_PER_FS_PER_ATOMIC_UNIT_VELOCITY,
+    apply_md_options,
+    build_parser,
+    configure_restart_velocities,
     load_atom_source,
     load_region_labels,
     resolve_region_source,
@@ -11,6 +14,134 @@ from mpn_melting.cli import (
 
 
 class CliSourceTests(unittest.TestCase):
+    def test_npt_options_enable_stress_and_zero_pressure(self):
+        args = build_parser().parse_args(
+            [
+                "make-liquid",
+                "--element",
+                "Al",
+                "--out",
+                "unused",
+                "--temperature",
+                "940",
+                "--ensemble",
+                "npt",
+                "--pmode",
+                "iso",
+                "--pcouple",
+                "xyz",
+            ]
+        )
+        config = {"cal_stress": 0}
+        apply_md_options(config, args)
+        self.assertEqual(config["md_type"], "npt")
+        self.assertEqual(config["cal_stress"], 1)
+        self.assertEqual(config["md_pfirst"], 0.0)
+        self.assertEqual(config["md_plast"], 0.0)
+        self.assertEqual(config["md_pmode"], "iso")
+        self.assertEqual(config["md_pcouple"], "xyz")
+
+    def test_nve_restart_preserves_snapshot_temperature(self):
+        config = {"md_tfirst": 940.0, "md_tlast": 940.0}
+        configure_restart_velocities(config, ensemble="nve", has_velocities=True)
+        self.assertEqual(config["init_vel"], 1)
+        self.assertEqual(config["md_tfirst"], -1)
+        self.assertEqual(config["md_tlast"], -1)
+
+    def test_restart_accepts_cell_lengths(self):
+        args = build_parser().parse_args(
+            [
+                "make-restart",
+                "--element",
+                "Al",
+                "--out",
+                "unused",
+                "--temperature",
+                "980",
+                "--source",
+                "source",
+                "--cell-lengths",
+                "24.3",
+                "24.3",
+                "27.6",
+            ]
+        )
+        self.assertEqual(args.cell_lengths, [24.3, 24.3, 27.6])
+
+    def test_joined_coexist_accepts_liquid_shift(self):
+        args = build_parser().parse_args(
+            [
+                "make-joined-coexist",
+                "--element",
+                "Al",
+                "--out",
+                "unused",
+                "--temperature",
+                "940",
+                "--solid-source",
+                "solid",
+                "--liquid-source",
+                "liquid",
+                "--liquid-shift",
+                "0.25",
+                "0.5",
+                "0.75",
+            ]
+        )
+        self.assertEqual(args.liquid_shift, [0.25, 0.5, 0.75])
+
+    def test_coexist_seed_accepts_phase_z_lengths(self):
+        args = build_parser().parse_args(
+            [
+                "make-coexist",
+                "--element",
+                "Al",
+                "--out",
+                "unused",
+                "--temperature",
+                "1600",
+                "--phase-z-lengths",
+                "8.1",
+                "9.213",
+            ]
+        )
+        self.assertEqual(args.phase_z_lengths, [8.1, 9.213])
+
+    def test_tiled_coexist_accepts_template_frame(self):
+        args = build_parser().parse_args(
+            [
+                "make-tiled-coexist",
+                "--element",
+                "Al",
+                "--out",
+                "unused",
+                "--temperature",
+                "940",
+                "--template",
+                "template-run",
+                "--template-frame",
+                "35",
+            ]
+        )
+        self.assertEqual(args.template_frame, "35")
+
+    def test_restart_can_discard_source_velocities(self):
+        args = build_parser().parse_args(
+            [
+                "make-restart",
+                "--element",
+                "Al",
+                "--out",
+                "unused",
+                "--temperature",
+                "940",
+                "--source",
+                "source",
+                "--discard-velocities",
+            ]
+        )
+        self.assertTrue(args.discard_velocities)
+
     def test_load_atom_source_uses_selected_frame(self):
         text = """MDSTEP:  0
 LATTICE_CONSTANT: 1.0 Angstrom

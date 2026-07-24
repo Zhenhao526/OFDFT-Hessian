@@ -1,0 +1,22 @@
+{
+  "description": "WT Al108 T1100 logical continuation: local steps 0-1700 map to global steps 1300-3000",
+  "points": [
+    {
+      "liquid_run": "/home/shenwei01/wt_melting_local_runs_20260724/T1100_resume_s1300_to_s3000/liquid",
+      "liquid_volume_per_atom_A3": 19.106478865122236,
+      "solid_run": "/home/shenwei01/wt_melting_local_runs_20260724/T1100_resume_s1300_to_s3000/solid",
+      "solid_volume_per_atom_A3": 18.368954645234547,
+      "steps": 1700,
+      "target_pressure_kbar": 0.0,
+      "temperature_k": 1100.0
+    }
+  ],
+  "schema": "wt-fusion-enthalpy-manifest-v1",
+  "stitch": {
+    "global_target_steps": 3000,
+    "local_continuation_steps": 1700,
+    "local_step_offset": 1300,
+    "source_global_step": 1300
+  },
+  "target_kedf": "wt"
+}

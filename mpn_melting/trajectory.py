@@ -14,6 +14,7 @@ class MdFrame:
     step: int
     lattice: Matrix
     positions: List[Vector]
+    forces: List[Vector] | None = None
     velocities: List[Vector] | None = None
 
 
@@ -30,6 +31,135 @@ class TrajectorySummary:
     mean_nearest_neighbor: float
     final_mean_nearest_neighbor: float
     lindemann_ratio: float
+
+
+def non_affine_displacement_series(
+    frames: Sequence[MdFrame],
+) -> List[Tuple[int, List[Vector]]]:
+    """Track unwrapped displacements while removing homogeneous cell deformation."""
+    usable = [frame for frame in frames if frame.positions]
+    if not usable:
+        return []
+    natoms = min(len(frame.positions) for frame in usable)
+    accumulated = [[0.0, 0.0, 0.0] for _ in range(natoms)]
+    first = usable[0]
+    previous_fractional = [
+        matmul_row(position, invert_3x3(first.lattice))
+        for position in first.positions[:natoms]
+    ]
+    values: List[Tuple[int, List[Vector]]] = [
+        (first.step, [tuple(vector) for vector in accumulated])
+    ]
+    previous_lattice = first.lattice
+    for frame in usable[1:]:
+        inverse = invert_3x3(frame.lattice)
+        current_fractional = [
+            matmul_row(position, inverse)
+            for position in frame.positions[:natoms]
+        ]
+        mean_lattice = tuple(
+            tuple((previous_lattice[row][column] + frame.lattice[row][column]) * 0.5 for column in range(3))
+            for row in range(3)
+        )
+        for index, (previous, current) in enumerate(zip(previous_fractional, current_fractional)):
+            fractional_step = tuple(
+                (current[axis] - previous[axis]) - round(current[axis] - previous[axis])
+                for axis in range(3)
+            )
+            cartesian_step = matmul_row(fractional_step, mean_lattice)
+            for axis in range(3):
+                accumulated[index][axis] += cartesian_step[axis]
+        values.append((frame.step, [tuple(vector) for vector in accumulated]))
+        previous_fractional = current_fractional
+        previous_lattice = frame.lattice
+    return values
+
+
+def non_affine_msd_series(frames: Sequence[MdFrame]) -> List[Tuple[int, float]]:
+    """Track single-origin unwrapped atomic MSD."""
+    return [
+        (
+            step,
+            sum(
+                sum(component * component for component in vector)
+                for vector in displacements
+            )
+            / len(displacements),
+        )
+        for step, displacements in non_affine_displacement_series(frames)
+    ]
+
+
+def time_origin_averaged_msd_series(
+    frames: Sequence[MdFrame],
+    *,
+    maximum_lag_fraction: float = 0.5,
+    lag_samples: int = 12,
+) -> List[Tuple[float, float]]:
+    """Estimate self-MSD from multiple time origins with center-of-mass drift removed."""
+    displacement_series = non_affine_displacement_series(frames)
+    nframes = len(displacement_series)
+    if nframes < 3:
+        return []
+    if not 0.0 < maximum_lag_fraction <= 1.0:
+        raise ValueError("maximum_lag_fraction must be in (0, 1]")
+    if lag_samples < 2:
+        raise ValueError("lag_samples must be at least 2")
+
+    minimum_lag = max(1, nframes // 10)
+    maximum_lag = max(minimum_lag, int((nframes - 1) * maximum_lag_fraction))
+    available_lags = maximum_lag - minimum_lag + 1
+    if available_lags <= lag_samples:
+        lags = list(range(minimum_lag, maximum_lag + 1))
+    else:
+        lags = sorted(
+            {
+                round(minimum_lag + sample * (maximum_lag - minimum_lag) / (lag_samples - 1))
+                for sample in range(lag_samples)
+            }
+        )
+
+    result: List[Tuple[float, float]] = []
+    for lag in lags:
+        elapsed_steps = []
+        origin_msds = []
+        for origin in range(nframes - lag):
+            start_step, start = displacement_series[origin]
+            end_step, end = displacement_series[origin + lag]
+            natoms = min(len(start), len(end))
+            if natoms == 0:
+                continue
+            deltas = [
+                tuple(end[index][axis] - start[index][axis] for axis in range(3))
+                for index in range(natoms)
+            ]
+            center_of_mass = tuple(
+                sum(delta[axis] for delta in deltas) / natoms for axis in range(3)
+            )
+            origin_msds.append(
+                sum(
+                    sum(
+                        (delta[axis] - center_of_mass[axis]) ** 2
+                        for axis in range(3)
+                    )
+                    for delta in deltas
+                )
+                / natoms
+            )
+            elapsed_steps.append(end_step - start_step)
+        if origin_msds:
+            result.append(
+                (
+                    sum(elapsed_steps) / len(elapsed_steps),
+                    sum(origin_msds) / len(origin_msds),
+                )
+            )
+    return result
+
+
+def lattice_volume(lattice: Matrix) -> float:
+    (a, b, c), (d, e, f), (g, h, i) = lattice
+    return abs(a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g))
 
 
 def parse_md_dump(path: Path) -> List[MdFrame]:
@@ -53,15 +183,26 @@ def parse_md_dump(path: Path) -> List[MdFrame]:
             idx += 1
         idx += 1
         positions: List[Vector] = []
+        forces: List[Vector] = []
         velocities: List[Vector] = []
         while idx < len(lines) and lines[idx].strip():
             parts = lines[idx].split()
             if len(parts) >= 5:
                 positions.append((float(parts[2]), float(parts[3]), float(parts[4])))
+                if len(parts) >= 8:
+                    forces.append((float(parts[5]), float(parts[6]), float(parts[7])))
                 if len(parts) >= 11:
                     velocities.append((float(parts[8]), float(parts[9]), float(parts[10])))
             idx += 1
-        frames.append(MdFrame(step=step, lattice=lattice, positions=positions, velocities=velocities or None))
+        frames.append(
+            MdFrame(
+                step=step,
+                lattice=lattice,
+                positions=positions,
+                forces=forces or None,
+                velocities=velocities or None,
+            )
+        )
     return frames
 
 

@@ -1,0 +1,97 @@
+diff --git a/external/abacus-develop/source/source_md/ti_pair_reference.h b/external/abacus-develop/source/source_md/ti_pair_reference.h
+--- a/external/abacus-develop/source/source_md/ti_pair_reference.h
++++ b/external/abacus-develop/source/source_md/ti_pair_reference.h
+@@ -27,5 +27,6 @@ struct Configuration
+ {
+     bool enabled = false;
++    bool reference_only = false;
+     double lambda = 1.0;
+     std::string model_path;
+     Model model;
+diff --git a/external/abacus-develop/source/source_md/ti_pair_reference.cpp b/external/abacus-develop/source/source_md/ti_pair_reference.cpp
+--- a/external/abacus-develop/source/source_md/ti_pair_reference.cpp
++++ b/external/abacus-develop/source/source_md/ti_pair_reference.cpp
+@@ -77,13 +77,15 @@ Configuration load_from_environment()
+ {
+     const char* lambda_text = std::getenv("MPN_TI_LAMBDA");
+     const char* model_path = std::getenv("MPN_TI_PAIR_MODEL");
+-    if (lambda_text == nullptr && model_path == nullptr)
++    const char* reference_only_text = std::getenv("MPN_TI_REFERENCE_ONLY");
++    if (lambda_text == nullptr && model_path == nullptr && reference_only_text == nullptr)
+     {
+         return Configuration{};
+     }
+     if (lambda_text == nullptr || model_path == nullptr)
+     {
+-        throw std::runtime_error("MPN_TI_LAMBDA and MPN_TI_PAIR_MODEL must be set together");
++        throw std::runtime_error(
++            "MPN_TI_LAMBDA and MPN_TI_PAIR_MODEL must be set when MPN TI is enabled");
+     }
+     Configuration configuration;
+     configuration.enabled = true;
+@@ -93,6 +95,14 @@ Configuration load_from_environment()
+     {
+         throw std::runtime_error("MPN_TI_LAMBDA must be in [0, 1]");
+     }
++    configuration.reference_only = reference_only_text != nullptr
++                                   && std::string(reference_only_text) != "0"
++                                   && std::string(reference_only_text) != "false";
++    if (configuration.reference_only && configuration.lambda != 0.0)
++    {
++        throw std::runtime_error(
++            "MPN_TI_REFERENCE_ONLY is only valid for lambda=0 and fixed-volume reference MD");
++    }
+     configuration.model_path = model_path;
+     configuration.model = load_model(configuration.model_path);
+     return configuration;
+diff --git a/external/abacus-develop/source/source_md/md_func.cpp b/external/abacus-develop/source/source_md/md_func.cpp
+--- a/external/abacus-develop/source/source_md/md_func.cpp
++++ b/external/abacus-develop/source/source_md/md_func.cpp
+@@ -265,6 +265,38 @@ void force_virial(ModuleESolver::ESolver* p_esolver,
+     ModuleBase::TITLE("MD_func", "force_virial");
+     ModuleBase::timer::start("MD_func", "force_virial");
+ 
++    static const TiPairReference::Configuration ti_configuration
++        = TiPairReference::load_from_environment();
++    if (ti_configuration.enabled && ti_configuration.reference_only)
++    {
++        if (cal_stress)
++        {
++            throw std::runtime_error("reference-only pair MD currently supports fixed-volume MD only");
++        }
++        const TiPairReference::Result reference
++            = TiPairReference::evaluate(unit_in, ti_configuration.model);
++        potential = reference.energy_ev / ModuleBase::Hartree_to_eV;
++        const double force_unit = ModuleBase::Hartree_to_eV * ModuleBase::ANGSTROM_AU;
++        for (int i = 0; i < unit_in.nat; ++i)
++        {
++            for (int j = 0; j < 3; ++j)
++            {
++                force[i][j] = reference.forces_ev_per_angstrom[i][j] / force_unit;
++            }
++        }
++        if (PARAM.globalv.myrank == 0)
++        {
++            const std::streamsize old_precision = GlobalV::ofs_running.precision();
++            GlobalV::ofs_running << std::setprecision(15)
++                                 << " PAIR_REFERENCE_COMPONENTS step=" << istep
++                                 << " U_REF_eV=" << reference.energy_ev
++                                 << " RMIN_A=" << reference.nearest_neighbor_angstrom << std::endl;
++            GlobalV::ofs_running.precision(old_precision);
++        }
++        ModuleBase::timer::end("MD_func", "force_virial");
++        return;
++    }
++
+     p_esolver->runner(unit_in, istep);
+ 
+     potential = p_esolver->cal_energy();
+@@ -284,8 +316,6 @@ void force_virial(ModuleESolver::ESolver* p_esolver,
+     force_temp *= 0.5;
+     virial *= 0.5;
+ 
+-    static const TiPairReference::Configuration ti_configuration
+-        = TiPairReference::load_from_environment();
+     if (ti_configuration.enabled)
+     {
+         if (cal_stress)

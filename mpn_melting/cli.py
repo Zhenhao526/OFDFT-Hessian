@@ -10,7 +10,17 @@ from pathlib import Path
 from .abacus_input import load_json, write_job
 from .report import write_analysis_report
 from .scan import collect_scan_points, summarize_scan
-from .structures import AtomSet, build_coexistence_seed, select_structure
+from .structures import (
+    AtomSet,
+    build_coexistence_seed,
+    constrain_regions,
+    join_phase_sources,
+    reshape_orthorhombic_cell,
+    reshape_coexistence_z_lengths,
+    select_structure,
+    tile_coexistence_template,
+)
+from .stru import read_stru
 from .trajectory import invert_3x3, matmul_row, parse_md_dump
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,7 +71,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fractional source-cell shift applied to liquid positions before slab mapping.",
     )
     coexist.add_argument("--liquid-displacement", type=float, default=0.35, help="Fallback random liquid-half displacement in Angstrom.")
+    coexist.add_argument(
+        "--phase-z-lengths",
+        nargs=2,
+        type=float,
+        metavar=("SOLID_Z", "LIQUID_Z"),
+        help="Set independent solid and liquid slab lengths after constructing a continuous seed.",
+    )
     coexist.set_defaults(func=cmd_make_coexist)
+
+    joined = sub.add_parser(
+        "make-joined-coexist",
+        help="Join independently equilibrated solid and liquid cells using their own phase volumes.",
+    )
+    add_common_job_args(joined)
+    add_md_job_args(joined, default_steps=1000)
+    joined.add_argument("--solid-source", required=True, help="Solid run directory or MD_dump file.")
+    joined.add_argument("--solid-source-frame", default="last")
+    joined.add_argument("--liquid-source", required=True, help="Liquid run directory or MD_dump file.")
+    joined.add_argument("--liquid-source-frame", default="last")
+    joined.add_argument(
+        "--liquid-shift",
+        nargs=3,
+        type=float,
+        default=[0.0, 0.0, 0.0],
+        metavar=("SX", "SY", "SZ"),
+        help="Periodic fractional shift of the liquid source used to avoid interface overlaps.",
+    )
+    joined.set_defaults(func=cmd_make_joined_coexist)
+
+    tiled = sub.add_parser(
+        "make-tiled-coexist",
+        help="Expand a validated two-phase STRU template without changing either phase density.",
+    )
+    tiled.add_argument("--element", choices=["Al", "Mg"], required=True)
+    tiled.add_argument("--element-config", help="Override the default element JSON.")
+    tiled.add_argument("--out", required=True)
+    tiled.add_argument("--abacus-config", default=str(CONFIG_DIR / "abacus_mpn.json"))
+    tiled.add_argument("--template", required=True, help="Template run directory or STRU file.")
+    tiled.add_argument("--template-frame", default="last", help="MD_dump frame used when --template is a run directory.")
+    tiled.add_argument("--region-source", help="Template run directory or regions.csv.")
+    tiled.add_argument("--repeat", nargs=3, type=int, default=[3, 3, 3], metavar=("RX", "RY", "RZ"))
+    tiled.add_argument("--split-axis", type=int, choices=[0, 1, 2], default=2)
+    tiled.add_argument("--split", type=float, default=0.5)
+    add_md_job_args(tiled, default_steps=1000)
+    tiled.set_defaults(func=cmd_make_tiled_coexist)
 
     restart = sub.add_parser("make-restart", help="Generate an MD restart job from an existing MD_dump frame.")
     add_common_job_args(restart)
@@ -71,6 +125,18 @@ def build_parser() -> argparse.ArgumentParser:
     restart.add_argument(
         "--region-source",
         help="Run directory or regions.csv whose labels should be preserved. Defaults to --source when possible.",
+    )
+    restart.add_argument(
+        "--cell-lengths",
+        nargs=3,
+        type=float,
+        metavar=("LX", "LY", "LZ"),
+        help="Replace the source cell by an orthorhombic cell while preserving fractional positions and velocities.",
+    )
+    restart.add_argument(
+        "--discard-velocities",
+        action="store_true",
+        help="Omit source velocities so ABACUS generates a fresh Maxwell distribution for every movable atom.",
     )
     restart.set_defaults(func=cmd_make_restart)
 
@@ -98,7 +164,7 @@ def add_md_job_args(parser: argparse.ArgumentParser, default_steps: int) -> None
     parser.add_argument("--temperature", type=float, required=True)
     parser.add_argument("--steps", type=int, default=default_steps)
     parser.add_argument("--dt", type=float, default=1.0)
-    parser.add_argument("--ensemble", choices=["nvt", "nve"], default="nvt")
+    parser.add_argument("--ensemble", choices=["nvt", "nve", "npt"], default="nvt")
     parser.add_argument(
         "--thermostat",
         choices=["nhc", "anderson", "berendsen", "rescaling", "rescale_v", "csvr"],
@@ -108,7 +174,24 @@ def add_md_job_args(parser: argparse.ArgumentParser, default_steps: int) -> None
     parser.add_argument("--nraise", type=int)
     parser.add_argument("--tolerance", type=float)
     parser.add_argument("--csvr-tau", type=float)
+    parser.add_argument("--dumpfreq", type=int)
+    parser.add_argument("--restartfreq", type=int)
     parser.add_argument("--seed", type=int)
+    parser.add_argument(
+        "--fix-region",
+        action="append",
+        choices=["solid_seed", "liquid_seed"],
+        default=[],
+        help="Fix every atom in the selected labeled region; may be repeated.",
+    )
+    parser.add_argument("--pressure-kbar", type=float, default=0.0)
+    parser.add_argument("--pressure-last-kbar", type=float)
+    parser.add_argument("--pmode", choices=["iso", "aniso", "tri"], default="iso")
+    parser.add_argument("--pcouple", choices=["xyz", "xy", "yz", "xz", "none"], default="xyz")
+    parser.add_argument("--pfreq", type=float)
+    parser.add_argument("--tchain", type=int)
+    parser.add_argument("--pchain", type=int)
+    parser.add_argument("--prec-level", type=int, choices=[0, 2])
 
 
 def cmd_env_check(args: argparse.Namespace) -> None:
@@ -206,6 +289,10 @@ def cmd_make_coexist(args: argparse.Namespace) -> None:
         liquid_displacement_angstrom=args.liquid_displacement,
         seed=args.seed,
     )
+    if args.phase_z_lengths:
+        atoms = reshape_coexistence_z_lengths(atoms, region_labels, *args.phase_z_lengths)
+    if args.fix_region:
+        atoms = constrain_regions(atoms, region_labels, args.fix_region)
     suffix = f"{args.element.lower()}_coexist_T{int(args.temperature)}"
     metadata = md_metadata(args)
     metadata.update(
@@ -216,6 +303,7 @@ def cmd_make_coexist(args: argparse.Namespace) -> None:
             "liquid_source_step": liquid_source["step"] if liquid_source else None,
             "liquid_shift": args.liquid_shift if liquid_source else None,
             "liquid_displacement_angstrom": args.liquid_displacement if not liquid_source else None,
+            "phase_z_lengths_angstrom": args.phase_z_lengths,
         }
     )
     write_job(
@@ -232,15 +320,143 @@ def cmd_make_coexist(args: argparse.Namespace) -> None:
     print(f"wrote coexistence seed job: {args.out} ({atoms.natoms} atoms)")
 
 
+def cmd_make_joined_coexist(args: argparse.Namespace) -> None:
+    element_config = load_element(args.element, args.element_config)
+    abacus_config = load_json(Path(args.abacus_config))
+    apply_md_options(abacus_config, args)
+    solid_source = load_atom_source(
+        args.solid_source,
+        args.solid_source_frame,
+        element_config["element"],
+    )
+    liquid_source = load_atom_source(
+        args.liquid_source,
+        args.liquid_source_frame,
+        element_config["element"],
+    )
+    atoms, region_labels = join_phase_sources(
+        solid_source["atoms"],
+        liquid_source["atoms"],
+        liquid_shift=args.liquid_shift,
+    )
+    if args.fix_region:
+        atoms = constrain_regions(atoms, region_labels, args.fix_region)
+    suffix = f"{args.element.lower()}_coexist_T{int(args.temperature)}"
+    metadata = md_metadata(args)
+    metadata.update(
+        {
+            "method": "paper_style_joined_independent_phases",
+            "solid_source": solid_source["source"],
+            "solid_source_step": solid_source["step"],
+            "liquid_source": liquid_source["source"],
+            "liquid_source_step": liquid_source["step"],
+            "liquid_shift": args.liquid_shift,
+            "fixed_regions": args.fix_region,
+            "note": "The solid x-y cross-section is shared while each phase source volume is preserved.",
+        }
+    )
+    write_job(
+        Path(args.out),
+        atoms,
+        element_config,
+        abacus_config,
+        job_type="coexistence_joined_interface_relaxation",
+        suffix=suffix,
+        calculation="md",
+        extra_metadata=metadata,
+        region_labels=region_labels,
+    )
+    print(f"wrote joined coexistence job: {args.out} ({atoms.natoms} atoms)")
+
+
+def cmd_make_tiled_coexist(args: argparse.Namespace) -> None:
+    element_config = load_element(args.element, args.element_config)
+    abacus_config = load_json(Path(args.abacus_config))
+    apply_md_options(abacus_config, args)
+    abacus_config["init_vel"] = 0
+
+    template = Path(args.template)
+    region_path = resolve_region_source(args.region_source or args.template)
+    if region_path is None:
+        raise FileNotFoundError("no regions.csv found for tiled coexistence template")
+    template_step = None
+    dump = first_md_dump(template) if template.is_dir() else (template if template.name == "MD_dump" else None)
+    if dump is not None:
+        template_source = load_atom_source(
+            dump.as_posix(),
+            args.template_frame,
+            element_config["element"],
+        )
+        source_atoms = template_source["atoms"]
+        template_path = template_source["source"]
+        template_step = template_source["step"]
+    else:
+        stru_path = template if template.is_file() else template / "STRU"
+        source_atoms = read_stru(stru_path)
+        template_path = stru_path.as_posix()
+    source_labels = load_region_labels(region_path)
+    atoms, region_labels = tile_coexistence_template(
+        source_atoms,
+        source_labels,
+        args.repeat,
+        split_axis=args.split_axis,
+        split=args.split,
+    )
+    if args.fix_region:
+        atoms = constrain_regions(atoms, region_labels, args.fix_region)
+    suffix = f"{args.element.lower()}_coexist_T{int(args.temperature)}"
+    metadata = md_metadata(args)
+    metadata.update(
+        {
+            "method": "tiled_validated_two_phase_template",
+            "template_source": template_path,
+            "template_source_step": template_step,
+            "template_regions": region_path.as_posix(),
+            "repeat": args.repeat,
+            "split_axis": args.split_axis,
+            "split": args.split,
+            "init_vel": False,
+            "note": "Template velocities are intentionally discarded; NVT generates independent velocities.",
+        }
+    )
+    write_job(
+        Path(args.out),
+        atoms,
+        element_config,
+        abacus_config,
+        job_type="coexistence_tiled_equilibration",
+        suffix=suffix,
+        calculation="md",
+        extra_metadata=metadata,
+        region_labels=region_labels,
+    )
+    print(f"wrote tiled coexistence job: {args.out} ({atoms.natoms} atoms)")
+
+
 def cmd_make_restart(args: argparse.Namespace) -> None:
     element_config = load_element(args.element, args.element_config)
     abacus_config = load_json(Path(args.abacus_config))
     apply_md_options(abacus_config, args)
-    source = load_atom_source(args.source, args.source_frame, element_config["element"], include_velocities=True)
-    if source["atoms"].velocities:
-        abacus_config["init_vel"] = 1
+    source = load_atom_source(
+        args.source,
+        args.source_frame,
+        element_config["element"],
+        include_velocities=not args.discard_velocities,
+    )
+    configure_restart_velocities(
+        abacus_config,
+        ensemble=args.ensemble,
+        has_velocities=bool(source["atoms"].velocities),
+    )
     region_path = resolve_region_source(args.region_source or args.source)
     region_labels = load_region_labels(region_path) if region_path else None
+    atoms = source["atoms"]
+    if args.cell_lengths:
+        atoms = reshape_orthorhombic_cell(atoms, args.cell_lengths)
+    if args.fix_region:
+        if region_labels is None:
+            raise ValueError("--fix-region requires regions.csv")
+        atoms = constrain_regions(atoms, region_labels, args.fix_region)
     suffix = f"{args.element.lower()}_coexist_T{int(args.temperature)}" if region_labels else f"{args.element.lower()}_restart_T{int(args.temperature)}"
     metadata = md_metadata(args)
     metadata.update(
@@ -249,11 +465,13 @@ def cmd_make_restart(args: argparse.Namespace) -> None:
             "initial_structure_source_step": source["step"],
             "region_source": region_path.as_posix() if region_path else None,
             "method": "restart_from_md_dump",
+            "cell_lengths_angstrom": args.cell_lengths,
+            "source_velocities_discarded": args.discard_velocities,
         }
     )
     write_job(
         Path(args.out),
-        source["atoms"],
+        atoms,
         element_config,
         abacus_config,
         job_type="coexistence_restart" if region_labels else "md_restart",
@@ -263,6 +481,19 @@ def cmd_make_restart(args: argparse.Namespace) -> None:
         region_labels=region_labels,
     )
     print(f"wrote restart job: {args.out} ({source['atoms'].natoms} atoms)")
+
+
+def configure_restart_velocities(
+    abacus_config: dict,
+    ensemble: str,
+    has_velocities: bool,
+) -> None:
+    if not has_velocities:
+        return
+    abacus_config["init_vel"] = 1
+    if ensemble == "nve":
+        abacus_config["md_tfirst"] = -1
+        abacus_config["md_tlast"] = -1
 
 
 def cmd_analyze(args: argparse.Namespace) -> None:
@@ -391,11 +622,37 @@ def apply_md_options(abacus_config: dict, args: argparse.Namespace) -> None:
     )
     if args.ensemble == "nvt":
         abacus_config["md_thermostat"] = args.thermostat
+    elif args.ensemble == "npt":
+        abacus_config.update(
+            {
+                "cal_stress": 1,
+                "md_pfirst": args.pressure_kbar,
+                "md_plast": (
+                    args.pressure_last_kbar
+                    if args.pressure_last_kbar is not None
+                    else args.pressure_kbar
+                ),
+                "md_pmode": args.pmode,
+                "md_pcouple": args.pcouple,
+            }
+        )
+        npt_optional = {
+            "pfreq": "md_pfreq",
+            "tchain": "md_tchain",
+            "pchain": "md_pchain",
+            "prec_level": "md_prec_level",
+        }
+        for arg_name, input_name in npt_optional.items():
+            value = getattr(args, arg_name)
+            if value is not None:
+                abacus_config[input_name] = value
     optional_keys = {
         "tfreq": "md_tfreq",
         "nraise": "md_nraise",
         "tolerance": "md_tolerance",
         "csvr_tau": "md_csvr_tau",
+        "dumpfreq": "md_dumpfreq",
+        "restartfreq": "md_restartfreq",
         "seed": "md_seed",
     }
     for arg_name, input_name in optional_keys.items():
@@ -406,18 +663,35 @@ def apply_md_options(abacus_config: dict, args: argparse.Namespace) -> None:
 
 def md_metadata(args: argparse.Namespace) -> dict:
     metadata = {
-        "size": args.size,
+        "size": getattr(args, "size", None),
         "target_temperature_k": args.temperature,
         "ensemble": args.ensemble,
         "steps": args.steps,
         "dt_fs": args.dt,
-        "thermostat": args.thermostat if args.ensemble == "nvt" else None,
+        "thermostat": args.thermostat if args.ensemble == "nvt" else ("nhc" if args.ensemble == "npt" else None),
+        "fixed_regions": args.fix_region or None,
     }
-    for key in ("tfreq", "nraise", "tolerance", "csvr_tau", "seed"):
+    for key in (
+        "tfreq",
+        "nraise",
+        "tolerance",
+        "csvr_tau",
+        "dumpfreq",
+        "restartfreq",
+        "seed",
+        "pressure_kbar",
+        "pressure_last_kbar",
+        "pmode",
+        "pcouple",
+        "pfreq",
+        "tchain",
+        "pchain",
+        "prec_level",
+    ):
         value = getattr(args, key)
         if value is not None:
             metadata[key] = value
-    return metadata
+    return {key: value for key, value in metadata.items() if value is not None}
 
 
 if __name__ == "__main__":

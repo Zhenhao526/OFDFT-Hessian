@@ -1,0 +1,70 @@
+diff --git a/source/source_md/ti_pair_reference.h b/source/source_md/ti_pair_reference.h
+--- a/source/source_md/ti_pair_reference.h
++++ b/source/source_md/ti_pair_reference.h
+@@ -35,5 +35,6 @@ struct Result
+ {
+     double energy_ev = 0.0;
++    double configurational_virial_ev = 0.0;
+     std::vector<ModuleBase::Vector3<double>> forces_ev_per_angstrom;
+     double nearest_neighbor_angstrom = 0.0;
+ };
+diff --git a/source/source_md/ti_pair_reference.cpp b/source/source_md/ti_pair_reference.cpp
+--- a/source/source_md/ti_pair_reference.cpp
++++ b/source/source_md/ti_pair_reference.cpp
+@@ -123,6 +123,7 @@ Result evaluate(const UnitCell& unit_cell, const Model& model)
+ 
+     std::vector<double> thread_energies(thread_count, 0.0);
+     thread_energies[0] = model.constant_ev_per_atom * atom_count;
++    std::vector<double> thread_virials(thread_count, 0.0);
+     std::vector<double> thread_nearest(
+         thread_count, std::numeric_limits<double>::infinity());
+     std::vector<std::vector<ModuleBase::Vector3<double>>> thread_forces(
+@@ -137,5 +138,6 @@ Result evaluate(const UnitCell& unit_cell, const Model& model)
+ #endif
+         double& local_energy = thread_energies[thread_id];
++        double& local_virial = thread_virials[thread_id];
+         double& local_nearest = thread_nearest[thread_id];
+         auto& local_forces = thread_forces[thread_id];
+ 
+@@ -194,6 +196,7 @@ Result evaluate(const UnitCell& unit_cell, const Model& model)
+                                        * std::pow(reduced, model.core_power - 1);
+                 }
+                 local_energy += pair_energy;
++                local_virial -= distance * pair_derivative;
+                 const ModuleBase::Vector3<double> pair_force
+                     = (pair_derivative / distance) * displacement;
+                 local_forces[i] += pair_force;
+@@ -203,12 +206,14 @@ Result evaluate(const UnitCell& unit_cell, const Model& model)
+     }
+ 
+     result.energy_ev = 0.0;
++    result.configurational_virial_ev = 0.0;
+     result.forces_ev_per_angstrom.assign(
+         atom_count, ModuleBase::Vector3<double>(0.0, 0.0, 0.0));
+     result.nearest_neighbor_angstrom = std::numeric_limits<double>::infinity();
+     for (int thread_id = 0; thread_id < thread_count; ++thread_id)
+     {
+         result.energy_ev += thread_energies[thread_id];
++        result.configurational_virial_ev += thread_virials[thread_id];
+         result.nearest_neighbor_angstrom
+             = std::min(result.nearest_neighbor_angstrom, thread_nearest[thread_id]);
+         for (int atom = 0; atom < atom_count; ++atom)
+diff --git a/source/source_md/md_func.cpp b/source/source_md/md_func.cpp
+--- a/source/source_md/md_func.cpp
++++ b/source/source_md/md_func.cpp
+@@ -284,6 +284,7 @@ void force_virial(ModuleESolver::ESolver* p_esolver,
+             GlobalV::ofs_running << std::setprecision(15)
+                                  << " PAIR_REFERENCE_COMPONENTS step=" << istep
+                                  << " U_REF_eV=" << reference.energy_ev
++                                 << " W_REF_eV=" << reference.configurational_virial_ev
+                                  << " RMIN_A=" << reference.nearest_neighbor_angstrom << std::endl;
+             GlobalV::ofs_running.precision(old_precision);
+         }
+@@ -339,6 +340,7 @@ void force_virial(ModuleESolver::ESolver* p_esolver,
+                                  << " lambda=" << ti_configuration.lambda
+                                  << " U_MPN_eV=" << mpn_energy_ev
+                                  << " U_REF_eV=" << reference.energy_ev
++                                 << " W_REF_eV=" << reference.configurational_virial_ev
+                                  << " DELTA_U_eV=" << mpn_energy_ev - reference.energy_ev
+                                  << " RMIN_A=" << reference.nearest_neighbor_angstrom << std::endl;
+             GlobalV::ofs_running.precision(old_precision);

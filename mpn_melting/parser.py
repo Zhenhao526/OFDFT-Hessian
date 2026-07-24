@@ -12,6 +12,8 @@ class ParsedSeries:
     temperatures: List[float]
     pressures: List[float]
     md_energies: List[float] = field(default_factory=list)
+    md_potential_energies: List[float] = field(default_factory=list)
+    md_kinetic_energies: List[float] = field(default_factory=list)
 
 
 NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
@@ -37,6 +39,8 @@ PRESSURE_PATTERN = re.compile(rf"\bpressure\b[^-+0-9]*({NUMBER})", re.IGNORECASE
 def parse_text(text: str) -> ParsedSeries:
     energies: List[float] = []
     md_energies: List[float] = []
+    md_potential_energies: List[float] = []
+    md_kinetic_energies: List[float] = []
     temperatures: List[float] = []
     pressures: List[float] = []
     expect_md_observable_row = False
@@ -45,8 +49,12 @@ def parse_text(text: str) -> ParsedSeries:
             md_match = MD_OBSERVABLE_ROW.search(line)
             if md_match:
                 md_energy = float(md_match.group(1)) * RY_TO_EV
+                md_potential = float(md_match.group(2)) * RY_TO_EV
+                md_kinetic = float(md_match.group(3)) * RY_TO_EV
                 energies.append(md_energy)
                 md_energies.append(md_energy)
+                md_potential_energies.append(md_potential)
+                md_kinetic_energies.append(md_kinetic)
                 temperatures.append(float(md_match.group(4)))
                 expect_md_observable_row = False
                 continue
@@ -73,6 +81,8 @@ def parse_text(text: str) -> ParsedSeries:
         temperatures=temperatures,
         pressures=pressures,
         md_energies=md_energies,
+        md_potential_energies=md_potential_energies,
+        md_kinetic_energies=md_kinetic_energies,
     )
 
 

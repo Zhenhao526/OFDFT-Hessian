@@ -52,6 +52,7 @@ INDEX    LABEL    POSITION (Angstrom)    FORCE (eV/Angstrom)    VELOCITY (Angstr
             path = Path(tmp) / "MD_dump"
             path.write_text(text, encoding="utf-8")
             frames = parse_md_dump(path)
+        self.assertEqual(frames[0].forces, [(0.1, 0.2, 0.3)])
         self.assertEqual(frames[0].velocities, [(0.4, 0.5, 0.6)])
 
     def test_lindemann_ratio_for_two_atoms(self):

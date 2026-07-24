@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""Prepare and analyze fixed-configuration pressure pre-scans for Al108."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import statistics
+from pathlib import Path
+
+from mpn_melting.abacus_input import load_json, write_job
+from mpn_melting.cli import load_atom_source
+from mpn_melting.structures import AtomSet
+from mpn_melting.trajectory import lattice_volume
+from scripts.check_mpn_pressure_finite_difference import parse_static_pressure_kbar
+from scripts.analyze_phase_run import analyze as analyze_phase
+from scripts.analyze_two_phase_run import parse_md_log, series_stats
+
+ROOT = Path(__file__).resolve().parents[1]
+KB_EV_PER_K = 8.617333262145e-5
+EV_PER_A3_TO_KBAR = 1602.1766208
+
+
+def scaled_to_volume(atoms: AtomSet, target_volume_A3: float) -> AtomSet:
+    current = lattice_volume(tuple(atoms.lattice_vectors))
+    factor = (target_volume_A3 / current) ** (1.0 / 3.0)
+    lattice = [tuple(value * factor for value in vector) for vector in atoms.lattice_vectors]
+    return AtomSet(list(atoms.symbols), list(atoms.scaled_positions), lattice)
+
+
+def running_log(point: Path) -> Path:
+    matches = sorted(point.glob("OUT.*/running_scf.log"))
+    if not matches:
+        raise FileNotFoundError(f"no running_scf.log below {point}")
+    return matches[-1]
+
+
+def prepare(args: argparse.Namespace) -> None:
+    out = args.out.resolve()
+    if out.exists():
+        raise FileExistsError(f"refusing to overwrite {out}")
+    source = load_atom_source(args.source, args.source_frame, "Al", include_velocities=False)
+    atoms = source["atoms"]
+    config = load_json(args.config)
+    config.update({"calculation": "scf", "cal_force": 0, "cal_stress": 1, "mpirun_np": 12})
+    element = load_json(ROOT / "config" / "al.json")
+    points = []
+    for volume_per_atom in args.volumes_per_atom:
+        volume = volume_per_atom * atoms.natoms
+        label = f"vpa_{volume_per_atom:.3f}".replace(".", "p")
+        point_atoms = scaled_to_volume(atoms, volume)
+        write_job(
+            out / label,
+            point_atoms,
+            element,
+            config,
+            job_type="mpn_static_pressure_prescan",
+            suffix=f"al108_{args.phase}_pressure_{label}",
+            calculation="scf",
+            extra_metadata={
+                "phase": args.phase,
+                "target_temperature_K": args.temperature,
+                "volume_A3": volume,
+                "volume_per_atom_A3": volume_per_atom,
+                "source": source["source"],
+                "source_step": source["step"],
+            },
+        )
+        points.append({"label": label, "volume_A3": volume, "volume_per_atom_A3": volume_per_atom})
+    manifest = {
+        "phase": args.phase,
+        "target_temperature_K": args.temperature,
+        "natoms": atoms.natoms,
+        "source": source["source"],
+        "source_step": source["step"],
+        "points": points,
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(json.dumps(manifest, indent=2))
+
+
+def analyze(args: argparse.Namespace) -> None:
+    root = args.run_root.resolve()
+    manifest = json.loads((root / "manifest.json").read_text())
+    natoms = int(manifest["natoms"])
+    temperature = float(manifest["target_temperature_K"])
+    rows = []
+    for point in manifest["points"]:
+        pressure_static = parse_static_pressure_kbar(running_log(root / point["label"]).read_text(errors="replace"))
+        volume = float(point["volume_A3"])
+        kinetic = natoms * KB_EV_PER_K * temperature / volume * EV_PER_A3_TO_KBAR
+        rows.append(
+            {
+                **point,
+                "static_pressure_kbar": pressure_static,
+                "ideal_ionic_pressure_kbar": kinetic,
+                "estimated_md_pressure_kbar": pressure_static + kinetic,
+            }
+        )
+    ordered = sorted(rows, key=lambda row: row["volume_per_atom_A3"])
+    bracket = None
+    for left, right in zip(ordered, ordered[1:]):
+        if left["estimated_md_pressure_kbar"] * right["estimated_md_pressure_kbar"] <= 0.0:
+            bracket = [left["volume_per_atom_A3"], right["volume_per_atom_A3"]]
+            break
+    estimate = None
+    if bracket:
+        left = next(row for row in ordered if row["volume_per_atom_A3"] == bracket[0])
+        right = next(row for row in ordered if row["volume_per_atom_A3"] == bracket[1])
+        p0, p1 = left["estimated_md_pressure_kbar"], right["estimated_md_pressure_kbar"]
+        estimate = left["volume_per_atom_A3"] - p0 * (right["volume_per_atom_A3"] - left["volume_per_atom_A3"]) / (p1 - p0)
+    result = {**manifest, "rows": ordered, "zero_pressure_bracket_A3_per_atom": bracket, "linear_zero_pressure_estimate_A3_per_atom": estimate}
+    (root / "volume_prescan_result.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+
+
+def prepare_md(args: argparse.Namespace) -> None:
+    out = args.out.resolve()
+    if out.exists():
+        raise FileExistsError(f"refusing to overwrite {out}")
+    source = load_atom_source(args.source, args.source_frame, "Al", include_velocities=False)
+    atoms = source["atoms"]
+    config = load_json(args.config)
+    config.update(
+        {
+            "calculation": "md",
+            "cal_force": 1,
+            "cal_stress": 1,
+            "md_type": "nvt",
+            "md_nstep": args.steps,
+            "md_dt": args.dt,
+            "md_tfirst": args.temperature,
+            "md_tlast": args.temperature,
+            "md_thermostat": "csvr",
+            "md_csvr_tau": args.csvr_tau,
+            "md_dumpfreq": args.dumpfreq,
+            "md_restartfreq": args.restartfreq,
+            "md_seed": args.seed,
+            "mpirun_np": 12,
+        }
+    )
+    element = load_json(ROOT / "config" / "al.json")
+    points = []
+    for volume_per_atom in args.volumes_per_atom:
+        volume = volume_per_atom * atoms.natoms
+        label = f"vpa_{volume_per_atom:.3f}".replace(".", "p")
+        point_atoms = scaled_to_volume(atoms, volume)
+        write_job(
+            out / label,
+            point_atoms,
+            element,
+            config,
+            job_type="mpn_nvt_zero_pressure_volume_scan",
+            suffix=f"al108_{args.phase}_T{int(args.temperature):04d}_{label}",
+            calculation="md",
+            extra_metadata={
+                "phase": args.phase,
+                "target_temperature_K": args.temperature,
+                "volume_A3": volume,
+                "volume_per_atom_A3": volume_per_atom,
+                "source": source["source"],
+                "source_step": source["step"],
+                "source_velocities_discarded": True,
+                "steps": args.steps,
+                "dt_fs": args.dt,
+                "thermostat": "csvr",
+                "csvr_tau": args.csvr_tau,
+            },
+        )
+        points.append({"label": label, "volume_A3": volume, "volume_per_atom_A3": volume_per_atom})
+    manifest = {
+        "phase": args.phase,
+        "target_temperature_K": args.temperature,
+        "natoms": atoms.natoms,
+        "source": source["source"],
+        "source_step": source["step"],
+        "steps": args.steps,
+        "points": points,
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(json.dumps(manifest, indent=2))
+
+
+def linear_fit_zero(rows: list[dict]) -> dict | None:
+    if len(rows) < 2:
+        return None
+    xs = [float(row["volume_per_atom_A3"]) for row in rows]
+    ys = [float(row["pressure_last_half_kbar"]["mean"]) for row in rows]
+    mean_x = statistics.mean(xs)
+    mean_y = statistics.mean(ys)
+    denominator = sum((x - mean_x) ** 2 for x in xs)
+    if denominator == 0.0:
+        return None
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denominator
+    intercept = mean_y - slope * mean_x
+    return {
+        "slope_kbar_per_A3_per_atom": slope,
+        "intercept_kbar": intercept,
+        "zero_pressure_volume_per_atom_A3": -intercept / slope if slope else None,
+    }
+
+
+def analyze_md(args: argparse.Namespace) -> None:
+    root = args.run_root.resolve()
+    manifest = json.loads((root / "manifest.json").read_text())
+    rows = []
+    for point in manifest["points"]:
+        run = root / point["label"]
+        phase_result = analyze_phase(run, manifest["phase"])
+        (run / "phase_analysis.json").write_text(json.dumps(phase_result, indent=2, sort_keys=True) + "\n")
+        logs = sorted(run.glob("OUT.*/running_md.log"))
+        md_rows, max_step = parse_md_log(logs[-1]) if logs else ([], 0)
+        sampled = md_rows[len(md_rows) // 2 :]
+        pressures = [row["pressure_kbar"] for row in sampled if "pressure_kbar" in row]
+        temperatures = [row["temperature_K"] for row in sampled]
+        rows.append(
+            {
+                **point,
+                "max_step": max_step,
+                "phase_status": phase_result["status"],
+                "pressure_last_half_kbar": series_stats(pressures),
+                "temperature_last_half_K": series_stats(temperatures),
+                "nearest_neighbor_A": phase_result.get("trajectory", {}).get("nearest_neighbor_A"),
+            }
+        )
+    valid = [row for row in rows if row["phase_status"] == f"{manifest['phase']}_verified" and row["pressure_last_half_kbar"]]
+    result = {**manifest, "rows": rows, "valid_phase_points": len(valid), "linear_fit": linear_fit_zero(valid)}
+    (root / "nvt_volume_scan_result.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    prep = sub.add_parser("prepare")
+    prep.add_argument("--out", type=Path, required=True)
+    prep.add_argument("--source", required=True)
+    prep.add_argument("--source-frame", default="last")
+    prep.add_argument("--phase", choices=("solid", "liquid"), required=True)
+    prep.add_argument("--temperature", type=float, required=True)
+    prep.add_argument("--volumes-per-atom", type=float, nargs="+", required=True)
+    prep.add_argument("--config", type=Path, default=ROOT / "config" / "abacus_mpn_node04_cpu12_stress.json")
+    prep.set_defaults(func=prepare)
+    analysis = sub.add_parser("analyze")
+    analysis.add_argument("run_root", type=Path)
+    analysis.set_defaults(func=analyze)
+    prep_md = sub.add_parser("prepare-md")
+    prep_md.add_argument("--out", type=Path, required=True)
+    prep_md.add_argument("--source", required=True)
+    prep_md.add_argument("--source-frame", default="last")
+    prep_md.add_argument("--phase", choices=("solid", "liquid"), required=True)
+    prep_md.add_argument("--temperature", type=float, required=True)
+    prep_md.add_argument("--volumes-per-atom", type=float, nargs="+", required=True)
+    prep_md.add_argument("--steps", type=int, default=200)
+    prep_md.add_argument("--dt", type=float, default=1.0)
+    prep_md.add_argument("--csvr-tau", type=float, default=10.0)
+    prep_md.add_argument("--dumpfreq", type=int, default=5)
+    prep_md.add_argument("--restartfreq", type=int, default=100)
+    prep_md.add_argument("--seed", type=int, default=850)
+    prep_md.add_argument("--config", type=Path, default=ROOT / "config" / "abacus_mpn_node04_cpu12_stress.json")
+    prep_md.set_defaults(func=prepare_md)
+    analysis_md = sub.add_parser("analyze-md")
+    analysis_md.add_argument("run_root", type=Path)
+    analysis_md.set_defaults(func=analyze_md)
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

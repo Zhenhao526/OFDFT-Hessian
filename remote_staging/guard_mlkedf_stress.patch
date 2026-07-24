@@ -1,0 +1,18 @@
+--- a/source/source_pw/module_ofdft/kedf_manager.cpp
++++ b/source/source_pw/module_ofdft/kedf_manager.cpp
+@@ -436,6 +436,7 @@ void KEDF_Manager::get_stress(
+         this->lkt_->get_stress(prho, pw_rho);
+         kinetic_stress_ += this->lkt_->stress;
+     }
++#ifdef __MLALGO
+     if (this->of_kinetic_ == "ml")
+     {
+         // MPN descriptors are dimensionless under uniform coordinate scaling,
+@@ -451,6 +452,7 @@ void KEDF_Manager::get_stress(
+             kinetic_stress_(i, i) += isotropic_pauli_stress;
+         }
+     }
++#endif
+ 
+     ModuleBase::timer::end("KEDF_Manager", "get_stress");
+ }

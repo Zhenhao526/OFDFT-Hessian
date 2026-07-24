@@ -91,15 +91,19 @@ def stru_text(atoms: AtomSet, species_configs: Sequence[dict]) -> str:
     lines.append("")
     for symbol in atoms.species:
         entries = [
-            (pos, atoms.velocities[idx] if atoms.velocities else None)
+            (
+                pos,
+                atoms.velocities[idx] if atoms.velocities else None,
+                atoms.movements[idx] if atoms.movements else (1, 1, 1),
+            )
             for idx, (atom_symbol, pos) in enumerate(zip(atoms.symbols, atoms.scaled_positions))
             if atom_symbol == symbol
         ]
         lines.append(symbol)
         lines.append("0.0")
         lines.append(str(len(entries)))
-        for pos, velocity in entries:
-            line = f"{format_vector(pos)} 1 1 1"
+        for pos, velocity, movement in entries:
+            line = f"{format_vector(pos)} {movement[0]} {movement[1]} {movement[2]}"
             if velocity is not None:
                 line += f" v {format_vector(velocity)}"
             lines.append(line)

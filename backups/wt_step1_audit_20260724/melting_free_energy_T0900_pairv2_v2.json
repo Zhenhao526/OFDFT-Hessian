@@ -1,0 +1,86 @@
+{
+  "checks": {
+    "atom_counts_match": true,
+    "liquid_anchor_stable": true,
+    "liquid_wt_discard_convergence_verified": true,
+    "liquid_wt_verified": true,
+    "reference_anchor_audit_verified": true,
+    "reference_anchor_delta_matches_audit": true,
+    "solid_anchor_stable": true,
+    "solid_wt_discard_convergence_verified": true,
+    "solid_wt_verified": true,
+    "temperatures_match": true,
+    "zero_pressure_confirmed": true
+  },
+  "free_energy_ev_per_atom": {
+    "liquid": -57.478117777594576,
+    "liquid_minus_solid": 0.009339119517569827,
+    "solid": -57.487456897112146
+  },
+  "free_energy_mev_per_atom": {
+    "liquid_minus_solid": 9.339119517569827
+  },
+  "fusion_enthalpy_block_standard_error_mev_per_atom": 4.482982258647078,
+  "fusion_enthalpy_components_ev_per_atom": {
+    "kinetic_difference_ev_per_atom": 0.002544643759314888,
+    "potential_difference_ev_per_atom": 0.08773813867475866,
+    "total_energy_difference_ev_per_atom": 0.09028278243407328
+  },
+  "fusion_enthalpy_ev_per_atom": 0.09028278243407328,
+  "melting_temperature_conservative_ti_uncertainty_k": 53.51762235766376,
+  "melting_temperature_linearized_k": 1003.8402175409722,
+  "melting_temperature_statistical_uncertainty_k": 6.882778286269087,
+  "method_notes": [
+    "Melting temperature uses a constant-fusion-enthalpy Gibbs-Helmholtz linearization.",
+    "The preliminary fusion enthalpy uses sampled total energies, including the finite-sample kinetic-energy difference.",
+    "The external pressure is zero; residual internal-pressure fluctuations are not added as P*DeltaV.",
+    "The central DeltaG uses the audited finite-N convention without applying an incomplete one-sided correction.",
+    "The larger of the exact ideal N! sensitivity and kBT ln(N)/N scale is added linearly to the conservative DeltaG uncertainty.",
+    "A second-temperature free-energy point or direct coexistence check is required before finalizing the melting point."
+  ],
+  "natoms": 108,
+  "provenance": {
+    "analytic": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/analytic_reference_T0900_p100_sigma1p36_v2.json",
+    "anchor_audit": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/reference_anchor_audit_T0900_p100sigma1p36_pairv2_v2.json",
+    "liquid_anchor": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/absolute_anchor/liquid_suf_pair_T0900_p100_sigma1p36_lambda9_steps20000_v2_node01/ti_analysis_strict_v2.json",
+    "liquid_wt": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/ti_windows/phase_specific_T0900_zeroP_liquid_pairv2_critical_extension_round2_lambda0500_steps1000_node01/liquid_ti_prod_d50.json",
+    "liquid_wt_convergence": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/ti_windows/phase_specific_T0900_zeroP_liquid_pairv2_critical_extension_round2_lambda0500_steps1000_node01/discard_convergence_summary.json",
+    "solid_anchor": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/absolute_anchor/solid_einstein_pair_T0900_v1/lambda9_steps20000_v1_node01/ti_analysis.json",
+    "solid_wt": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/ti_windows/phase_specific_T0900_zeroP_lambda5_steps1000_v1_node01/solid/ti_prod_d50.json",
+    "solid_wt_convergence": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/ti_windows/phase_specific_T0900_zeroP_lambda5_steps1000_v1_node01/solid/discard_convergence_summary_v2.json",
+    "zero_pressure_summary": "/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/zeroP_confirmation_T0900_combined_v17p940_v2_node01/confirmation_summary.json"
+  },
+  "schema": "wt-melting-free-energy-combination-v2",
+  "status": "anchor_temperature_free_energy_verified",
+  "temperature_k": 900.0,
+  "uncertainty_budget_mev_per_atom": {
+    "combined_conservative": 4.29035145946069,
+    "finite_size_systematic_allowance": 3.3622904301021106,
+    "legs": {
+      "liquid_pair_to_wt": {
+        "block_standard_error_mev_per_atom": 0.1212668422235927,
+        "half_drift_mev_per_atom": 0.40781243651531746,
+        "quadrature_difference_mev_per_atom": 0.052074865864323604
+      },
+      "liquid_reference_to_pair": {
+        "block_standard_error_mev_per_atom": 0.20129651319306222,
+        "half_drift_mev_per_atom": 0.39592297684976074,
+        "quadrature_difference_mev_per_atom": 0.12332750654309166
+      },
+      "solid_pair_to_wt": {
+        "block_standard_error_mev_per_atom": 0.1262904701392388,
+        "half_drift_mev_per_atom": 0.016994812119724978,
+        "quadrature_difference_mev_per_atom": 0.030801854441124515
+      },
+      "solid_reference_to_pair": {
+        "block_standard_error_mev_per_atom": 0.14760065476672565,
+        "half_drift_mev_per_atom": 0.15909601455632583,
+        "quadrature_difference_mev_per_atom": 0.6330873025177652
+      }
+    },
+    "quadrature_rss": 0.6478192281579456,
+    "statistical_rss": 0.3048953416864917,
+    "temporal_drift_rss": 0.5904797646497528,
+    "ti_combined_conservative": 0.9280610293585796
+  }
+}

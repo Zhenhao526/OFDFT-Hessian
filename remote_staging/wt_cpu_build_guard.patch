@@ -1,0 +1,19 @@
+diff --git a/external/abacus-develop/source/source_pw/module_ofdft/kedf_manager.cpp b/external/abacus-develop/source/source_pw/module_ofdft/kedf_manager.cpp
+--- a/external/abacus-develop/source/source_pw/module_ofdft/kedf_manager.cpp
++++ b/external/abacus-develop/source/source_pw/module_ofdft/kedf_manager.cpp
+@@ -437,6 +437,7 @@ void KEDF_Manager::get_stress(
+         this->lkt_->get_stress(prho, pw_rho);
+         kinetic_stress_ += this->lkt_->stress;
+     }
++#ifdef __MLALGO
+     if (this->of_kinetic_ == "ml")
+     {
+         // MPN descriptors are dimensionless under uniform coordinate scaling,
+@@ -449,6 +450,7 @@ void KEDF_Manager::get_stress(
+             kinetic_stress_(i, i) += isotropic_pauli_stress;
+         }
+     }
++#endif
+ 
+     ModuleBase::timer::end("KEDF_Manager", "get_stress");
+ }

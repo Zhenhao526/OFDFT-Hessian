@@ -1,0 +1,147 @@
+--- a/scripts/prepare_al108_volume_scan.py
++++ b/scripts/prepare_al108_volume_scan.py
+@@ -25,7 +25,13 @@
+     current = lattice_volume(tuple(atoms.lattice_vectors))
+     factor = (target_volume_A3 / current) ** (1.0 / 3.0)
+     lattice = [tuple(value * factor for value in vector) for vector in atoms.lattice_vectors]
+-    return AtomSet(list(atoms.symbols), list(atoms.scaled_positions), lattice)
++    return AtomSet(
++        list(atoms.symbols),
++        list(atoms.scaled_positions),
++        lattice,
++        velocities=list(atoms.velocities) if atoms.velocities is not None else None,
++        movements=list(atoms.movements) if atoms.movements is not None else None,
++    )
+ 
+ 
+ def running_log(point: Path) -> Path:
+--- a/scripts/prepare_al108_ti_windows.py
++++ b/scripts/prepare_al108_ti_windows.py
+@@ -32,9 +32,12 @@
+     out = args.out.resolve()
+     if out.exists():
+         raise FileExistsError(f"refusing to overwrite {out}")
+-    source = load_atom_source(args.source, args.source_frame, "Al", include_velocities=False)
+-    atoms = source["atoms"]
+-    atoms = scaled_to_volume(atoms, args.volume_per_atom * atoms.natoms)
++    source_by_lambda = {}
++    for item in args.source_map:
++        lambda_text, source_path = item.split("=", 1)
++        source_by_lambda[float(lambda_text)] = source_path
++    if set(source_by_lambda) - set(args.lambdas):
++        raise ValueError("--source-map contains lambda values not requested by --lambdas")
+     config = load_json(args.config)
+     config.update(
+         {
+@@ -55,9 +58,24 @@
+     )
+     element = load_json(ROOT / "config" / "al.json")
+     windows = []
++    natoms = None
+     for index, lambda_value in enumerate(sorted(set(args.lambdas))):
+         if not 0.0 <= lambda_value <= 1.0:
+             raise ValueError("all lambda values must be in [0, 1]")
++        source_path = source_by_lambda.get(lambda_value, args.source)
++        source = load_atom_source(
++            source_path,
++            args.source_frame,
++            "Al",
++            include_velocities=args.preserve_velocities,
++        )
++        atoms = source["atoms"]
++        if args.preserve_velocities and atoms.velocities is None:
++            raise ValueError(f"source for lambda={lambda_value} does not contain velocities")
++        atoms = scaled_to_volume(atoms, args.volume_per_atom * atoms.natoms)
++        if natoms is not None and atoms.natoms != natoms:
++            raise ValueError("all lambda sources must contain the same number of atoms")
++        natoms = atoms.natoms
+         label = lambda_label(lambda_value)
+         point_config = dict(config)
+         point_config["md_seed"] = args.seed + index
+@@ -77,23 +95,33 @@
+                 "volume_A3": args.volume_per_atom * atoms.natoms,
+                 "source": source["source"],
+                 "source_step": source["step"],
+-                "source_velocities_discarded": True,
++                "source_velocities_discarded": not args.preserve_velocities,
+                 "pair_model": str(args.pair_model.resolve()),
+                 "steps": args.steps,
+                 "csvr_tau": args.csvr_tau,
+             },
+         )
+-        windows.append({"label": label, "lambda": lambda_value, "seed": args.seed + index})
++        windows.append(
++            {
++                "label": label,
++                "lambda": lambda_value,
++                "seed": args.seed + index,
++                "source": source["source"],
++                "source_step": source["step"],
++                "source_velocities_discarded": not args.preserve_velocities,
++            }
++        )
++    if natoms is None:
++        raise ValueError("no lambda windows requested")
+     manifest = {
+         "schema": "mpn-pair-ti-windows-v1",
+         "phase": args.phase,
+         "target_temperature_K": args.temperature,
+         "volume_per_atom_A3": args.volume_per_atom,
+-        "volume_A3": args.volume_per_atom * atoms.natoms,
+-        "natoms": atoms.natoms,
++        "volume_A3": args.volume_per_atom * natoms,
++        "natoms": natoms,
+         "steps": args.steps,
+-        "source": source["source"],
+-        "source_step": source["step"],
++        "source": args.source,
+         "pair_model": str(args.pair_model.resolve()),
+         "windows": windows,
+     }
+@@ -214,7 +242,15 @@
+     prep = sub.add_parser("prepare")
+     prep.add_argument("--out", type=Path, required=True)
+     prep.add_argument("--source", required=True)
++    prep.add_argument(
++        "--source-map",
++        action="append",
++        default=[],
++        metavar="LAMBDA=PATH",
++        help="override --source for a specific lambda; may be repeated",
++    )
+     prep.add_argument("--source-frame", default="last")
++    prep.add_argument("--preserve-velocities", action="store_true")
+     prep.add_argument("--phase", choices=("solid", "liquid"), required=True)
+     prep.add_argument("--temperature", type=float, required=True)
+     prep.add_argument("--volume-per-atom", type=float, required=True)
+--- /dev/null
++++ b/tests/test_volume_scan.py
+@@ -0,0 +1,28 @@
++import unittest
++
++from mpn_melting.structures import AtomSet
++from scripts.prepare_al108_volume_scan import scaled_to_volume
++
++
++class VolumeScalingTests(unittest.TestCase):
++    def test_scaled_to_volume_preserves_dynamical_state(self):
++        atoms = AtomSet(
++            symbols=["Al", "Al"],
++            scaled_positions=[(0.0, 0.0, 0.0), (0.5, 0.5, 0.5)],
++            lattice_vectors=[(2.0, 0.0, 0.0), (0.0, 2.0, 0.0), (0.0, 0.0, 2.0)],
++            velocities=[(0.1, 0.2, 0.3), (-0.1, -0.2, -0.3)],
++            movements=[(1, 1, 1), (0, 0, 0)],
++        )
++
++        scaled = scaled_to_volume(atoms, 64.0)
++
++        self.assertEqual(scaled.velocities, atoms.velocities)
++        self.assertEqual(scaled.movements, atoms.movements)
++        self.assertEqual(scaled.scaled_positions, atoms.scaled_positions)
++        self.assertAlmostEqual(scaled.lattice_vectors[0][0], 4.0)
++        self.assertAlmostEqual(scaled.lattice_vectors[1][1], 4.0)
++        self.assertAlmostEqual(scaled.lattice_vectors[2][2], 4.0)
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -45,6 +45,7 @@ class AbacusInputTests(unittest.TestCase):
             scaled_positions=[(0.0, 0.0, 0.0)],
             lattice_vectors=[(4.05, 0.0, 0.0), (0.0, 4.05, 0.0), (0.0, 0.0, 4.05)],
             velocities=[(0.1, 0.2, 0.3)],
+            movements=[(0, 0, 0)],
         )
         element_config = {
             "element": "Al",
@@ -55,7 +56,8 @@ class AbacusInputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             write_job(out, atoms, element_config, {"kmesh": [1, 1, 1]}, "md_restart", "test")
-            self.assertIn("v 0.100000000000 0.200000000000 0.300000000000", (out / "STRU").read_text())
+            text = (out / "STRU").read_text()
+            self.assertIn("0 0 0 v 0.100000000000 0.200000000000 0.300000000000", text)
 
 
 if __name__ == "__main__":

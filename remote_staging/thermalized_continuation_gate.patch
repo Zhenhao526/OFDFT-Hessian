@@ -1,0 +1,108 @@
+--- a/scripts/analyze_phase_run.py
++++ b/scripts/analyze_phase_run.py
+@@ -48,13 +48,27 @@
+     return msd_series[-window_size:]
+ 
+ 
+-def analyze(run_dir: Path, expected: str) -> dict:
++def solid_initial_checks(
++    initial_ordered_fraction: float,
++    initial_median_csp_A2: float,
++    thermalized_initial: bool,
++) -> dict[str, bool]:
++    if thermalized_initial:
++        return {
++            "initial_thermalized_ordered_fraction_gt_0_1": initial_ordered_fraction > 0.1,
++            "initial_thermalized_median_CSP_lt_6_A2": initial_median_csp_A2 < 6.0,
++        }
++    return {"initial_ordered_fraction_gt_0_9": initial_ordered_fraction > 0.9}
++
++
++def analyze(run_dir: Path, expected: str, thermalized_initial: bool = False) -> dict:
+     logs = sorted(run_dir.glob("OUT.*/running_md.log"))
+     dumps = sorted(run_dir.glob("OUT.*/MD_dump"))
+     rows, max_step = parse_md_log(logs[0]) if logs else ([], 0)
+     result = {
+         "run_dir": run_dir.as_posix(),
+         "expected_phase": expected,
++        "initial_state_mode": "thermalized_continuation" if thermalized_initial else "fresh_preparation",
+         "md": {"max_step": max_step, "observable_samples": len(rows)},
+     }
+     if rows:
+@@ -112,7 +126,11 @@
+     if expected == "solid":
+         checks = {
+             **common,
+-            "initial_ordered_fraction_gt_0_9": initial_ordered_fraction > 0.9,
++            **solid_initial_checks(
++                initial_ordered_fraction,
++                initial_csp_stats["median_A2"],
++                thermalized_initial,
++            ),
+             "late_MSD_slope_lt_0_001_A2_per_step": (
+                 late_msd_slope < SOLID_MAX_LATE_MSD_SLOPE_A2_PER_FS
+             ),
+@@ -139,9 +157,14 @@
+     parser = argparse.ArgumentParser()
+     parser.add_argument("run_dir", type=Path)
+     parser.add_argument("--expected", choices=("solid", "liquid"), required=True)
++    parser.add_argument(
++        "--thermalized-initial",
++        action="store_true",
++        help="validate a velocity-preserving continuation from an already thermalized phase",
++    )
+     parser.add_argument("--out", type=Path)
+     args = parser.parse_args()
+-    result = analyze(args.run_dir, args.expected)
++    result = analyze(args.run_dir, args.expected, thermalized_initial=args.thermalized_initial)
+     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
+     if args.out:
+         args.out.write_text(text, encoding="utf-8")
+--- a/scripts/prepare_al108_ti_windows.py
++++ b/scripts/prepare_al108_ti_windows.py
+@@ -173,7 +173,11 @@
+         md_rows, max_step = parse_md_log(logs[-1])
+         late_components = components[len(components) // 2 :]
+         late_md = md_rows[len(md_rows) // 2 :]
+-        phase = analyze_phase(run, manifest["phase"])
++        phase = analyze_phase(
++            run,
++            manifest["phase"],
++            thermalized_initial=not window.get("source_velocities_discarded", True),
++        )
+         (run / "phase_analysis.json").write_text(json.dumps(phase, indent=2, sort_keys=True) + "\n")
+         delta_values = [row["delta_U_eV"] for row in late_components]
+         raw_by_lambda[window["lambda"]] = delta_values
+--- a/tests/test_phase_analysis.py
++++ b/tests/test_phase_analysis.py
+@@ -2,7 +2,7 @@
+ import unittest
+ 
+ from mpn_melting.trajectory import MdFrame, non_affine_msd_series
+-from scripts.analyze_phase_run import late_msd_window, linear_slope
++from scripts.analyze_phase_run import late_msd_window, linear_slope, solid_initial_checks
+ from scripts.check_mpn_pressure_finite_difference import finite_difference_pressure_kbar
+ 
+ 
+@@ -44,6 +44,21 @@
+         self.assertEqual(len(window), 6)
+         self.assertEqual(window[0][0], 4)
+ 
++    def test_fresh_solid_requires_pristine_initial_order(self):
++        checks = solid_initial_checks(0.4, 2.8, thermalized_initial=False)
++
++        self.assertEqual(checks, {"initial_ordered_fraction_gt_0_9": False})
++
++    def test_thermalized_solid_accepts_ordered_hot_initial_state(self):
++        checks = solid_initial_checks(0.4, 2.8, thermalized_initial=True)
++
++        self.assertTrue(all(checks.values()))
++
++    def test_thermalized_solid_rejects_disordered_initial_state(self):
++        checks = solid_initial_checks(0.05, 7.0, thermalized_initial=True)
++
++        self.assertFalse(any(checks.values()))
++
+     def test_pressure_finite_difference_uses_negative_energy_derivative(self):
+         pressure = finite_difference_pressure_kbar(-10.0, -10.2, 99.0, 101.0)
+ 

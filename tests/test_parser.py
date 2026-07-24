@@ -33,6 +33,8 @@ class ParserTests(unittest.TestCase):
         )
         self.assertEqual(parsed.temperatures, [1191.08262643])
         self.assertEqual(parsed.md_energies, [-3.61112431 * RY_TO_EV])
+        self.assertEqual(parsed.md_potential_energies, [-3.62244013 * RY_TO_EV])
+        self.assertEqual(parsed.md_kinetic_energies, [0.01131582 * RY_TO_EV])
         self.assertAlmostEqual(parsed.energies[-1], -3.61112431 * RY_TO_EV, places=9)
 
     def test_ignore_timing_temp_label(self):
