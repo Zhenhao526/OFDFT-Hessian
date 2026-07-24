@@ -1,0 +1,92 @@
+{
+  "schema": "wt-thermodynamic-convention-v1",
+  "method": "Gibbs-Helmholtz integration with a WT-OFDFT absolute free-energy anchor",
+  "sign_convention": {
+    "delta_g": "G_liquid_minus_G_solid",
+    "delta_h": "H_liquid_minus_H_solid",
+    "stable_solid_below_melting": "delta_g_positive",
+    "stable_liquid_above_melting": "delta_g_negative"
+  },
+  "gibbs_helmholtz": {
+    "equation": "d(delta_g/T)/dT=-delta_h/T^2",
+    "interpolation": "piecewise_linear_delta_h_with_exact_segment_integral",
+    "root_definition": "delta_g(T_m)=0",
+    "root_must_be_bracketed": true
+  },
+  "units": {
+    "temperature": "K",
+    "energy_per_atom_internal": "eV/atom",
+    "energy_per_atom_report": "meV/atom",
+    "pressure": "kbar",
+    "volume_per_atom": "angstrom^3/atom",
+    "nearest_neighbor": "angstrom"
+  },
+  "enthalpy_definition": {
+    "formula": "H=E_total+P_external*V",
+    "delta_h": "H_liquid_minus_H_solid",
+    "sampled_total_energy_components": [
+      "ionic_kinetic_energy",
+      "WT_OFDFT_potential_energy"
+    ],
+    "target_external_pressure_kbar": 0.0,
+    "external_pv_at_target_pressure_ev_per_atom": 0.0,
+    "residual_internal_pressure_role": "equilibration_gate_only",
+    "residual_internal_pressure_is_not_added_as_pv": true,
+    "required_energy_definition_tag": "sampled_total_energy_plus_external_pv"
+  },
+  "central_value_policy": {
+    "anchor_temperature_K": 900.0,
+    "anchor_delta_g_mev_per_atom": 9.339119517569827,
+    "anchor_delta_g_source": "verified_absolute_free_energy_combination",
+    "fusion_enthalpy_discard_fraction": 0.5,
+    "fusion_enthalpy_900K_mev_per_atom": 82.67628344330546,
+    "fusion_enthalpy_source": "independent_3000_step_production_trajectory",
+    "forbidden_as_gibbs_helmholtz_input": {
+      "value_mev_per_atom": 90.28278243407328,
+      "reason": "preliminary_lambda_one_endpoint_estimate_in_anchor_artifact"
+    }
+  },
+  "uncertainty_policy": {
+    "anchor": {
+      "statistical_mev_per_atom": 0.3048953416864917,
+      "quadrature_rss_mev_per_atom": 0.6478192281579456,
+      "temporal_drift_rss_mev_per_atom": 0.5904797646497528,
+      "ti_combined_conservative_mev_per_atom": 0.9280610293585796,
+      "finite_size_systematic_allowance_mev_per_atom": 3.3622904301021106,
+      "combined_conservative_mev_per_atom": 4.29035145946069,
+      "ti_combination": "root_sum_square_of_statistical_quadrature_and_temporal",
+      "finite_size_combination": "linear_addition_to_ti_combined_conservative",
+      "finite_size_central_value_correction": 0.0
+    },
+    "enthalpy_per_temperature": {
+      "statistical_component": "block_standard_error_mev_per_atom",
+      "temporal_component": "half_drift_mev_per_atom",
+      "discard_component": "delta_h_discard_spread_mev_per_atom",
+      "statistical_value": "block_standard_error_only",
+      "conservative_value": "linear_sum_of_block_standard_error_half_drift_and_discard_spread",
+      "900K_statistical_mev_per_atom": 2.810059036571036,
+      "900K_half_drift_mev_per_atom": 2.31242192349157,
+      "900K_discard_spread_mev_per_atom": 1.1562109617599958,
+      "900K_conservative_mev_per_atom": 6.278691921822602
+    },
+    "propagation": {
+      "statistical_result_name": "statistical_sensitivity_envelope",
+      "conservative_result_name": "conservative_sensitivity_envelope",
+      "method": "coherent_corner_perturbations_of_anchor_and_all_enthalpy_points",
+      "is_probabilistic_confidence_interval": false,
+      "report_nominal_and_both_envelopes": true
+    }
+  },
+  "data_gates": {
+    "required_steps": 3000,
+    "minimum_nearest_neighbor_angstrom_exclusive": 2.0,
+    "temperature_target_tolerance_K": 20.0,
+    "solid_liquid_temperature_difference_tolerance_K": 20.0,
+    "pressure_target_tolerance_kbar": 2.5,
+    "maximum_half_drift_mev_per_atom": 5.0,
+    "maximum_block_standard_error_mev_per_atom": 3.0,
+    "maximum_discard_spread_mev_per_atom": 2.0,
+    "solid_phase_must_be_verified": true,
+    "liquid_phase_must_be_verified": true
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "checks": {
+    "anchor_conservative_linear_addition_matches": true,
+    "anchor_delta_g_matches": true,
+    "anchor_delta_g_positive_below_root": true,
+    "anchor_schema": true,
+    "anchor_temperature_matches": true,
+    "anchor_ti_rss_matches": true,
+    "anchor_verified": true,
+    "constant_enthalpy_sign_test_root_is_1000K": true,
+    "convention_schema": true,
+    "delta_g_is_liquid_minus_solid": true,
+    "enthalpy_conservative_linear_sum_matches": true,
+    "evidence_900_is_thermodynamically_ready": true,
+    "external_pressure_pv_is_zero": true,
+    "positive_fusion_enthalpy_reduces_delta_g_over_t_with_temperature": true,
+    "preliminary_endpoint_enthalpy_is_excluded": true,
+    "production_enthalpy_matches_audit": true,
+    "production_enthalpy_positive": true,
+    "unready_temperatures_are_not_silently_accepted": true
+  },
+  "generated_at": "2026-07-24T08:27:33.665221+00:00",
+  "provenance": {
+    "anchor": "/Users/xia/Documents/\u5408\u91d1/backups/wt_step1_audit_20260724/melting_free_energy_T0900_pairv2_v2.json",
+    "convention": "/Users/xia/Documents/\u5408\u91d1/config/wt_thermodynamic_convention_v1.json",
+    "evidence_audit": "/Users/xia/Documents/\u5408\u91d1/backups/wt_step2_audit_20260724/STEP2_UNIFIED_EVIDENCE_AUDIT.json"
+  },
+  "schema": "wt-thermodynamic-convention-validation-v1",
+  "status": "verified",
+  "values": {
+    "anchor_combined_conservative_mev_per_atom": 4.29035145946069,
+    "anchor_delta_g_mev_per_atom": 9.339119517569827,
+    "anchor_statistical_mev_per_atom": 0.3048953416864917,
+    "anchor_ti_combined_conservative_mev_per_atom": 0.9280610293585796,
+    "constant_enthalpy_sign_test_root_K": 999.9999999068677,
+    "enthalpy_900K_conservative_mev_per_atom": 6.278691921822602,
+    "enthalpy_900K_statistical_mev_per_atom": 2.810059036571036,
+    "excluded_preliminary_endpoint_enthalpy_mev_per_atom": 90.28278243407328,
+    "production_fusion_enthalpy_900K_mev_per_atom": 82.67628344330546
+  }
+}

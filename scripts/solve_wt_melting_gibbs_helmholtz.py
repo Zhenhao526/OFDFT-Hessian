@@ -271,6 +271,16 @@ def main() -> None:
         "schema": "wt-gibbs-helmholtz-melting-v2",
         "status": "verified" if all(checks.values()) else "temperature_bracket_incomplete",
         "checks": checks,
+        "thermodynamic_convention": {
+            "delta_g": "G_liquid_minus_G_solid",
+            "delta_h": "H_liquid_minus_H_solid",
+            "gibbs_helmholtz_equation": "d(delta_g/T)/dT=-delta_h/T^2",
+            "root_definition": "delta_g(T_m)=0",
+            "energy_unit": "eV/atom",
+            "temperature_unit": "K",
+            "external_pressure": "0_kbar",
+            "residual_internal_pressure_role": "equilibration_gate_only",
+        },
         "anchor_temperature_k": anchor_temperature,
         "anchor_delta_g_ev_per_atom": delta_g,
         "melting_temperature_k": melting_temperature,
@@ -287,6 +297,11 @@ def main() -> None:
         "enthalpy_points": points_with_uncertainty,
         "method": "piecewise-linear DeltaH(T) with exact Gibbs-Helmholtz integration",
         "enthalpy_energy_definition": "sampled_total_energy_plus_external_pv",
+        "uncertainty_interpretation": {
+            "statistical_interval": "coherent statistical sensitivity envelope",
+            "conservative_interval": "coherent conservative sensitivity envelope",
+            "probabilistic_confidence_interval": False,
+        },
         "provenance": {
             "combination": str(args.combination.resolve()),
             "enthalpy_series": str(args.enthalpy_series.resolve()),

@@ -1,5 +1,9 @@
 import math
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from mpn_melting.gibbs_helmholtz import (
     gibbs_over_temperature,
@@ -168,6 +172,102 @@ class GibbsHelmholtzTests(unittest.TestCase):
         )
         self.assertLess(interval["lower_k"], 1000.0)
         self.assertGreater(interval["upper_k"], 1000.0)
+
+    def test_solver_output_records_thermodynamic_convention(self):
+        combination = {
+            "schema": "wt-melting-free-energy-combination-v2",
+            "status": "anchor_temperature_free_energy_verified",
+            "checks": {"anchor": True},
+            "temperature_k": 900.0,
+            "free_energy_ev_per_atom": {"liquid_minus_solid": 0.01},
+            "uncertainty_budget_mev_per_atom": {
+                "statistical_rss": 1.0,
+                "combined_conservative": 2.0,
+            },
+        }
+        points = [
+            {
+                "temperature_k": 900.0,
+                "delta_h_ev_per_atom": 0.1,
+                "block_standard_error_mev_per_atom": 1.0,
+                "half_drift_mev_per_atom": 0.5,
+                "status": "verified",
+            },
+            {
+                "temperature_k": 1050.0,
+                "delta_h_ev_per_atom": 0.1,
+                "block_standard_error_mev_per_atom": 1.0,
+                "half_drift_mev_per_atom": 0.5,
+                "status": "verified",
+            },
+        ]
+        series = {
+            "schema": "wt-zero-pressure-fusion-enthalpy-series-v2",
+            "status": "verified",
+            "enthalpy_energy_definition": "sampled_total_energy_plus_external_pv",
+            "discard_fraction": 0.5,
+            "points": points,
+        }
+        convergence = {
+            "schema": "wt-enthalpy-discard-convergence-summary-v2",
+            "status": "verified",
+            "enthalpy_energy_definition": "sampled_total_energy_plus_external_pv",
+            "points": [
+                {
+                    "temperature_k": point["temperature_k"],
+                    "status": "verified",
+                    "delta_h_discard_spread_mev_per_atom": 0.5,
+                    "reports": [
+                        {
+                            "discard_fraction": 0.5,
+                            "status": "verified",
+                            "delta_h_mev_per_atom": (
+                                1000.0 * point["delta_h_ev_per_atom"]
+                            ),
+                            "block_standard_error_mev_per_atom": 1.0,
+                            "half_drift_mev_per_atom": 0.5,
+                        }
+                    ],
+                }
+                for point in points
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            combination_path = root / "combination.json"
+            series_path = root / "series.json"
+            convergence_path = root / "convergence.json"
+            output_path = root / "result.json"
+            for path, payload in (
+                (combination_path, combination),
+                (series_path, series),
+                (convergence_path, convergence),
+            ):
+                path.write_text(json.dumps(payload), encoding="utf-8")
+            argv = [
+                "solve_wt_melting_gibbs_helmholtz.py",
+                "--combination",
+                str(combination_path),
+                "--enthalpy-series",
+                str(series_path),
+                "--enthalpy-convergence",
+                str(convergence_path),
+                "--out",
+                str(output_path),
+            ]
+            with mock.patch("sys.argv", argv), mock.patch("builtins.print"):
+                from scripts.solve_wt_melting_gibbs_helmholtz import main
+
+                main()
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+        convention = result["thermodynamic_convention"]
+        self.assertEqual(convention["delta_g"], "G_liquid_minus_G_solid")
+        self.assertEqual(convention["delta_h"], "H_liquid_minus_H_solid")
+        self.assertFalse(
+            result["uncertainty_interpretation"][
+                "probabilistic_confidence_interval"
+            ]
+        )
 
 
 if __name__ == "__main__":
