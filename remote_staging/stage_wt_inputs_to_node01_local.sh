@@ -33,6 +33,7 @@ copy_run_tree() {
         --include='STRU' \
         --include='KPT' \
         --include='metadata.json' \
+        --include='confirmation_manifest.json' \
         --include='confirmation_summary.json' \
         --include='running_md.log' \
         --include='MD_dump' \
@@ -59,6 +60,36 @@ do
     rsync -a --partial --append-verify \
         "$source_root/$relative" "$destination/$relative"
 done
+
+python3 - "$destination" "$source_root" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+destination = Path(sys.argv[1]).resolve()
+source_root = sys.argv[2].rstrip("/")
+
+
+def relocate(value):
+    if isinstance(value, dict):
+        return {key: relocate(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [relocate(item) for item in value]
+    if isinstance(value, str) and (
+        value == source_root or value.startswith(source_root + "/")
+    ):
+        return str(destination) + value[len(source_root) :]
+    return value
+
+
+for path in destination.rglob("*.json"):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    relocated = relocate(payload)
+    path.write_text(
+        json.dumps(relocated, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+PY
 
 (
     cd "$workspace"
