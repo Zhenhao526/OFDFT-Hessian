@@ -8,8 +8,20 @@ root=${RUN_ROOT:-$workspace/runs/step4_rebuild}
 prod=$root/enthalpy_production
 extensions=$prod/critical_extensions
 round=${ROUND:-1}
+extension_steps=${EXTENSION_STEPS:-3000}
+parent_steps=${PARENT_STEPS:-3000}
 if ! [[ $round =~ ^[1-9][0-9]*$ ]]; then
     printf 'ROUND must be a positive integer, got %s\n' "$round" >&2
+    exit 2
+fi
+if ! [[ $extension_steps =~ ^[1-9][0-9]*$ ]]; then
+    printf 'EXTENSION_STEPS must be a positive integer, got %s\n' \
+        "$extension_steps" >&2
+    exit 2
+fi
+if ! [[ $parent_steps =~ ^[1-9][0-9]*$ ]]; then
+    printf 'PARENT_STEPS must be a positive integer, got %s\n' \
+        "$parent_steps" >&2
     exit 2
 fi
 previous_round=$((round - 1))
@@ -20,8 +32,8 @@ if ((round == 1)); then
     prior_marker=$workspace/audit/step4_enthalpy_prod_975_1050.needs_extension
 else
     source_analysis=$prod/analysis_T0975_T1050_extension_round${previous_round}
-    source_975=$extensions/T0975_steps3000_round${previous_round}
-    source_1050=$extensions/T1050_steps3000_round${previous_round}
+    source_975=$extensions/T0975_steps${parent_steps}_round${previous_round}
+    source_1050=$extensions/T1050_steps${parent_steps}_round${previous_round}
     prior_marker=$workspace/audit/step4_enthalpy_extension_round${previous_round}.needs_extension
 fi
 analysis=$prod/analysis_T0975_T1050_extension_round${round}
@@ -38,6 +50,8 @@ mkdir -p "$extensions" "$analysis" "$workspace/audit"
 rm -f "$done_file" "$failed_file" "$extension_file"
 printf '%s enthalpy_extension_started round=%s\n' \
     "$(date -Iseconds)" "$round" > "$log"
+printf '%s extension_steps=%s parent_steps=%s\n' \
+    "$(date -Iseconds)" "$extension_steps" "$parent_steps" >> "$log"
 
 mark_failed() {
     local rc=$?
@@ -66,7 +80,7 @@ import sys
 
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 if report.get("status") != "statistical_extension_required":
-    raise SystemExit("round1 extension selection is not statistical-only")
+    raise SystemExit("extension selection is not statistical-only")
 temperatures = [round(float(value)) for value in report["critical_temperatures_k"]]
 if temperatures != [975, 1050]:
     raise SystemExit(f"unexpected extension temperatures: {temperatures}")
@@ -76,14 +90,14 @@ prepare_extension() {
     local temperature=$1
     local seed=$2
     local source=$3
-    local out=$extensions/T${temperature}_steps3000_round${round}
+    local out=$extensions/T${temperature}_steps${extension_steps}_round${round}
 
     test -s "$source/confirmation_manifest.json"
     test -s "$source/confirmation_summary.json"
     if [[ ! -e $out/confirmation_manifest.json ]]; then
         env PYTHONPATH="$repo" python3 \
             "$repo/scripts/prepare_wt_enthalpy_extension.py" \
-            --source "$source" --out "$out" --steps 3000 \
+            --source "$source" --out "$out" --steps "$extension_steps" \
             --csvr-tau 5 --seed "$seed" --config "$config" \
             >> "$log" 2>&1
     fi
@@ -93,8 +107,8 @@ prepare_extension 0975 "$((2026091975 + previous_round * 10000))" "$source_975"
 prepare_extension 1050 "$((2026092050 + previous_round * 10000))" "$source_1050"
 
 roots=(
-    "$extensions/T0975_steps3000_round${round}"
-    "$extensions/T1050_steps3000_round${round}"
+    "$extensions/T0975_steps${extension_steps}_round${round}"
+    "$extensions/T1050_steps${extension_steps}_round${round}"
 )
 points=(
     "${roots[0]}/solid"
@@ -156,7 +170,7 @@ for pair in "${roots[@]}"; do
         "$repo/scripts/analyze_wt_zero_pressure_confirmation.py" \
         "$pair" --temperature-tolerance 20 --pressure-tolerance 2.5 \
         >> "$log" 2>&1
-    python3 - "$pair/confirmation_summary.json" <<'PY'
+    python3 - "$pair/confirmation_summary.json" "$extension_steps" <<'PY'
 import json
 import sys
 
@@ -164,7 +178,7 @@ report = json.load(open(sys.argv[1], encoding="utf-8"))
 if report.get("status") != "all_confirmations_passed":
     raise SystemExit("extension phase pair did not pass")
 if any(
-    row.get("max_step") != 3000
+    row.get("max_step") != int(sys.argv[2])
     or row.get("status") != "confirmation_passed"
     or not all(row.get("checks", {}).values())
     for row in report.get("phase_results", [])
@@ -201,8 +215,8 @@ env PYTHONPATH="$repo" python3 \
 
 (
     cd "$prod"
-    find critical_extensions/T0975_steps3000_round${round} \
-        critical_extensions/T1050_steps3000_round${round} \
+    find critical_extensions/T0975_steps${extension_steps}_round${round} \
+        critical_extensions/T1050_steps${extension_steps}_round${round} \
         analysis_T0975_T1050_extension_round${round} \
         -type f -print0 | sort -z | xargs -0 sha256sum
 ) > "$prod/SHA256SUMS_extension_round${round}"

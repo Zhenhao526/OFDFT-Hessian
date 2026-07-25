@@ -13,7 +13,7 @@ from scripts.analyze_two_phase_run import parse_md_log, series_stats
 
 def report(root: Path, requested_steps: int) -> dict:
     rows = []
-    for run in sorted(root.glob("T*_steps3000*/*")):
+    for run in sorted(root.glob("T*_steps*/*")):
         if not run.is_dir() or run.name not in {"solid", "liquid"}:
             continue
         logs = sorted(run.glob("OUT.*/running_md.log"))
