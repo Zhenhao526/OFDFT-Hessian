@@ -213,11 +213,19 @@ def main() -> None:
             liquid["temperature_k"]["mean"]
             - solid["temperature_k"]["mean"]
         )
+        requested_solid_steps = int(
+            point.get("solid_steps", point["steps"])
+        )
+        requested_liquid_steps = int(
+            point.get("liquid_steps", point["steps"])
+        )
         checks = {
             "solid_phase_verified": solid["phase_status"] == "solid_verified",
             "liquid_phase_verified": liquid["phase_status"] == "liquid_verified",
-            "requested_steps_reached": solid["max_step"] >= point["steps"]
-            and liquid["max_step"] >= point["steps"],
+            "requested_steps_reached": (
+                solid["max_step"] >= requested_solid_steps
+                and liquid["max_step"] >= requested_liquid_steps
+            ),
             "temperature_means_within_tolerance": abs(
                 solid["temperature_k"]["mean"] - target_temperature
             )
@@ -255,6 +263,8 @@ def main() -> None:
                 "block_standard_error_mev_per_atom": error,
                 "half_drift_mev_per_atom": half_drift,
                 "external_pressure_pv_difference_ev_per_atom": pv_difference,
+                "requested_solid_steps": requested_solid_steps,
+                "requested_liquid_steps": requested_liquid_steps,
                 "checks": checks,
                 "status": "verified" if all(checks.values()) else "gate_failed",
             }

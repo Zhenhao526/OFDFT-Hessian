@@ -143,6 +143,68 @@ class FusionEnthalpySeriesTests(unittest.TestCase):
             self.assertEqual(point["status"], "gate_failed")
             self.assertEqual(result["status"], "gate_failed")
 
+    def test_phase_specific_requested_steps_are_gated_independently(self):
+        manifest = {
+            "target_kedf": "wt",
+            "points": [
+                {
+                    "temperature_k": 900.0,
+                    "target_pressure_kbar": 0.0,
+                    "steps": 100,
+                    "solid_steps": 150,
+                    "liquid_steps": 100,
+                    "solid_run": "solid",
+                    "liquid_run": "liquid",
+                    "solid_volume_per_atom_A3": 18.0,
+                    "liquid_volume_per_atom_A3": 19.0,
+                }
+            ],
+        }
+
+        def phase_result(phase):
+            total = -56.9 if phase == "solid" else -56.8
+            return {
+                "phase_status": f"{phase}_verified",
+                "max_step": 149 if phase == "solid" else 100,
+                "natoms": 108,
+                "minimum_nearest_neighbor_angstrom": 2.2,
+                "temperature_k": {"mean": 900.0},
+                "pressure_kbar": {"mean": 0.0},
+                "potential_mean_ev_per_atom": total - 0.12,
+                "kinetic_mean_ev_per_atom": 0.12,
+                "total_mean_ev_per_atom": total,
+                "total_block_standard_error_mev_per_atom": 1.0,
+                "total_first_half_ev_per_atom": total,
+                "total_second_half_ev_per_atom": total,
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            output_path = root / "analysis.json"
+            manifest_path.write_text(__import__("json").dumps(manifest))
+            with mock.patch(
+                "scripts.analyze_wt_fusion_enthalpy_series.analyze_run",
+                side_effect=lambda runs, phase, discard, blocks: phase_result(phase),
+            ), mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "analyze_wt_fusion_enthalpy_series.py",
+                    str(manifest_path),
+                    "--out",
+                    str(output_path),
+                ],
+            ):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    main()
+
+            point = __import__("json").loads(output_path.read_text())["points"][0]
+
+        self.assertEqual(point["requested_solid_steps"], 150)
+        self.assertEqual(point["requested_liquid_steps"], 100)
+        self.assertFalse(point["checks"]["requested_steps_reached"])
+
 
 if __name__ == "__main__":
     unittest.main()
