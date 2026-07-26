@@ -1,0 +1,186 @@
+{
+  "checks": {
+    "all_reports_verified": true,
+    "block_standard_error_gate": true,
+    "discard_sensitivity_gate": true
+  },
+  "critical_temperatures": {},
+  "discard_reports": [
+    {
+      "discard_fraction": 0.25,
+      "status": "verified"
+    },
+    {
+      "discard_fraction": 0.5,
+      "status": "verified"
+    },
+    {
+      "discard_fraction": 0.75,
+      "status": "verified"
+    }
+  ],
+  "enthalpy_energy_definition": "sampled_total_energy_plus_external_pv",
+  "maximum_block_standard_error_mev_per_atom": 3.0,
+  "maximum_discard_spread_mev_per_atom": 2.0,
+  "points": [
+    {
+      "delta_h_discard_spread_mev_per_atom": 1.1562109617599958,
+      "extension_reasons": [],
+      "failed_checks": [],
+      "maximum_block_standard_error_mev_per_atom": 2.810059036571036,
+      "reports": [
+        {
+          "block_standard_error_mev_per_atom": 2.2561561623250346,
+          "delta_h_mev_per_atom": 82.29241952832922,
+          "discard_fraction": 0.25,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 1.4339560694267561,
+          "liquid_minus_solid_temperature_mean_difference_k": -11.405351822222201,
+          "status": "verified"
+        },
+        {
+          "block_standard_error_mev_per_atom": 2.810059036571036,
+          "delta_h_mev_per_atom": 82.67628344330546,
+          "discard_fraction": 0.5,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 2.31242192349157,
+          "liquid_minus_solid_temperature_mean_difference_k": -12.501348299999904,
+          "status": "verified"
+        },
+        {
+          "block_standard_error_mev_per_atom": 2.563393484601424,
+          "delta_h_mev_per_atom": 81.52007248154547,
+          "discard_fraction": 0.75,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 2.321232029707687,
+          "liquid_minus_solid_temperature_mean_difference_k": -13.911524866666696,
+          "status": "verified"
+        }
+      ],
+      "status": "verified",
+      "temperature_k": 900.0
+    },
+    {
+      "delta_h_discard_spread_mev_per_atom": 1.5452321621935994,
+      "extension_reasons": [],
+      "failed_checks": [],
+      "maximum_block_standard_error_mev_per_atom": 1.8829004432806722,
+      "reports": [
+        {
+          "block_standard_error_mev_per_atom": 1.15909914831507,
+          "delta_h_mev_per_atom": 84.8177834270416,
+          "discard_fraction": 0.25,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 1.1653819267891663,
+          "liquid_minus_solid_temperature_mean_difference_k": -2.005186280000089,
+          "status": "verified"
+        },
+        {
+          "block_standard_error_mev_per_atom": 1.4400776040771814,
+          "delta_h_mev_per_atom": 85.51583863008005,
+          "discard_fraction": 0.5,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 1.6943539183884582,
+          "liquid_minus_solid_temperature_mean_difference_k": -1.528523233333317,
+          "status": "verified"
+        },
+        {
+          "block_standard_error_mev_per_atom": 1.8829004432806722,
+          "delta_h_mev_per_atom": 86.3630155892352,
+          "discard_fraction": 0.75,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 2.906105503129197,
+          "liquid_minus_solid_temperature_mean_difference_k": -0.019767000000001644,
+          "status": "verified"
+        }
+      ],
+      "status": "verified",
+      "temperature_k": 975.0
+    },
+    {
+      "delta_h_discard_spread_mev_per_atom": 1.5202756737977552,
+      "extension_reasons": [],
+      "failed_checks": [],
+      "maximum_block_standard_error_mev_per_atom": 2.186328432123367,
+      "reports": [
+        {
+          "block_standard_error_mev_per_atom": 1.100671556915417,
+          "delta_h_mev_per_atom": 87.97064917118291,
+          "discard_fraction": 0.25,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 0.5426881461119137,
+          "liquid_minus_solid_temperature_mean_difference_k": 5.6443326482540215,
+          "status": "verified"
+        },
+        {
+          "block_standard_error_mev_per_atom": 1.359811384556535,
+          "delta_h_mev_per_atom": 88.29013784113471,
+          "discard_fraction": 0.5,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 2.4015740074503356,
+          "liquid_minus_solid_temperature_mean_difference_k": 7.129416395238195,
+          "status": "verified"
+        },
+        {
+          "block_standard_error_mev_per_atom": 2.186328432123367,
+          "delta_h_mev_per_atom": 89.49092484498067,
+          "discard_fraction": 0.75,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 3.4144665093478466,
+          "liquid_minus_solid_temperature_mean_difference_k": 7.190137428571461,
+          "status": "verified"
+        }
+      ],
+      "status": "verified",
+      "temperature_k": 1050.0
+    },
+    {
+      "delta_h_discard_spread_mev_per_atom": 1.1368088927596887,
+      "extension_reasons": [],
+      "failed_checks": [],
+      "maximum_block_standard_error_mev_per_atom": 2.601782156623299,
+      "reports": [
+        {
+          "block_standard_error_mev_per_atom": 1.4252669844665773,
+          "delta_h_mev_per_atom": 85.29437774164705,
+          "discard_fraction": 0.25,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 0.661529438815478,
+          "liquid_minus_solid_temperature_mean_difference_k": 8.040861724643037,
+          "status": "verified"
+        },
+        {
+          "block_standard_error_mev_per_atom": 1.2531928119606617,
+          "delta_h_mev_per_atom": 85.01815756268627,
+          "discard_fraction": 0.5,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 1.7211774276901792,
+          "liquid_minus_solid_temperature_mean_difference_k": 7.277654656511913,
+          "status": "verified"
+        },
+        {
+          "block_standard_error_mev_per_atom": 2.601782156623299,
+          "delta_h_mev_per_atom": 84.15756884888737,
+          "discard_fraction": 0.75,
+          "failed_checks": [],
+          "half_drift_mev_per_atom": 2.098266695661266,
+          "liquid_minus_solid_temperature_mean_difference_k": 0.6879282590120965,
+          "status": "verified"
+        }
+      ],
+      "status": "verified",
+      "temperature_k": 1100.0
+    }
+  ],
+  "provenance": {
+    "appended_convergence": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/analysis_T1100_targeted_liquid_round2/discard_convergence_summary.json",
+    "base_convergence": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726/inputs/discard_convergence_summary.json",
+    "merged_reports": [
+      "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/enthalpy_d25.json",
+      "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/enthalpy_d50.json",
+      "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/enthalpy_d75.json"
+    ]
+  },
+  "schema": "wt-enthalpy-discard-convergence-summary-v2",
+  "status": "verified"
+}

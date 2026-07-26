@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600" viewBox="0 0 900 600">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="450" y="30" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#202020">WT Al melting point: Gibbs-Helmholtz integration</text>
+<rect x="298.761" y="55.000" width="512.097" height="470.000" fill="#d9d9d9" fill-opacity="0.55"/>
+<rect x="494.942" y="55.000" width="55.154" height="470.000" fill="#a6a6a6" fill-opacity="0.60"/>
+<line x1="90.000" y1="55.000" x2="90.000" y2="525.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="90.000" y="550.000" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#303030">900</text>
+<line x1="380.625" y1="55.000" x2="380.625" y2="525.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="380.625" y="550.000" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#303030">975</text>
+<line x1="671.250" y1="55.000" x2="671.250" y2="525.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="671.250" y="550.000" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#303030">1050</text>
+<line x1="865.000" y1="55.000" x2="865.000" y2="525.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="865.000" y="550.000" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#303030">1100</text>
+<line x1="90.000" y1="525.000" x2="865.000" y2="525.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="78.000" y="529.000" text-anchor="end" font-family="sans-serif" font-size="13" fill="#303030">-9.7</text>
+<line x1="90.000" y1="431.000" x2="865.000" y2="431.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="78.000" y="435.000" text-anchor="end" font-family="sans-serif" font-size="13" fill="#303030">-5.5</text>
+<line x1="90.000" y1="337.000" x2="865.000" y2="337.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="78.000" y="341.000" text-anchor="end" font-family="sans-serif" font-size="13" fill="#303030">-1.3</text>
+<line x1="90.000" y1="243.000" x2="865.000" y2="243.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="78.000" y="247.000" text-anchor="end" font-family="sans-serif" font-size="13" fill="#303030">2.9</text>
+<line x1="90.000" y1="149.000" x2="865.000" y2="149.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="78.000" y="153.000" text-anchor="end" font-family="sans-serif" font-size="13" fill="#303030">7.2</text>
+<line x1="90.000" y1="55.000" x2="865.000" y2="55.000" stroke="#e6e6e6" stroke-width="1"/>
+<text x="78.000" y="59.000" text-anchor="end" font-family="sans-serif" font-size="13" fill="#303030">11.4</text>
+<line x1="90.000" y1="308.348" x2="865.000" y2="308.348" stroke="#202020" stroke-width="1.4"/>
+<line x1="522.186" y1="55.000" x2="522.186" y2="525.000" stroke="#b33a3a" stroke-width="1.4" stroke-dasharray="7 5"/>
+<polyline points="90.000,100.484 380.625,238.076 671.250,380.519 865.000,475.797" fill="none" stroke="#267365" stroke-width="2.4"/>
+<circle cx="90.000" cy="100.484" r="4.5" fill="#267365" stroke="#ffffff" stroke-width="1"/>
+<circle cx="380.625" cy="238.076" r="4.5" fill="#267365" stroke="#ffffff" stroke-width="1"/>
+<circle cx="671.250" cy="380.519" r="4.5" fill="#267365" stroke="#ffffff" stroke-width="1"/>
+<circle cx="865.000" cy="475.797" r="4.5" fill="#267365" stroke="#ffffff" stroke-width="1"/>
+<polyline points="90.000,100.484 380.625,239.071 671.250,382.470 865.000,477.869" fill="none" stroke="#b33a3a" stroke-width="2.4"/>
+<circle cx="90.000" cy="100.484" r="4.5" fill="#b33a3a" stroke="#ffffff" stroke-width="1"/>
+<circle cx="380.625" cy="239.071" r="4.5" fill="#b33a3a" stroke="#ffffff" stroke-width="1"/>
+<circle cx="671.250" cy="382.470" r="4.5" fill="#b33a3a" stroke="#ffffff" stroke-width="1"/>
+<circle cx="865.000" cy="477.869" r="4.5" fill="#b33a3a" stroke="#ffffff" stroke-width="1"/>
+<polyline points="90.000,100.484 380.625,238.735 671.250,383.854 865.000,479.516" fill="none" stroke="#315a9b" stroke-width="2.4"/>
+<circle cx="90.000" cy="100.484" r="4.5" fill="#315a9b" stroke="#ffffff" stroke-width="1"/>
+<circle cx="380.625" cy="238.735" r="4.5" fill="#315a9b" stroke="#ffffff" stroke-width="1"/>
+<circle cx="671.250" cy="383.854" r="4.5" fill="#315a9b" stroke="#ffffff" stroke-width="1"/>
+<circle cx="865.000" cy="479.516" r="4.5" fill="#315a9b" stroke="#ffffff" stroke-width="1"/>
+<rect x="90.000" y="55.000" width="775.000" height="470.000" fill="none" stroke="#303030" stroke-width="1.2"/>
+<text x="450" y="580" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#202020">Temperature (K)</text>
+<text x="24" y="290" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#202020" transform="rotate(-90 24 290)">Delta G liq-sol (meV/atom)</text>
+<line x1="108.000" y1="77.000" x2="132.000" y2="77.000" stroke="#267365" stroke-width="2.4"/>
+<text x="139.000" y="81.000" font-family="sans-serif" font-size="13" fill="#202020">d25</text>
+<line x1="108.000" y1="99.000" x2="132.000" y2="99.000" stroke="#b33a3a" stroke-width="2.4"/>
+<text x="139.000" y="103.000" font-family="sans-serif" font-size="13" fill="#202020">d50</text>
+<line x1="108.000" y1="121.000" x2="132.000" y2="121.000" stroke="#315a9b" stroke-width="2.4"/>
+<text x="139.000" y="125.000" font-family="sans-serif" font-size="13" fill="#202020">d75</text>
+</svg>

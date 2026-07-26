@@ -1,0 +1,72 @@
+{
+  "checks": {
+    "appended_grid_verified": true,
+    "base_grid_verified": true,
+    "merged_convergence_verified": true,
+    "temperature_grids_disjoint": true
+  },
+  "inputs": {
+    "append_convergence": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/analysis_T1100_targeted_liquid_round2/discard_convergence_summary.json",
+      "sha256": "5bd271649e45c225a9eff16265e594a2b2db1aee028a888c18cff1094bef8e3e"
+    },
+    "append_d25": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/analysis_T1100_targeted_liquid_round2/enthalpy_d25.json",
+      "sha256": "709243ca92586009f5c5b6a43a19711449837bf44e5714124b8f84353b582521"
+    },
+    "append_d50": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/analysis_T1100_targeted_liquid_round2/enthalpy_d50.json",
+      "sha256": "9fda3bfc254f959cc42dace1a010448947f80871e5409a26de9c8d73f981b4c3"
+    },
+    "append_d75": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/analysis_T1100_targeted_liquid_round2/enthalpy_d75.json",
+      "sha256": "22ca00afcc4334659b90781bbb0d7be3810daa397e04513dc76dd921d2046757"
+    },
+    "base_convergence": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726/inputs/discard_convergence_summary.json",
+      "sha256": "9f8686a97699eb72975afd53d3875d26f426887d2567466f5f542e105bf360e0"
+    },
+    "base_d25": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726/inputs/enthalpy_d25.json",
+      "sha256": "c1bb35c6af5176da19514122861c97dd7d896f7f4304163f46556ea86d1664cc"
+    },
+    "base_d50": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726/inputs/enthalpy_d50.json",
+      "sha256": "93e1574f205ff2c8f32c87d8ab7020a771956ed31e20f822dabf85a209c1a612"
+    },
+    "base_d75": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726/inputs/enthalpy_d75.json",
+      "sha256": "947009482330bbd1c9e6cf89d24126b12664f4c8fc90edb9aa35f57f1a47c812"
+    }
+  },
+  "outputs": {
+    "convergence": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/discard_convergence_summary.json",
+      "sha256": "9b0b453bdd0f069eed3f4eb116336742c1a19ffbb685c95e09908ce185d8787f"
+    },
+    "d25": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/enthalpy_d25.json",
+      "sha256": "6384798ba2cc614fd34a5d183482df7c2612748633bf7ca4f3920f34166583ff"
+    },
+    "d50": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/enthalpy_d50.json",
+      "sha256": "5dee64a22006b4cb07b3004e29393cf27345214fe83a5d780001d6d17e73b9bb"
+    },
+    "d75": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/enthalpy_d75.json",
+      "sha256": "3df94689106bff221f706fd8a04982b82191bf736b17bbc71cc927f58acfc66e"
+    }
+  },
+  "schema": "wt-melting-enthalpy-grid-append-v1",
+  "status": "verified",
+  "temperature_grid_k": [
+    900.0,
+    975.0,
+    1050.0,
+    1100.0
+  ],
+  "thermodynamic_convention": {
+    "delta_g": "G_liquid_minus_G_solid",
+    "delta_h": "H_liquid_minus_H_solid"
+  }
+}

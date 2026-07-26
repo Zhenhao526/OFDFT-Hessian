@@ -1,0 +1,178 @@
+{
+  "all_discard_conservative_envelope_k": {
+    "lower": 953.8738810457289,
+    "minus_from_central": 57.65786301344633,
+    "plus_from_central": 74.49624733999372,
+    "upper": 1086.027991399169
+  },
+  "all_discard_statistical_envelope_k": {
+    "lower": 1004.5011316426098,
+    "upper": 1018.734407890588
+  },
+  "anchor_delta_g_mev_per_atom": 9.339119517569827,
+  "anchor_temperature_k": 900.0,
+  "central_discard": "d50",
+  "checks": {
+    "all_roots_inside_temperature_grid": true,
+    "d25_all_checks_verified": true,
+    "d25_anchor_verified": true,
+    "d25_discard_verified": true,
+    "d25_profile_grid_verified": true,
+    "d25_profile_monotonic_verified": true,
+    "d25_profile_sign_change_verified": true,
+    "d25_schema_verified": true,
+    "d25_sign_convention_verified": true,
+    "d25_status_verified": true,
+    "d25_temperature_grid_verified": true,
+    "d50_all_checks_verified": true,
+    "d50_anchor_verified": true,
+    "d50_discard_verified": true,
+    "d50_profile_grid_verified": true,
+    "d50_profile_monotonic_verified": true,
+    "d50_profile_sign_change_verified": true,
+    "d50_schema_verified": true,
+    "d50_sign_convention_verified": true,
+    "d50_status_verified": true,
+    "d50_temperature_grid_verified": true,
+    "d75_all_checks_verified": true,
+    "d75_anchor_verified": true,
+    "d75_discard_verified": true,
+    "d75_profile_grid_verified": true,
+    "d75_profile_monotonic_verified": true,
+    "d75_profile_sign_change_verified": true,
+    "d75_schema_verified": true,
+    "d75_sign_convention_verified": true,
+    "d75_status_verified": true,
+    "d75_temperature_grid_verified": true
+  },
+  "d50_conservative_sensitivity_k": {
+    "lower": 953.8738810457289,
+    "upper": 1083.5877437144518
+  },
+  "d50_statistical_sensitivity_k": {
+    "lower": 1004.9058110453188,
+    "minus_from_central": 6.625933013856411,
+    "plus_from_central": 6.915378011763096,
+    "upper": 1018.4471220709383
+  },
+  "melting_temperature_k": 1011.5317440591753,
+  "nominal_discard_envelope_k": {
+    "lower": 1011.3101002760231,
+    "minus_from_central": 0.22164378315210342,
+    "plus_from_central": 0.8104970678687096,
+    "upper": 1012.342241127044
+  },
+  "nominal_roots_k": {
+    "d25": 1012.342241127044,
+    "d50": 1011.5317440591753,
+    "d75": 1011.3101002760231
+  },
+  "profiles": {
+    "d25": [
+      {
+        "delta_g_ev_per_atom": 0.009339119517569827,
+        "delta_g_over_t_ev_per_atom_k": 1.0376799463966475e-05,
+        "temperature_k": 900.0
+      },
+      {
+        "delta_g_ev_per_atom": 0.0031572612126377422,
+        "delta_g_over_t_ev_per_atom_k": 3.238216628346402e-06,
+        "temperature_k": 975.0
+      },
+      {
+        "delta_g_ev_per_atom": -0.003242586489895635,
+        "delta_g_over_t_ev_per_atom_k": -3.0881776094244142e-06,
+        "temperature_k": 1050.0
+      },
+      {
+        "delta_g_ev_per_atom": -0.007523341179468849,
+        "delta_g_over_t_ev_per_atom_k": -6.839401072244408e-06,
+        "temperature_k": 1100.0
+      }
+    ],
+    "d50": [
+      {
+        "delta_g_ev_per_atom": 0.009339119517569827,
+        "delta_g_over_t_ev_per_atom_k": 1.0376799463966475e-05,
+        "temperature_k": 900.0
+      },
+      {
+        "delta_g_ev_per_atom": 0.003112530462607439,
+        "delta_g_over_t_ev_per_atom_k": 3.1923389360076298e-06,
+        "temperature_k": 975.0
+      },
+      {
+        "delta_g_ev_per_atom": -0.0033302539807254466,
+        "delta_g_over_t_ev_per_atom_k": -3.1716704578337586e-06,
+        "temperature_k": 1050.0
+      },
+      {
+        "delta_g_ev_per_atom": -0.007616433438584227,
+        "delta_g_over_t_ev_per_atom_k": -6.924030398712934e-06,
+        "temperature_k": 1100.0
+      }
+    ],
+    "d75": [
+      {
+        "delta_g_ev_per_atom": 0.009339119517569827,
+        "delta_g_over_t_ev_per_atom_k": 1.0376799463966475e-05,
+        "temperature_k": 900.0
+      },
+      {
+        "delta_g_ev_per_atom": 0.0031276335787660233,
+        "delta_g_over_t_ev_per_atom_k": 3.2078293115548957e-06,
+        "temperature_k": 975.0
+      },
+      {
+        "delta_g_ev_per_atom": -0.0033924210269396776,
+        "delta_g_over_t_ev_per_atom_k": -3.2308771685139788e-06,
+        "temperature_k": 1050.0
+      },
+      {
+        "delta_g_ev_per_atom": -0.007690421797980799,
+        "delta_g_over_t_ev_per_atom_k": -6.991292543618908e-06,
+        "temperature_k": 1100.0
+      }
+    ]
+  },
+  "provenance": {
+    "append_manifest": {
+      "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/append_manifest.json",
+      "sha256": "fcb5856bb5a6eef21b79192198f5b720305401c156f96ab772244e849d83962c"
+    },
+    "solver_results": {
+      "d25": {
+        "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/results/melting_d25.json",
+        "sha256": "5a8830586564ef984d257854d9f03176014b26d2428460eee056ed85868d88ae"
+      },
+      "d50": {
+        "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/results/melting_d50.json",
+        "sha256": "886e67158170b2aeb01e1e06c90ba7bcc8b7432c2bf9e2c98e18c76b630d10fa"
+      },
+      "d75": {
+        "path": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/results/melting_d75.json",
+        "sha256": "e129fbe74ff6bdedf328761e8b9e88b7c430987d5248561ba344cf9e7e82e6f2"
+      }
+    }
+  },
+  "schema": "wt-gibbs-helmholtz-melting-final-v1",
+  "status": "verified",
+  "temperature_grid_k": [
+    900.0,
+    975.0,
+    1050.0,
+    1100.0
+  ],
+  "thermodynamic_convention": {
+    "delta_g": "G_liquid_minus_G_solid",
+    "delta_h": "H_liquid_minus_H_solid",
+    "gibbs_helmholtz_equation": "d(delta_g/T)/dT=-delta_h/T^2",
+    "root_definition": "delta_g(T_m)=0"
+  },
+  "uncertainty_interpretation": {
+    "conservative": "full envelope across discard fractions, anchor systematic terms, block error, half drift, and discard spread",
+    "discard": "nominal sensitivity to production discard fraction",
+    "probabilistic_confidence_interval": false,
+    "statistical": "coherent statistical sensitivity envelope"
+  }
+}

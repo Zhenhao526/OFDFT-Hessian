@@ -73,10 +73,10 @@ def _report_at_discard(
     return report
 
 
-def _validate_current_inputs(
+def validate_verified_grid(
     series_by_discard: Dict[float, Dict[str, Any]],
     convergence: Dict[str, Any],
-    anchor_temperature_k: float,
+    excluded_temperature_k: float | None = None,
 ) -> None:
     if convergence.get("schema") != CONVERGENCE_SCHEMA:
         raise ValueError("current convergence uses an unsupported schema")
@@ -97,8 +97,14 @@ def _validate_current_inputs(
             raise ValueError("discard label does not match series content")
         points = sorted(series.get("points", []), key=lambda row: row["temperature_k"])
         temperatures = tuple(float(point["temperature_k"]) for point in points)
-        if anchor_temperature_k in temperatures:
-            raise ValueError("current series already contains the anchor temperature")
+        if (
+            excluded_temperature_k is not None
+            and any(
+                _same(temperature, excluded_temperature_k)
+                for temperature in temperatures
+            )
+        ):
+            raise ValueError("current series already contains the excluded temperature")
         if any(point.get("status") != "verified" for point in points):
             raise ValueError("current enthalpy series contains an unverified point")
         if reference_temperatures is None:
@@ -149,8 +155,10 @@ def merge_temperature_grid(
     if archived_convergence.get("enthalpy_energy_definition") != ENERGY_DEFINITION:
         raise ValueError("archived convergence uses an unsupported energy definition")
 
-    _validate_current_inputs(
-        current_series_by_discard, current_convergence, anchor_temperature_k
+    validate_verified_grid(
+        current_series_by_discard,
+        current_convergence,
+        excluded_temperature_k=anchor_temperature_k,
     )
     archived_point = _point_at_temperature(
         archived_convergence, anchor_temperature_k

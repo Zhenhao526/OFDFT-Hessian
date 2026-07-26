@@ -1,0 +1,615 @@
+{
+  "anchor_delta_g_ev_per_atom": 0.009339119517569827,
+  "anchor_temperature_k": 900.0,
+  "checks": {
+    "all_enthalpy_points_verified": true,
+    "conservative_interval_bracketed": true,
+    "enthalpy_discard_convergence_verified": true,
+    "enthalpy_series_verified": true,
+    "enthalpy_total_energy_definition_verified": true,
+    "free_energy_anchor_checks_verified": true,
+    "free_energy_anchor_verified": true,
+    "nominal_root_bracketed": true,
+    "statistical_interval_bracketed": true
+  },
+  "conservative_interval": {
+    "half_width_k": 64.85693133436143,
+    "lower_k": 953.8738810457289,
+    "scenarios": [
+      {
+        "delta_g_uncertainty_sign": -1.0,
+        "enthalpy_uncertainty_sign": -1.0,
+        "root_k": 962.1207416988909
+      },
+      {
+        "delta_g_uncertainty_sign": -1.0,
+        "enthalpy_uncertainty_sign": 1.0,
+        "root_k": 953.8738810457289
+      },
+      {
+        "delta_g_uncertainty_sign": 1.0,
+        "enthalpy_uncertainty_sign": -1.0,
+        "root_k": 1083.5877437144518
+      },
+      {
+        "delta_g_uncertainty_sign": 1.0,
+        "enthalpy_uncertainty_sign": 1.0,
+        "root_k": 1059.082044288516
+      }
+    ],
+    "upper_k": 1083.5877437144518
+  },
+  "enthalpy_energy_definition": "sampled_total_energy_plus_external_pv",
+  "enthalpy_points": [
+    {
+      "block_standard_error_mev_per_atom": 2.810059036571036,
+      "checks": {
+        "archived_point_verified": true,
+        "archived_report_verified": true,
+        "positive_fusion_enthalpy": true
+      },
+      "delta_h_ev_per_atom": 0.08267628344330546,
+      "enthalpy_conservative_uncertainty_mev_per_atom": 6.278691921822602,
+      "enthalpy_discard_spread_mev_per_atom": 1.1562109617599958,
+      "enthalpy_half_drift_mev_per_atom": 2.31242192349157,
+      "enthalpy_statistical_uncertainty_mev_per_atom": 2.810059036571036,
+      "half_drift_mev_per_atom": 2.31242192349157,
+      "liquid_minus_solid_temperature_mean_difference_k": -12.501348299999904,
+      "source": "archived_verified_convergence_point",
+      "status": "verified",
+      "temperature_k": 900.0
+    },
+    {
+      "block_standard_error_mev_per_atom": 1.4400776040771814,
+      "checks": {
+        "half_drift_within_tolerance": true,
+        "liquid_phase_verified": true,
+        "nearest_neighbors_gt_2_A": true,
+        "positive_fusion_enthalpy": true,
+        "pressure_means_within_tolerance": true,
+        "requested_steps_reached": true,
+        "solid_liquid_temperature_means_match": true,
+        "solid_phase_verified": true,
+        "temperature_means_within_tolerance": true
+      },
+      "delta_h_ev_per_atom": 0.08551583863008005,
+      "enthalpy_conservative_uncertainty_mev_per_atom": 4.679663684659239,
+      "enthalpy_discard_spread_mev_per_atom": 1.5452321621935994,
+      "enthalpy_half_drift_mev_per_atom": 1.6943539183884582,
+      "enthalpy_statistical_uncertainty_mev_per_atom": 1.4400776040771814,
+      "external_pressure_pv_difference_ev_per_atom": 0.0,
+      "half_drift_mev_per_atom": 1.6943539183884582,
+      "kinetic_difference_ev_per_atom": -0.00019574759209911585,
+      "liquid": {
+        "kinetic_mean_ev_per_atom": 0.12461555628675003,
+        "max_step": 15000,
+        "minimum_nearest_neighbor_angstrom": 2.1681373602062126,
+        "natoms": 108,
+        "nearest_neighbor_angstrom": 2.3459974444297456,
+        "phase": "liquid",
+        "phase_status": "liquid_verified",
+        "potential_block_standard_error_mev_per_atom": 1.019887852695627,
+        "potential_first_half_ev_per_atom": -56.95270120874066,
+        "potential_mean_ev_per_atom": -56.952043209705934,
+        "potential_second_half_ev_per_atom": -56.95138521067116,
+        "pressure_kbar": {
+          "last": 4.1448649,
+          "max": 11.198939,
+          "mean": 0.376860923070218,
+          "min": -9.2180418,
+          "n": 1500,
+          "sd": 3.0702025093915175
+        },
+        "production_samples": 1500,
+        "run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps6000_round3/liquid",
+        "runs": [
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T0975_steps3000/liquid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round1/liquid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round2/liquid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps6000_round3/liquid"
+        ],
+        "samples": 3000,
+        "segment_max_steps": [
+          3000,
+          3000,
+          3000,
+          6000
+        ],
+        "temperature_k": {
+          "last": 1019.002,
+          "max": 1265.6536,
+          "mean": 973.0777910666667,
+          "min": 701.3009,
+          "n": 1500,
+          "sd": 75.95936999469164
+        },
+        "total_block_standard_error_mev_per_atom": 1.1652885328718294,
+        "total_first_half_ev_per_atom": -56.82820895709242,
+        "total_mean_ev_per_atom": -56.827427641766185,
+        "total_second_half_ev_per_atom": -56.82664632644004
+      },
+      "liquid_minus_solid_temperature_mean_difference_k": -1.528523233333317,
+      "liquid_run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps6000_round3/liquid",
+      "liquid_runs": [
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T0975_steps3000/liquid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round1/liquid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round2/liquid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps6000_round3/liquid"
+      ],
+      "liquid_volume_per_atom_A3": 18.891575304254044,
+      "parent_confirmation": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round2",
+      "potential_difference_ev_per_atom": 0.08571155316619894,
+      "requested_liquid_steps": 15000,
+      "requested_solid_steps": 15000,
+      "segment_steps": [
+        3000,
+        3000,
+        3000,
+        6000
+      ],
+      "solid": {
+        "kinetic_mean_ev_per_atom": 0.12481130387884914,
+        "max_step": 15000,
+        "minimum_nearest_neighbor_angstrom": 2.1743495513296693,
+        "natoms": 108,
+        "nearest_neighbor_angstrom": 2.419532721240219,
+        "phase": "solid",
+        "phase_status": "solid_verified",
+        "potential_block_standard_error_mev_per_atom": 0.43194030543045153,
+        "potential_first_half_ev_per_atom": -57.037758821904,
+        "potential_mean_ev_per_atom": -57.03775476287213,
+        "potential_second_half_ev_per_atom": -57.0377507038404,
+        "pressure_kbar": {
+          "last": 0.33726478,
+          "max": 9.4518729,
+          "mean": -0.0592443783702,
+          "min": -9.8895717,
+          "n": 1500,
+          "sd": 3.07656955597839
+        },
+        "production_samples": 1500,
+        "run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps6000_round3/solid",
+        "runs": [
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T0975_steps3000/solid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round1/solid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round2/solid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps6000_round3/solid"
+        ],
+        "samples": 3000,
+        "segment_max_steps": [
+          3000,
+          3000,
+          3000,
+          6000
+        ],
+        "temperature_k": {
+          "last": 889.25188,
+          "max": 1230.6525,
+          "mean": 974.6063143,
+          "min": 716.0808,
+          "n": 1500,
+          "sd": 77.36034677127378
+        },
+        "total_block_standard_error_mev_per_atom": 0.8461241876474721,
+        "total_first_half_ev_per_atom": -56.91287761876327,
+        "total_mean_ev_per_atom": -56.912943480396265,
+        "total_second_half_ev_per_atom": -56.91300934202928
+      },
+      "solid_run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps6000_round3/solid",
+      "solid_runs": [
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T0975_steps3000/solid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round1/solid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps3000_round2/solid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T0975_steps6000_round3/solid"
+      ],
+      "solid_volume_per_atom_A3": 18.08480608406171,
+      "status": "verified",
+      "steps": 15000,
+      "target_pressure_kbar": 0.0,
+      "temperature_k": 975.0
+    },
+    {
+      "block_standard_error_mev_per_atom": 1.359811384556535,
+      "checks": {
+        "half_drift_within_tolerance": true,
+        "liquid_phase_verified": true,
+        "nearest_neighbors_gt_2_A": true,
+        "positive_fusion_enthalpy": true,
+        "pressure_means_within_tolerance": true,
+        "requested_steps_reached": true,
+        "solid_liquid_temperature_means_match": true,
+        "solid_phase_verified": true,
+        "temperature_means_within_tolerance": true
+      },
+      "delta_h_ev_per_atom": 0.08829013784113471,
+      "enthalpy_conservative_uncertainty_mev_per_atom": 5.2816610658046255,
+      "enthalpy_discard_spread_mev_per_atom": 1.5202756737977552,
+      "enthalpy_half_drift_mev_per_atom": 2.4015740074503356,
+      "enthalpy_statistical_uncertainty_mev_per_atom": 1.359811384556535,
+      "external_pressure_pv_difference_ev_per_atom": 0.0,
+      "half_drift_mev_per_atom": 2.4015740074503356,
+      "kinetic_difference_ev_per_atom": 0.0009130167623581376,
+      "liquid": {
+        "kinetic_mean_ev_per_atom": 0.13437700800692115,
+        "max_step": 15000,
+        "minimum_nearest_neighbor_angstrom": 2.134401101938943,
+        "natoms": 108,
+        "nearest_neighbor_angstrom": 2.348599792611678,
+        "phase": "liquid",
+        "phase_status": "liquid_verified",
+        "potential_block_standard_error_mev_per_atom": 0.9083953067059437,
+        "potential_first_half_ev_per_atom": -56.9374765809119,
+        "potential_mean_ev_per_atom": -56.936650184549336,
+        "potential_second_half_ev_per_atom": -56.93582378818674,
+        "pressure_kbar": {
+          "last": 2.5912376,
+          "max": 8.5351397,
+          "mean": -1.0785117883229334,
+          "min": -9.5288145,
+          "n": 1500,
+          "sd": 3.332638506176711
+        },
+        "production_samples": 1500,
+        "run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps6000_round3/liquid",
+        "runs": [
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T1050_steps3000/liquid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round1/liquid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round2/liquid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps6000_round3/liquid"
+        ],
+        "samples": 3000,
+        "segment_max_steps": [
+          3000,
+          3000,
+          3000,
+          6000
+        ],
+        "temperature_k": {
+          "last": 1165.8503,
+          "max": 1421.8096,
+          "mean": 1049.3014372,
+          "min": 821.88252,
+          "n": 1500,
+          "sd": 82.21816150581513
+        },
+        "total_block_standard_error_mev_per_atom": 1.1152948745150897,
+        "total_first_half_ev_per_atom": -56.803108865351405,
+        "total_mean_ev_per_atom": -56.80227315244855,
+        "total_second_half_ev_per_atom": -56.801437439545595
+      },
+      "liquid_minus_solid_temperature_mean_difference_k": 7.129416395238195,
+      "liquid_run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps6000_round3/liquid",
+      "liquid_runs": [
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T1050_steps3000/liquid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round1/liquid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round2/liquid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps6000_round3/liquid"
+      ],
+      "liquid_segment_steps": [
+        3000,
+        3000,
+        3000,
+        6000
+      ],
+      "liquid_steps": 15000,
+      "liquid_volume_per_atom_A3": 19.09530702583622,
+      "parent_confirmation": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round2",
+      "potential_difference_ev_per_atom": 0.08737709061050225,
+      "requested_liquid_steps": 15000,
+      "requested_solid_steps": 21000,
+      "segment_steps": [
+        3000,
+        3000,
+        3000,
+        6000
+      ],
+      "solid": {
+        "kinetic_mean_ev_per_atom": 0.133463991244563,
+        "max_step": 21000,
+        "minimum_nearest_neighbor_angstrom": 2.1770992664770143,
+        "natoms": 108,
+        "nearest_neighbor_angstrom": 2.390603860955993,
+        "phase": "solid",
+        "phase_status": "solid_verified",
+        "potential_block_standard_error_mev_per_atom": 0.43475348801184144,
+        "potential_first_half_ev_per_atom": -57.02366065932031,
+        "potential_mean_ev_per_atom": -57.02402727515984,
+        "potential_second_half_ev_per_atom": -57.02439389099917,
+        "pressure_kbar": {
+          "last": -3.5142306,
+          "max": 11.201897,
+          "mean": -1.3151166987020952,
+          "min": -10.774315,
+          "n": 2100,
+          "sd": 3.6758171052244895
+        },
+        "production_samples": 2100,
+        "run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_solid_steps6000_round4/solid",
+        "runs": [
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T1050_steps3000/solid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round1/solid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round2/solid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps6000_round3/solid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_solid_steps6000_round4/solid"
+        ],
+        "samples": 4200,
+        "segment_max_steps": [
+          3000,
+          3000,
+          3000,
+          6000,
+          6000
+        ],
+        "temperature_k": {
+          "last": 922.87952,
+          "max": 1334.4498,
+          "mean": 1042.1720208047618,
+          "min": 760.24899,
+          "n": 2100,
+          "sd": 81.3075572818248
+        },
+        "total_block_standard_error_mev_per_atom": 0.7779488058027538,
+        "total_first_half_ev_per_atom": -56.890198216188935,
+        "total_mean_ev_per_atom": -56.890563290289684,
+        "total_second_half_ev_per_atom": -56.890928364390575
+      },
+      "solid_run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_solid_steps6000_round4/solid",
+      "solid_runs": [
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T1050_steps3000/solid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round1/solid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps3000_round2/solid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_steps6000_round3/solid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_solid_steps6000_round4/solid"
+      ],
+      "solid_segment_steps": [
+        3000,
+        3000,
+        3000,
+        6000,
+        6000
+      ],
+      "solid_steps": 21000,
+      "solid_volume_per_atom_A3": 18.250457879770096,
+      "status": "verified",
+      "steps": 15000,
+      "target_pressure_kbar": 0.0,
+      "targeted_extension": {
+        "confirmation_manifest": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_solid_steps6000_round4/confirmation_manifest.json",
+        "confirmation_summary": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_solid_steps6000_round4/confirmation_summary.json",
+        "phase": "solid",
+        "root": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1050_solid_steps6000_round4",
+        "steps": 6000
+      },
+      "temperature_k": 1050.0
+    },
+    {
+      "block_standard_error_mev_per_atom": 1.2531928119606617,
+      "checks": {
+        "half_drift_within_tolerance": true,
+        "liquid_phase_verified": true,
+        "nearest_neighbors_gt_2_A": true,
+        "positive_fusion_enthalpy": true,
+        "pressure_means_within_tolerance": true,
+        "requested_steps_reached": true,
+        "solid_liquid_temperature_means_match": true,
+        "solid_phase_verified": true,
+        "temperature_means_within_tolerance": true
+      },
+      "delta_h_ev_per_atom": 0.08501815756268627,
+      "enthalpy_conservative_uncertainty_mev_per_atom": 4.11117913241053,
+      "enthalpy_discard_spread_mev_per_atom": 1.1368088927596887,
+      "enthalpy_half_drift_mev_per_atom": 1.7211774276901792,
+      "enthalpy_statistical_uncertainty_mev_per_atom": 1.2531928119606617,
+      "external_pressure_pv_difference_ev_per_atom": 0.0,
+      "half_drift_mev_per_atom": 1.7211774276901792,
+      "kinetic_difference_ev_per_atom": 0.000932000177720882,
+      "liquid": {
+        "kinetic_mean_ev_per_atom": 0.14087593075058247,
+        "max_step": 10700,
+        "minimum_nearest_neighbor_angstrom": 2.1365542551656365,
+        "natoms": 108,
+        "nearest_neighbor_angstrom": 2.3580371189926765,
+        "phase": "liquid",
+        "phase_status": "liquid_verified",
+        "potential_block_standard_error_mev_per_atom": 0.9010466164770512,
+        "potential_first_half_ev_per_atom": -56.92925962745976,
+        "potential_mean_ev_per_atom": -56.92937066997811,
+        "potential_second_half_ev_per_atom": -56.929481712496326,
+        "pressure_kbar": {
+          "last": 1.2799267,
+          "max": 10.74117,
+          "mean": 1.2551686341485981,
+          "min": -8.9054412,
+          "n": 1070,
+          "sd": 3.204788941109189
+        },
+        "production_samples": 1070,
+        "run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_liquid_steps3000_recovered_round2/liquid",
+        "runs": [
+          "/home/shenwei01/wt_melting_local_runs_20260724/T1100_resume_s1300_to_s3000/liquid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_steps6000_recovered_round1/liquid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_liquid_steps3000_recovered_round2/liquid"
+        ],
+        "samples": 2140,
+        "segment_max_steps": [
+          1700,
+          6000,
+          3000
+        ],
+        "temperature_k": {
+          "last": 1054.5106,
+          "max": 1395.9765,
+          "mean": 1100.0491742149534,
+          "min": 850.95609,
+          "n": 1070,
+          "sd": 87.62462607443221
+        },
+        "total_block_standard_error_mev_per_atom": 0.9931328363045538,
+        "total_first_half_ev_per_atom": -56.78780178706938,
+        "total_mean_ev_per_atom": -56.788494747296,
+        "total_second_half_ev_per_atom": -56.789187707522565
+      },
+      "liquid_minus_solid_temperature_mean_difference_k": 7.277654656511913,
+      "liquid_run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_liquid_steps3000_recovered_round2/liquid",
+      "liquid_runs": [
+        "/home/shenwei01/wt_melting_local_runs_20260724/T1100_resume_s1300_to_s3000/liquid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_steps6000_recovered_round1/liquid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_liquid_steps3000_recovered_round2/liquid"
+      ],
+      "liquid_segment_steps": [
+        1700,
+        6000,
+        3000
+      ],
+      "liquid_steps": 10700,
+      "liquid_volume_per_atom_A3": 19.106478865122234,
+      "parent_confirmation": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/T1100_recovered_parent1700",
+      "potential_difference_ev_per_atom": 0.08408612579472674,
+      "requested_liquid_steps": 10700,
+      "requested_solid_steps": 7700,
+      "segment_steps": [
+        1700,
+        6000
+      ],
+      "solid": {
+        "kinetic_mean_ev_per_atom": 0.13994393057286159,
+        "max_step": 7700,
+        "minimum_nearest_neighbor_angstrom": 2.148470535372447,
+        "natoms": 108,
+        "nearest_neighbor_angstrom": 2.3267842292896814,
+        "phase": "solid",
+        "phase_status": "solid_verified",
+        "potential_block_standard_error_mev_per_atom": 0.6562734442888505,
+        "potential_first_half_ev_per_atom": -57.013362452496224,
+        "potential_mean_ev_per_atom": -57.01345679577284,
+        "potential_second_half_ev_per_atom": -57.013551139049426,
+        "pressure_kbar": {
+          "last": -3.5499789,
+          "max": 9.0418371,
+          "mean": -1.8506848561331168,
+          "min": -10.732507,
+          "n": 770,
+          "sd": 3.4960609400983933
+        },
+        "production_samples": 770,
+        "run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_steps6000_recovered_round1/solid",
+        "runs": [
+          "/home/shenwei01/wt_melting_local_runs_20260724/T1100_resume_s1300_to_s3000/solid",
+          "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_steps6000_recovered_round1/solid"
+        ],
+        "samples": 1540,
+        "segment_max_steps": [
+          1700,
+          6000
+        ],
+        "temperature_k": {
+          "last": 1106.3652,
+          "max": 1341.8082,
+          "mean": 1092.7715195584415,
+          "min": 783.98609,
+          "n": 770,
+          "sd": 85.07774770720498
+        },
+        "total_block_standard_error_mev_per_atom": 0.7643162914680955,
+        "total_first_half_ev_per_atom": -56.873680533345954,
+        "total_mean_ev_per_atom": -56.873512904858686,
+        "total_second_half_ev_per_atom": -56.87334527637145
+      },
+      "solid_run": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_steps6000_recovered_round1/solid",
+      "solid_runs": [
+        "/home/shenwei01/wt_melting_local_runs_20260724/T1100_resume_s1300_to_s3000/solid",
+        "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_steps6000_recovered_round1/solid"
+      ],
+      "solid_segment_steps": [
+        1700,
+        6000
+      ],
+      "solid_steps": 7700,
+      "solid_volume_per_atom_A3": 18.368954645234545,
+      "status": "verified",
+      "steps": 7700,
+      "target_pressure_kbar": 0.0,
+      "targeted_extension": {
+        "confirmation_manifest": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_liquid_steps3000_recovered_round2/confirmation_manifest.json",
+        "confirmation_summary": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_liquid_steps3000_recovered_round2/confirmation_summary.json",
+        "phase": "liquid",
+        "root": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/enthalpy_production/critical_extensions/T1100_liquid_steps3000_recovered_round2",
+        "steps": 3000
+      },
+      "temperature_k": 1100.0
+    }
+  ],
+  "gibbs_profile": [
+    {
+      "delta_g_ev_per_atom": 0.009339119517569827,
+      "delta_g_over_t_ev_per_atom_k": 1.0376799463966475e-05,
+      "temperature_k": 900.0
+    },
+    {
+      "delta_g_ev_per_atom": 0.003112530462607439,
+      "delta_g_over_t_ev_per_atom_k": 3.1923389360076298e-06,
+      "temperature_k": 975.0
+    },
+    {
+      "delta_g_ev_per_atom": -0.0033302539807254466,
+      "delta_g_over_t_ev_per_atom_k": -3.1716704578337586e-06,
+      "temperature_k": 1050.0
+    },
+    {
+      "delta_g_ev_per_atom": -0.007616433438584227,
+      "delta_g_over_t_ev_per_atom_k": -6.924030398712934e-06,
+      "temperature_k": 1100.0
+    }
+  ],
+  "melting_temperature_k": 1011.5317440591753,
+  "method": "piecewise-linear DeltaH(T) with exact Gibbs-Helmholtz integration",
+  "provenance": {
+    "combination": "/home/shenwei01/WT_Al_melting_workspace_20260724/audit/reports_archive/scratch/xzh/OFDFT-Hessian/runs/al/free_energy_wt/melting_free_energy_T0900_pairv2_v2.json",
+    "enthalpy_convergence": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/discard_convergence_summary.json",
+    "enthalpy_series": "/home/shenwei01/WT_Al_melting_workspace_20260724/runs/step4_rebuild/gibbs_helmholtz_final_20260726_T1100/inputs/enthalpy_d50.json"
+  },
+  "schema": "wt-gibbs-helmholtz-melting-v2",
+  "statistical_interval": {
+    "half_width_k": 6.770655512809753,
+    "lower_k": 1004.9058110453188,
+    "scenarios": [
+      {
+        "delta_g_uncertainty_sign": -1.0,
+        "enthalpy_uncertainty_sign": -1.0,
+        "root_k": 1010.3003474883735
+      },
+      {
+        "delta_g_uncertainty_sign": -1.0,
+        "enthalpy_uncertainty_sign": 1.0,
+        "root_k": 1004.9058110453188
+      },
+      {
+        "delta_g_uncertainty_sign": 1.0,
+        "enthalpy_uncertainty_sign": -1.0,
+        "root_k": 1018.4471220709383
+      },
+      {
+        "delta_g_uncertainty_sign": 1.0,
+        "enthalpy_uncertainty_sign": 1.0,
+        "root_k": 1012.7262960188091
+      }
+    ],
+    "upper_k": 1018.4471220709383
+  },
+  "status": "verified",
+  "thermodynamic_convention": {
+    "delta_g": "G_liquid_minus_G_solid",
+    "delta_h": "H_liquid_minus_H_solid",
+    "energy_unit": "eV/atom",
+    "external_pressure": "0_kbar",
+    "gibbs_helmholtz_equation": "d(delta_g/T)/dT=-delta_h/T^2",
+    "residual_internal_pressure_role": "equilibration_gate_only",
+    "root_definition": "delta_g(T_m)=0",
+    "temperature_unit": "K"
+  },
+  "uncertainty_interpretation": {
+    "conservative_interval": "coherent conservative sensitivity envelope",
+    "probabilistic_confidence_interval": false,
+    "statistical_interval": "coherent statistical sensitivity envelope"
+  }
+}
