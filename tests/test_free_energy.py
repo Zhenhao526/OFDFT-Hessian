@@ -44,6 +44,15 @@ class FreeEnergyDatasetTests(unittest.TestCase):
             + md_observable(-1.9, -2.05, 0.15, 850.0),
             encoding="utf-8",
         )
+        (run / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "target_kedf": "lkt",
+                    "abacus": {"of_kinetic": "lkt"},
+                }
+            ),
+            encoding="utf-8",
+        )
         return run
 
     def test_load_and_select_aligned_frames(self):
@@ -67,6 +76,7 @@ class FreeEnergyDatasetTests(unittest.TestCase):
         self.assertEqual(record["volume_angstrom3"], 1000.0)
         self.assertEqual(len(disk_manifest["frames_sha256"]), 64)
         self.assertEqual(len(disk_manifest["sources"][0]["md_dump_sha256"]), 64)
+        self.assertEqual(disk_manifest["target_kedf"], "lkt")
 
     def test_exponential_free_energy_constant_and_stable_extremes(self):
         result = exponential_free_energy_difference([2.0, 2.0, 2.0], 900.0)

@@ -8,6 +8,7 @@ import json
 from argparse import Namespace
 from pathlib import Path
 
+from mpn_melting.abacus_input import load_json
 from scripts.prepare_al108_ti_windows import prepare
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,13 @@ def main() -> None:
     if args.out.exists():
         raise FileExistsError(f"refusing to overwrite {args.out}")
     endpoint_manifest = json.loads((args.endpoint_root / "endpoint_manifest.json").read_text())
+    target_kedf = str(endpoint_manifest.get("target_kedf", "")).lower()
+    config_kedf = str(load_json(args.config).get("of_kinetic", "")).lower()
+    if config_kedf != target_kedf:
+        raise RuntimeError(
+            f"endpoint target {target_kedf!r} does not match config "
+            f"target {config_kedf!r}"
+        )
     phase_inputs = {item["phase"]: item for item in endpoint_manifest["phases"]}
     prepared = []
     for phase_index, phase in enumerate(("solid", "liquid")):
@@ -53,19 +61,20 @@ def main() -> None:
                 seed=51000 + 1000 * phase_index,
                 pair_model=args.pair_model,
                 config=args.config,
+                ranks=None,
             )
         )
         prepared.append(
             {
                 "phase": phase,
-                "target_kedf": "wt",
+                "target_kedf": target_kedf,
                 "source": item["source"],
                 "zero_pressure_volume_per_atom_A3": item["zero_pressure_volume_per_atom_A3"],
             }
         )
     manifest = {
-        "schema": "wt-pair-ti-pilot-v2",
-        "target_kedf": "wt",
+        "schema": "kedf-pair-ti-pilot-v1",
+        "target_kedf": target_kedf,
         "temperature_K": endpoint_manifest["temperature_K"],
         "steps": args.steps,
         "lambdas": LAMBDAS,

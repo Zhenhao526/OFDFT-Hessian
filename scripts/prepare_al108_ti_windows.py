@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and analyze WT-KEDF-to-pair thermodynamic-integration windows."""
+"""Prepare and analyze OFDFT-KEDF-to-pair thermodynamic-integration windows."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from scripts.analyze_two_phase_run import parse_md_log, series_stats
 from scripts.prepare_al108_volume_scan import scaled_to_volume
 
 ROOT = Path(__file__).resolve().parents[1]
+SUPPORTED_KEDFS = {"wt", "xwm", "lkt", "ext-wt"}
 COMPONENT_RE = re.compile(
     r"MPN_TI_COMPONENTS step=(\d+) lambda=([-+0-9.eE]+) "
     r"U_MPN_eV=([-+0-9.eE]+) U_REF_eV=([-+0-9.eE]+) "
@@ -33,12 +34,17 @@ def prepare(args: argparse.Namespace) -> None:
     out = args.out.resolve()
     if out.exists():
         raise FileExistsError(f"refusing to overwrite {out}")
+    out.mkdir(parents=True)
     source = load_atom_source(args.source, args.source_frame, "Al", include_velocities=False)
     atoms = source["atoms"]
     atoms = scaled_to_volume(atoms, args.volume_per_atom * atoms.natoms)
     config = load_json(args.config)
-    if str(config.get("of_kinetic", "")).lower() != "wt":
-        raise ValueError("WT free-energy windows require a config with of_kinetic=wt")
+    target_kedf = str(config.get("of_kinetic", "")).lower()
+    if target_kedf not in SUPPORTED_KEDFS:
+        raise ValueError(
+            f"free-energy windows require one of {sorted(SUPPORTED_KEDFS)}, "
+            f"got {target_kedf!r}"
+        )
     config.update(
         {
             "calculation": "md",
@@ -53,9 +59,12 @@ def prepare(args: argparse.Namespace) -> None:
             "md_csvr_tau": args.csvr_tau,
             "md_dumpfreq": args.dumpfreq,
             "md_restartfreq": args.restartfreq,
-            "mpirun_np": 12,
+            "init_vel": 0,
         }
     )
+    ranks = getattr(args, "ranks", None)
+    if ranks is not None:
+        config["mpirun_np"] = ranks
     element = load_json(ROOT / "config" / "al.json")
     windows = []
     for index, lambda_value in enumerate(sorted(set(args.lambdas))):
@@ -69,12 +78,15 @@ def prepare(args: argparse.Namespace) -> None:
             atoms,
             element,
             point_config,
-            job_type="wt_pair_thermodynamic_integration",
-            suffix=f"al108_{args.phase}_T{int(args.temperature):04d}_{label}",
+            job_type=f"{target_kedf}_pair_thermodynamic_integration",
+            suffix=(
+                f"al108_{target_kedf}_{args.phase}_"
+                f"T{int(args.temperature):04d}_{label}"
+            ),
             calculation="md",
             extra_metadata={
                 "phase": args.phase,
-                "target_kedf": "wt",
+                "target_kedf": target_kedf,
                 "lambda": lambda_value,
                 "target_temperature_K": args.temperature,
                 "volume_per_atom_A3": args.volume_per_atom,
@@ -89,9 +101,13 @@ def prepare(args: argparse.Namespace) -> None:
         )
         windows.append({"label": label, "lambda": lambda_value, "seed": args.seed + index})
     manifest = {
-        "schema": "wt-pair-ti-windows-v2",
+        "schema": (
+            "wt-pair-ti-windows-v2"
+            if target_kedf == "wt"
+            else "kedf-pair-ti-windows-v1"
+        ),
         "phase": args.phase,
-        "target_kedf": "wt",
+        "target_kedf": target_kedf,
         "target_temperature_K": args.temperature,
         "volume_per_atom_A3": args.volume_per_atom,
         "volume_A3": args.volume_per_atom * atoms.natoms,
@@ -207,12 +223,25 @@ def analyze(args: argparse.Namespace) -> None:
         **manifest,
         "window_results": rows,
         "complete_phase_valid_windows": len(complete),
-        "delta_F_MPN_minus_reference_eV": delta_f,
-        "delta_F_MPN_minus_reference_meV_per_atom": delta_f * 1000.0 / manifest["natoms"]
+        "delta_F_target_minus_reference_eV": delta_f,
+        "delta_F_target_minus_reference_meV_per_atom": delta_f
+        * 1000.0
+        / manifest["natoms"]
         if delta_f is not None
         else None,
         "adjacent_overlap": overlaps,
     }
+    if str(manifest.get("target_kedf", "")).lower() == "wt":
+        result.update(
+            {
+                "delta_F_MPN_minus_reference_eV": delta_f,
+                "delta_F_MPN_minus_reference_meV_per_atom": delta_f
+                * 1000.0
+                / manifest["natoms"]
+                if delta_f is not None
+                else None,
+            }
+        )
     (root / "ti_analysis.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
 
@@ -235,6 +264,7 @@ def main() -> None:
     prep.add_argument("--restartfreq", type=int, default=100)
     prep.add_argument("--seed", type=int, default=20260720)
     prep.add_argument("--pair-model", type=Path, required=True)
+    prep.add_argument("--ranks", type=int)
     prep.add_argument(
         "--config",
         type=Path,

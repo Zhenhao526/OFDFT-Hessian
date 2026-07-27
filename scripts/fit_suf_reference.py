@@ -114,6 +114,7 @@ def main() -> None:
     sigma = best["sigma_angstrom"]
     result = {
         "schema": "mpn-suf-reference-fit-v1",
+        "target_kedf": model_document.get("target_kedf"),
         "dataset": str(args.dataset.resolve()),
         "pair_model": str(args.model.resolve()),
         "frames": len(prepared),

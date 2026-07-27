@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-check the WT-to-pair ABACUS TI force mixer at both endpoints."""
+"""Cross-check the KEDF-to-pair ABACUS TI force mixer at both endpoints."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 
 from mpn_melting.trajectory import parse_md_dump
-from scripts.prepare_al108_ti_windows import parse_components
+from scripts.prepare_al108_ti_windows import SUPPORTED_KEDFS, parse_components
 from scripts.run_pair_reference_md import evaluate_model
 from scripts.analyze_two_phase_run import parse_md_log
 
@@ -74,8 +74,17 @@ def validate(args: argparse.Namespace) -> dict:
         for actual, expected in zip(frame.forces, forces.tolist()):
             reference_force_errors.extend(abs(a - b) for a, b in zip(actual, expected))
 
+    baseline_metadata = json.loads((baseline / "metadata.json").read_text())
+    one_metadata = json.loads((ti_one / "metadata.json").read_text())
+    zero_metadata = json.loads((ti_zero / "metadata.json").read_text())
     checks = {
-        "target_kedf_is_wt": target_kedf == "wt",
+        "target_kedf_supported": target_kedf in SUPPORTED_KEDFS,
+        "target_kedf_matches_all_runs": all(
+            metadata.get("target_kedf") == target_kedf
+            and str(metadata.get("abacus", {}).get("of_kinetic", "")).lower()
+            == target_kedf
+            for metadata in (baseline_metadata, one_metadata, zero_metadata)
+        ),
         "all_runs_reached_requested_step": min(
             baseline_max_step,
             one_components[-1]["step"] if one_components else -1,

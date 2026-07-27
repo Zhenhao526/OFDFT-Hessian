@@ -60,7 +60,15 @@ def prepare(args: argparse.Namespace) -> None:
     source = load_atom_source(args.source, args.source_frame, "Al", include_velocities=False)
     atoms = source["atoms"]
     config = load_json(args.config)
-    config.update({"calculation": "scf", "cal_force": 0, "cal_stress": 1, "mpirun_np": 12})
+    target_kedf = str(config.get("of_kinetic", "unknown")).lower()
+    config.update(
+        {
+            "calculation": "scf",
+            "cal_force": 0,
+            "cal_stress": 1,
+            "mpirun_np": args.ranks,
+        }
+    )
     element = load_json(ROOT / "config" / "al.json")
     points = []
     for volume_per_atom in args.volumes_per_atom:
@@ -72,11 +80,12 @@ def prepare(args: argparse.Namespace) -> None:
             point_atoms,
             element,
             config,
-            job_type="mpn_static_pressure_prescan",
-            suffix=f"al108_{args.phase}_pressure_{label}",
+            job_type=f"{target_kedf}_static_pressure_prescan",
+            suffix=f"al108_{target_kedf}_{args.phase}_pressure_{label}",
             calculation="scf",
             extra_metadata={
                 "phase": args.phase,
+                "target_kedf": target_kedf,
                 "target_temperature_K": args.temperature,
                 "volume_A3": volume,
                 "volume_per_atom_A3": volume_per_atom,
@@ -87,7 +96,9 @@ def prepare(args: argparse.Namespace) -> None:
         points.append({"label": label, "volume_A3": volume, "volume_per_atom_A3": volume_per_atom})
     manifest = {
         "phase": args.phase,
+        "target_kedf": target_kedf,
         "target_temperature_K": args.temperature,
+        "mpi_ranks": args.ranks,
         "natoms": atoms.natoms,
         "source": source["source"],
         "source_step": source["step"],
@@ -406,6 +417,7 @@ def main() -> None:
     prep.add_argument("--temperature", type=float, required=True)
     prep.add_argument("--volumes-per-atom", type=float, nargs="+", required=True)
     prep.add_argument("--config", type=Path, default=ROOT / "config" / "abacus_mpn_node04_cpu12_stress.json")
+    prep.add_argument("--ranks", type=int, default=12)
     prep.set_defaults(func=prepare)
     analysis = sub.add_parser("analyze")
     analysis.add_argument("run_root", type=Path)

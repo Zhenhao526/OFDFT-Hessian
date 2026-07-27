@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare WT-to-pair endpoint checks from gated zero-pressure confirmations."""
+"""Prepare KEDF-to-pair endpoint checks from gated zero-pressure confirmations."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ import json
 from argparse import Namespace
 from pathlib import Path
 
-from scripts.prepare_al108_ti_windows import prepare
+from mpn_melting.abacus_input import load_json
+from scripts.prepare_al108_ti_windows import SUPPORTED_KEDFS, prepare
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,11 +28,27 @@ def main() -> None:
     args = parser.parse_args()
     if args.out.exists():
         raise FileExistsError(f"refusing to overwrite {args.out}")
-    summary = json.loads((args.confirmation_root / "confirmation_summary.json").read_text())
+    final_summary = (
+        args.confirmation_root
+        / "zero_pressure_confirmation_summary.json"
+    )
+    summary_path = (
+        final_summary
+        if final_summary.exists()
+        else args.confirmation_root / "confirmation_summary.json"
+    )
+    summary = json.loads(summary_path.read_text())
     if summary.get("status") != "all_confirmations_passed":
         raise RuntimeError("zero-pressure confirmations did not pass")
-    if summary.get("target_kedf") != "wt":
-        raise RuntimeError("confirmation target is not WT")
+    target_kedf = str(summary.get("target_kedf", "")).lower()
+    if target_kedf not in SUPPORTED_KEDFS:
+        raise RuntimeError(f"unsupported confirmation target {target_kedf!r}")
+    config_kedf = str(load_json(args.config).get("of_kinetic", "")).lower()
+    if config_kedf != target_kedf:
+        raise RuntimeError(
+            f"confirmation target {target_kedf!r} does not match config "
+            f"target {config_kedf!r}"
+        )
 
     phases = []
     for phase_index, item in enumerate(summary["phase_results"]):
@@ -51,6 +68,7 @@ def main() -> None:
             "restartfreq": args.steps,
             "pair_model": args.pair_model,
             "config": args.config,
+            "ranks": None,
         }
         seed = 81000 + 1000 * phase_index
         prepare(Namespace(out=args.out / phase / "baseline", lambdas=[1.0], seed=seed + 1, **common))
@@ -58,14 +76,14 @@ def main() -> None:
         phases.append(
             {
                 "phase": phase,
-                "target_kedf": "wt",
+                "target_kedf": target_kedf,
                 "source": item["run"],
                 "zero_pressure_volume_per_atom_A3": item["volume_per_atom_A3"],
             }
         )
     manifest = {
-        "schema": "wt-pair-ti-endpoints-from-confirmations-v1",
-        "target_kedf": "wt",
+        "schema": "kedf-pair-ti-endpoints-from-confirmations-v1",
+        "target_kedf": target_kedf,
         "temperature_K": summary["temperature_K"],
         "steps": args.steps,
         "phases": phases,

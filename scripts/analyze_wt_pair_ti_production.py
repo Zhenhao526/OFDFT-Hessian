@@ -66,7 +66,7 @@ def parse_window_overrides(values: List[str]) -> Dict[str, Path]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Production analysis of WT-to-pair TI windows")
+    parser = argparse.ArgumentParser(description="Production analysis of KEDF-to-pair TI windows")
     parser.add_argument("run_root", type=Path)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--discard-fraction", type=float, default=0.25)
@@ -90,6 +90,11 @@ def main() -> None:
     root = args.run_root.resolve()
     output_path = args.out.resolve() if args.out else root / "ti_production_analysis.json"
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    result_schema = (
+        "wt-pair-ti-production-analysis-v1"
+        if str(manifest.get("target_kedf", "")).lower() == "wt"
+        else "kedf-pair-ti-production-analysis-v1"
+    )
     overrides = parse_window_overrides(args.window_override)
     labels = {str(item["label"]) for item in manifest["windows"]}
     unknown = sorted(set(overrides) - labels)
@@ -208,7 +213,7 @@ def main() -> None:
     if len(complete) != len(manifest["windows"]):
         result = {
             **manifest,
-            "schema": "wt-pair-ti-production-analysis-v1",
+            "schema": result_schema,
             "status": "incomplete",
             "windows": windows,
         }
@@ -302,7 +307,7 @@ def main() -> None:
     lambda_one = next(window for window in complete if math.isclose(window["lambda"], 1.0))
     result = {
         **manifest,
-        "schema": "wt-pair-ti-production-analysis-v1",
+        "schema": result_schema,
         "status": "verified" if all(convergence_checks.values()) else "production_gate_failed",
         "discard_fraction": args.discard_fraction,
         "blocks": args.blocks,
@@ -316,9 +321,11 @@ def main() -> None:
         "window_overrides": {label: str(path) for label, path in sorted(overrides.items())},
         "checks": convergence_checks,
         "windows": complete,
-        "delta_f_wt_minus_pair_simpson_ev_system": integral,
-        "delta_f_wt_minus_pair_simpson_mev_per_atom": 1000.0 * integral / natoms,
-        "delta_f_wt_minus_pair_trapezoid_ev_system": trap,
+        "delta_f_target_minus_pair_simpson_ev_system": integral,
+        "delta_f_target_minus_pair_simpson_mev_per_atom": 1000.0
+        * integral
+        / natoms,
+        "delta_f_target_minus_pair_trapezoid_ev_system": trap,
         "quadrature_difference_mev_per_atom": quadrature_difference,
         "block_standard_error_mev_per_atom": block_standard_error,
         "first_half_integral_ev_system": first_integral,
@@ -346,6 +353,16 @@ def main() -> None:
         * lambda_one["target_total_energy_block_standard_error_ev_system"]
         / natoms,
     }
+    if str(manifest.get("target_kedf", "")).lower() == "wt":
+        result.update(
+            {
+                "delta_f_wt_minus_pair_simpson_ev_system": integral,
+                "delta_f_wt_minus_pair_simpson_mev_per_atom": 1000.0
+                * integral
+                / natoms,
+                "delta_f_wt_minus_pair_trapezoid_ev_system": trap,
+            }
+        )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"

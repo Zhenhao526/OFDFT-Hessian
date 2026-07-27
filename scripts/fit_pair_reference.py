@@ -210,6 +210,13 @@ def main() -> None:
 
     torch.set_num_threads(args.threads)
     records = load_records(args.dataset, args.max_per_phase)
+    dataset_manifest_path = args.dataset.parent / "manifest.json"
+    dataset_manifest = (
+        json.loads(dataset_manifest_path.read_text(encoding="utf-8"))
+        if dataset_manifest_path.exists()
+        else {}
+    )
+    target_kedf = str(dataset_manifest.get("target_kedf", "")).lower() or None
     train, validation = split_records(records)
     centers_list = evenly_spaced_centers(args.basis_min, args.basis_max, args.basis_count)
     centers = torch.tensor(centers_list, dtype=torch.float64)
@@ -285,8 +292,14 @@ def main() -> None:
     short_range_guard = short_value > sampled_value + 1.0 and short_derivative < 0.0
     result = {
         "schema": "mpn-radial-pair-reference-v1",
+        "target_kedf": target_kedf,
         "purpose": "overlap diagnostic only; not approved for TI unless the validation gate passes",
         "dataset": str(args.dataset.resolve()),
+        "dataset_manifest": (
+            str(dataset_manifest_path.resolve())
+            if dataset_manifest_path.exists()
+            else None
+        ),
         "selected_frames": len(records),
         "train_frames": len(train),
         "validation_frames": len(validation),

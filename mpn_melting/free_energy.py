@@ -137,6 +137,18 @@ def load_run_frames(run_dir: Path, phase: str) -> Tuple[List[FreeEnergyFrame], D
         "running_md_log": str(log_path.resolve()),
         "running_md_log_sha256": sha256_file(log_path),
     }
+    metadata_path = run_dir / "metadata.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        target_kedf = str(
+            metadata.get("target_kedf")
+            or metadata.get("abacus", {}).get("of_kinetic")
+            or ""
+        ).lower()
+        if target_kedf:
+            source["target_kedf"] = target_kedf
+            source["metadata"] = str(metadata_path.resolve())
+            source["metadata_sha256"] = sha256_file(metadata_path)
     return frames, source
 
 
@@ -166,6 +178,7 @@ def write_dataset(
     phase_counts: Dict[str, int] = {}
     total_frames = 0
     natoms_values = set()
+    target_kedfs = set()
 
     with frames_path.open("w", encoding="utf-8") as handle:
         for phase, run_dir in runs:
@@ -176,10 +189,17 @@ def write_dataset(
             sources.append(source)
             phase_counts[phase] = phase_counts.get(phase, 0) + len(selected)
             natoms_values.add(source["natoms"])
+            if source.get("target_kedf"):
+                target_kedfs.add(str(source["target_kedf"]))
             for frame in selected:
                 handle.write(json.dumps(frame.to_json_dict(), separators=(",", ":")) + "\n")
             total_frames += len(selected)
 
+    if len(target_kedfs) > 1:
+        raise ValueError(
+            "dataset sources use different KEDFs: "
+            + ", ".join(sorted(target_kedfs))
+        )
     manifest: Dict[str, object] = {
         "schema": "mpn-free-energy-dataset-v1",
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -197,6 +217,8 @@ def write_dataset(
         "frames_file": frames_path.name,
         "frames_sha256": sha256_file(frames_path),
     }
+    if target_kedfs:
+        manifest["target_kedf"] = target_kedfs.pop()
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

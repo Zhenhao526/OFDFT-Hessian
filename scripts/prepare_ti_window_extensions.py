@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Continue selected WT-reference TI windows from their own final frames."""
+"""Continue selected KEDF-reference TI windows from their own final frames."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 
 from mpn_melting.abacus_input import load_json, write_job
 from mpn_melting.cli import load_atom_source
+from scripts.prepare_al108_ti_windows import SUPPORTED_KEDFS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,8 +75,9 @@ def main() -> None:
     phase_roots = resolve_phase_roots(args.parent, list(args.phases), args.phase_roots)
 
     config = load_json(args.config)
-    if str(config.get("of_kinetic", "")).lower() != "wt":
-        raise ValueError("WT TI continuations require of_kinetic=wt")
+    target_kedf = str(config.get("of_kinetic", "")).lower()
+    if target_kedf not in SUPPORTED_KEDFS:
+        raise ValueError(f"unsupported KEDF {target_kedf!r}")
     config.update(
         {
             "calculation": "md",
@@ -97,6 +99,12 @@ def main() -> None:
     prepared = {}
     for phase_index, (phase, parent_phase) in enumerate(phase_roots.items()):
         parent_manifest = json.loads((parent_phase / "manifest.json").read_text())
+        parent_kedf = str(parent_manifest.get("target_kedf", "")).lower()
+        if parent_kedf != target_kedf:
+            raise ValueError(
+                f"{phase} parent target {parent_kedf!r} does not match "
+                f"config target {target_kedf!r}"
+            )
         temperature = float(parent_manifest["target_temperature_K"])
         pair_model = Path(parent_manifest["pair_model"]).resolve()
         windows = []
@@ -135,7 +143,9 @@ def main() -> None:
                 atoms,
                 element,
                 point_config,
-                job_type="wt_pair_thermodynamic_integration_continuation",
+                job_type=(
+                    f"{target_kedf}_pair_thermodynamic_integration_continuation"
+                ),
                 suffix=(
                     f"al{atoms.natoms}_{phase}_T{int(temperature):04d}_"
                     f"{window['label']}_continuation"
@@ -143,7 +153,7 @@ def main() -> None:
                 calculation="md",
                 extra_metadata={
                     "phase": phase,
-                    "target_kedf": "wt",
+                    "target_kedf": target_kedf,
                     "lambda": window["lambda"],
                     "target_temperature_K": temperature,
                     "volume_per_atom_A3": parent_manifest["volume_per_atom_A3"],
@@ -166,9 +176,13 @@ def main() -> None:
 
         phase_out = out / phase
         manifest = {
-            "schema": "wt-pair-ti-window-continuations-v1",
+            "schema": (
+                "wt-pair-ti-window-continuations-v1"
+                if target_kedf == "wt"
+                else "kedf-pair-ti-window-continuations-v1"
+            ),
             "phase": phase,
-            "target_kedf": "wt",
+            "target_kedf": target_kedf,
             "target_temperature_K": temperature,
             "volume_per_atom_A3": parent_manifest["volume_per_atom_A3"],
             "volume_A3": parent_manifest["volume_A3"],

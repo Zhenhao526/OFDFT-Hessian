@@ -54,7 +54,14 @@ def input_text(params: Dict[str, object], suffix: str, calculation: str | None =
     for key in order:
         if key in merged:
             lines.append(f"{key} {format_value(merged[key])}")
-    local_only = {"abacus_executable", "kmesh", "mpirun_executable", "mpirun_np", "mpn_model"}
+    local_only = {
+        "abacus_executable",
+        "kmesh",
+        "mpirun_executable",
+        "mpirun_extra_args",
+        "mpirun_np",
+        "mpn_model",
+    }
     for key in sorted(set(merged) - set(order) - local_only):
         lines.append(f"{key} {format_value(merged[key])}")
     return "\n".join(lines) + "\n"
@@ -121,12 +128,15 @@ def run_script_text(
     abacus_executable: str = "abacus",
     mpirun_executable: str = "mpirun",
     mpirun_np: int = 1,
+    mpirun_extra_args: Iterable[str] = (),
 ) -> str:
     if mpirun_np and int(mpirun_np) > 1:
+        extra = "".join(f' "{argument}"' for argument in mpirun_extra_args)
         return (
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
-            f'"{mpirun_executable}" -np {int(mpirun_np)} "{abacus_executable}"\n'
+            f'"{mpirun_executable}"{extra} -np {int(mpirun_np)} '
+            f'"{abacus_executable}"\n'
         )
     return "#!/usr/bin/env bash\nset -euo pipefail\n" f'"{abacus_executable}"\n'
 
@@ -155,6 +165,7 @@ def write_job(
             str(abacus_config.get("abacus_executable", "abacus")),
             str(abacus_config.get("mpirun_executable", "mpirun")),
             int(abacus_config.get("mpirun_np", 1)),
+            tuple(abacus_config.get("mpirun_extra_args", ())),
         ),
         encoding="utf-8",
     )
