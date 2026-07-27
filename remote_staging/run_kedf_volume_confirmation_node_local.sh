@@ -8,7 +8,12 @@ fi
 
 run_root=$1
 repository=$2
-for phase in solid liquid; do
+mapfile -t phases < <(
+  python3 -c \
+    'import json,sys; print("\n".join(x["phase"] for x in json.load(open(sys.argv[1]))["phases"]))' \
+    "$run_root/confirmation_manifest.json"
+)
+for phase in "${phases[@]}"; do
   [[ -x "$run_root/$phase/run_local.sh" ]]
 done
 
@@ -24,11 +29,6 @@ run_phase() {
 solid_cpus=${SOLID_CPUS:-0-35}
 liquid_cpus=${LIQUID_CPUS:-38-73}
 single_cpus=${SINGLE_CPUS:-0-73}
-mapfile -t phases < <(
-  python3 -c \
-    'import json,sys; print("\n".join(x["phase"] for x in json.load(open(sys.argv[1]))["phases"]))' \
-    "$run_root/confirmation_manifest.json"
-)
 if [[ ${#phases[@]} -eq 2 ]]; then
   run_phase "$solid_cpus" "${phases[0]}" &
   first_pid=$!

@@ -12,6 +12,7 @@ repository=$3
 config=$4
 temperature_K=${TEMPERATURE_K:-975}
 pressure_cpu_start=${PRESSURE_CPU_START:-0}
+phases=${PHASES:-"solid liquid"}
 
 if [[ -e "$pressure_root" ]]; then
   echo "refusing to overwrite $pressure_root" >&2
@@ -42,7 +43,7 @@ if [[ "$status" != "volume_confirmation_verified" ]]; then
 fi
 
 cd "$repository"
-for phase in solid liquid; do
+for phase in $phases; do
   mapfile -t dumps < <(
     find "$confirmation_root/$phase" -type f -name MD_dump | sort
   )

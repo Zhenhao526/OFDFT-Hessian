@@ -12,12 +12,12 @@ cpu_start=${PRESSURE_CPU_START:-0}
 mapfile -t jobs < <(
   find "$run_root" -mindepth 4 -maxdepth 4 -type f -name run_local.sh | sort
 )
-if [[ ${#jobs[@]} -ne 30 ]]; then
-  echo "expected 30 snapshot-pressure SCF jobs, found ${#jobs[@]}" >&2
+if [[ ${#jobs[@]} -ne 15 && ${#jobs[@]} -ne 30 ]]; then
+  echo "expected 15 or 30 snapshot-pressure SCF jobs, found ${#jobs[@]}" >&2
   exit 2
 fi
 
-for batch_start in 0 18; do
+for ((batch_start = 0; batch_start < ${#jobs[@]}; batch_start += 18)); do
   pids=()
   batch_end=$((batch_start + 18))
   if ((batch_end > ${#jobs[@]})); then
@@ -40,7 +40,10 @@ for batch_start in 0 18; do
 done
 
 cd "$repository"
-for phase in solid liquid; do
+mapfile -t phases < <(
+  find "$run_root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
+)
+for phase in "${phases[@]}"; do
   env PYTHONPATH=. python3 scripts/prepare_kedf_pressure_samples.py \
     analyze "$run_root/$phase" | tee "$run_root/$phase/analysis.stdout"
 done
