@@ -19,7 +19,8 @@ class ParsedSeries:
 NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 RY_TO_EV = 13.605693122994
 MD_OBSERVABLE_ROW = re.compile(
-    rf"^\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})\s*$"
+    rf"^\s*({NUMBER})\s+({NUMBER})\s+({NUMBER})\s+({NUMBER})"
+    rf"(?:\s+({NUMBER}))?\s*$"
 )
 
 ENERGY_PATTERNS = [
@@ -56,6 +57,8 @@ def parse_text(text: str) -> ParsedSeries:
                 md_potential_energies.append(md_potential)
                 md_kinetic_energies.append(md_kinetic)
                 temperatures.append(float(md_match.group(4)))
+                if md_match.group(5) is not None:
+                    pressures.append(float(md_match.group(5)))
                 expect_md_observable_row = False
                 continue
             if line.strip() and not set(line.strip()) <= {"-"}:

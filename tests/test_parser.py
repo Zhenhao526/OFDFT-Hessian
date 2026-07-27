@@ -37,6 +37,18 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(parsed.md_kinetic_energies, [0.01131582 * RY_TO_EV])
         self.assertAlmostEqual(parsed.energies[-1], -3.61112431 * RY_TO_EV, places=9)
 
+    def test_parse_md_observable_row_with_pressure(self):
+        parsed = parse_text(
+            " Energy (Ry) Potential (Ry) Kinetic (Ry) Temperature (K) Pressure (kbar)\n"
+            " -----------------------------------------------------------------------\n"
+            " -3.61112431 -3.62244013 0.01131582 1191.08262643 -1.2345\n"
+        )
+        self.assertEqual(parsed.temperatures, [1191.08262643])
+        self.assertEqual(parsed.pressures, [-1.2345])
+        self.assertEqual(parsed.md_energies, [-3.61112431 * RY_TO_EV])
+        self.assertEqual(parsed.md_potential_energies, [-3.62244013 * RY_TO_EV])
+        self.assertEqual(parsed.md_kinetic_energies, [0.01131582 * RY_TO_EV])
+
     def test_ignore_timing_temp_label(self):
         parsed = parse_text(
             "                 DiagSub::temp          4.822\n"
