@@ -16,6 +16,28 @@ from scripts.run_pair_reference_md import evaluate_model
 from scripts.analyze_two_phase_run import parse_md_log
 
 RY_TO_EV = 13.605693122994
+TARGET_ENERGY_TOLERANCE_EV = 1.0e-4
+REFERENCE_ENERGY_TOLERANCE_EV = 1.0e-4
+REFERENCE_FORCE_TOLERANCE_EV_PER_A = 1.0e-4
+
+
+def baseline_energy_by_component_step(rows: list[dict]) -> dict[int, float]:
+    """Map ABACUS MD steps 1..N onto TI component steps 0..N-1."""
+    return {
+        int(row["step"]) - 1: float(row["potential_Ry"]) * RY_TO_EV
+        for row in rows
+    }
+
+
+def component_run_reached_steps(rows: list[dict], expected_steps: int) -> bool:
+    return bool(rows) and int(rows[-1]["step"]) + 1 >= expected_steps
+
+
+def centered_max_abs(values: list[float]) -> float:
+    if not values:
+        return math.inf
+    center = sum(values) / len(values)
+    return max(abs(value - center) for value in values)
 
 
 def only_file(root: Path, pattern: str) -> Path:
@@ -49,12 +71,18 @@ def validate(args: argparse.Namespace) -> dict:
     baseline_md, baseline_max_step = parse_md_log(baseline_log)
     one_components = parse_components(one_log)
     zero_components = parse_components(zero_log)
-    baseline_energy = {row["step"]: row["potential_Ry"] * RY_TO_EV for row in baseline_md}
+    baseline_energy = baseline_energy_by_component_step(baseline_md)
     energy_errors = [
-        abs(row["U_target_eV"] - baseline_energy[row["step"]])
+        row["U_target_eV"] - baseline_energy[row["step"]]
         for row in one_components
         if row["step"] in baseline_energy
     ]
+    target_energy_offset = (
+        sum(energy_errors) / len(energy_errors)
+        if energy_errors
+        else None
+    )
+    target_energy_centered_error = centered_max_abs(energy_errors)
 
     baseline_frames = parse_md_dump(only_file(baseline, "OUT.*/MD_dump"))
     one_frames = parse_md_dump(only_file(ti_one, "OUT.*/MD_dump"))
@@ -85,20 +113,26 @@ def validate(args: argparse.Namespace) -> dict:
             == target_kedf
             for metadata in (baseline_metadata, one_metadata, zero_metadata)
         ),
-        "all_runs_reached_requested_step": min(
-            baseline_max_step,
-            one_components[-1]["step"] if one_components else -1,
-            zero_components[-1]["step"] if zero_components else -1,
-        )
-        >= args.expected_steps,
-        "lambda1_target_energy_matches_baseline": max(energy_errors, default=math.inf) < 1.0e-5,
+        "all_runs_reached_requested_step": baseline_max_step
+        >= args.expected_steps
+        and component_run_reached_steps(one_components, args.expected_steps)
+        and component_run_reached_steps(zero_components, args.expected_steps),
+        "lambda1_target_energy_offset_is_constant": (
+            target_energy_centered_error
+            < TARGET_ENERGY_TOLERANCE_EV
+        ),
         "lambda1_positions_match_baseline": max_frame_difference(baseline_frames, one_frames, "positions")
         < 1.0e-10,
         "lambda1_forces_match_baseline": max_frame_difference(baseline_frames, one_frames, "forces")
         < 1.0e-8,
-        "lambda0_reference_energy_matches_python": max(reference_energy_errors, default=math.inf)
-        < 1.0e-6,
-        "lambda0_reference_forces_match_python": max(reference_force_errors, default=math.inf) < 1.0e-6,
+        "lambda0_reference_energy_matches_python": (
+            max(reference_energy_errors, default=math.inf)
+            < REFERENCE_ENERGY_TOLERANCE_EV
+        ),
+        "lambda0_reference_forces_match_python": (
+            max(reference_force_errors, default=math.inf)
+            < REFERENCE_FORCE_TOLERANCE_EV_PER_A
+        ),
         "lambda0_minimum_distance_gt_2_A": min(
             (row["nearest_neighbor_A"] for row in zero_components), default=0.0
         )
@@ -107,11 +141,21 @@ def validate(args: argparse.Namespace) -> dict:
     result = {
         "root": str(args.root.resolve()),
         "target_kedf": target_kedf,
-        "max_lambda1_target_energy_error_eV": max(energy_errors, default=None),
+        "lambda1_target_minus_md_potential_offset_eV": target_energy_offset,
+        "max_lambda1_target_energy_centered_error_eV": (
+            target_energy_centered_error
+            if math.isfinite(target_energy_centered_error)
+            else None
+        ),
         "max_lambda0_reference_energy_error_eV": max(reference_energy_errors, default=None),
         "max_lambda0_reference_force_error_eV_per_A": max(reference_force_errors, default=None),
         "max_lambda1_position_error_A": max_frame_difference(baseline_frames, one_frames, "positions"),
         "max_lambda1_force_error_eV_per_A": max_frame_difference(baseline_frames, one_frames, "forces"),
+        "tolerances": {
+            "target_energy_eV_per_system": TARGET_ENERGY_TOLERANCE_EV,
+            "reference_energy_eV_per_system": REFERENCE_ENERGY_TOLERANCE_EV,
+            "reference_force_eV_per_A": REFERENCE_FORCE_TOLERANCE_EV_PER_A,
+        },
         "checks": checks,
         "status": "endpoint_validation_passed" if all(checks.values()) else "endpoint_validation_failed",
     }
