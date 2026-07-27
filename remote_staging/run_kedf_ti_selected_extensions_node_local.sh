@@ -68,7 +68,11 @@ run_wave() {
     index=$((first + slot))
     point=${points[$index]}
     lambda=${lambdas[$index]}
-    cpus=${cpu_ranges[$slot]}
+    if [[ ${#points[@]} -eq 1 ]]; then
+      cpus=0-73
+    else
+      cpus=${cpu_ranges[$slot]}
+    fi
     (
       cd "$point"
       exec taskset -c "$cpus" env \

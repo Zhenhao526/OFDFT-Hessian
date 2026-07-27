@@ -54,6 +54,7 @@ def main() -> None:
     parser.add_argument("--dumpfreq", type=int, default=5)
     parser.add_argument("--restartfreq", type=int, default=100)
     parser.add_argument("--seed", type=int, default=202608000)
+    parser.add_argument("--ranks", type=int, default=12)
     parser.add_argument(
         "--phases", nargs="+", choices=("solid", "liquid"), default=("solid", "liquid")
     )
@@ -91,7 +92,7 @@ def main() -> None:
             "md_dumpfreq": args.dumpfreq,
             "md_restartfreq": args.restartfreq,
             "init_vel": 1,
-            "mpirun_np": 12,
+            "mpirun_np": args.ranks,
         }
     )
     element = load_json(ROOT / "config" / "al.json")
@@ -164,6 +165,7 @@ def main() -> None:
                     "pair_model": str(pair_model),
                     "steps": args.steps,
                     "csvr_tau": args.csvr_tau,
+                    "mpi_ranks": args.ranks,
                 },
             )
             windows.append(
@@ -188,6 +190,7 @@ def main() -> None:
             "volume_A3": parent_manifest["volume_A3"],
             "natoms": parent_manifest["natoms"],
             "steps": args.steps,
+            "mpi_ranks": args.ranks,
             "parent": str(parent_phase),
             "pair_model": str(pair_model),
             "thermalized_initial": True,
