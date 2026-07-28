@@ -18,7 +18,7 @@ class PilotReplacementTests(unittest.TestCase):
         )
         self.assertEqual(
             parsed,
-            {("solid", "lambda_0p000"): Path("/tmp/solid-zero")},
+            {("solid", "lambda_0p000"): Path("/tmp/solid-zero").resolve()},
         )
 
     def test_rejects_duplicate(self) -> None:
