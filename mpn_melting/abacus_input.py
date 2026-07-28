@@ -129,8 +129,9 @@ def run_script_text(
     mpirun_executable: str = "mpirun",
     mpirun_np: int = 1,
     mpirun_extra_args: Iterable[str] = (),
+    force_mpirun: bool = False,
 ) -> str:
-    if mpirun_np and int(mpirun_np) > 1:
+    if mpirun_np and (int(mpirun_np) > 1 or force_mpirun):
         extra = "".join(f' "{argument}"' for argument in mpirun_extra_args)
         return (
             "#!/usr/bin/env bash\n"
@@ -166,6 +167,7 @@ def write_job(
             str(abacus_config.get("mpirun_executable", "mpirun")),
             int(abacus_config.get("mpirun_np", 1)),
             tuple(abacus_config.get("mpirun_extra_args", ())),
+            str(abacus_config.get("device", "")).lower() == "gpu",
         ),
         encoding="utf-8",
     )

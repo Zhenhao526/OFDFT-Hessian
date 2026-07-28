@@ -16,6 +16,7 @@ from scripts.prepare_al108_volume_scan import scaled_to_volume
 
 ROOT = Path(__file__).resolve().parents[1]
 SUPPORTED_KEDFS = {"xwm", "lkt"}
+MAX_ABACUS_INTEGER = 2_147_483_647
 
 
 def prepare(args: argparse.Namespace) -> None:
@@ -59,6 +60,11 @@ def prepare(args: argparse.Namespace) -> None:
     )
     if not specifications:
         raise ValueError("at least one phase must be requested")
+    maximum_seed = args.seed + len(specifications) - 1
+    if args.seed < 0 or maximum_seed > MAX_ABACUS_INTEGER:
+        raise ValueError(
+            "md_seed and phase offsets must fit a signed 32-bit ABACUS integer"
+        )
     out.mkdir(parents=True)
     for phase_index, (phase, source_path, volume_per_atom) in enumerate(
         specifications

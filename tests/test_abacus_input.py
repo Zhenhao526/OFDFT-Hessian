@@ -2,11 +2,31 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mpn_melting.abacus_input import write_job
+from mpn_melting.abacus_input import run_script_text, write_job
 from mpn_melting.structures import AtomSet, build_fcc
 
 
 class AbacusInputTests(unittest.TestCase):
+    def test_gpu_single_rank_runs_through_mpirun(self):
+        text = run_script_text(
+            "/tmp/abacus-gpu",
+            "/tmp/mpirun",
+            1,
+            ("--bind-to", "none"),
+            force_mpirun=True,
+        )
+
+        self.assertIn(
+            '"/tmp/mpirun" "--bind-to" "none" -np 1 "/tmp/abacus-gpu"',
+            text,
+        )
+
+    def test_cpu_single_rank_still_runs_directly(self):
+        text = run_script_text("/tmp/abacus-cpu", "/tmp/mpirun", 1)
+
+        self.assertNotIn("mpirun", text)
+        self.assertIn('"/tmp/abacus-cpu"', text)
+
     def test_write_job_files(self):
         atoms = build_fcc("Al", 4.05, (1, 1, 1))
         element_config = {

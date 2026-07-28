@@ -168,3 +168,39 @@ def test_prepare_can_select_one_phase(
     assert [item["phase"] for item in manifest["phases"]] == ["solid"]
     assert len(captured) == 1
     assert captured[0][0][3]["mpirun_np"] == 72
+
+
+def test_prepare_rejects_seed_outside_abacus_integer_range(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "of_kinetic": "xwm",
+                "cal_stress": 0,
+                "pseudo_dir": ".",
+                "kmesh": [1, 1, 1],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="signed 32-bit"):
+        prepare(
+            argparse.Namespace(
+                out=tmp_path / "out",
+                solid_source="solid",
+                liquid_source="liquid",
+                solid_volume=18.0,
+                liquid_volume=19.0,
+                config=config,
+                temperature=1050.0,
+                steps=300,
+                csvr_tau=1.0,
+                seed=2_147_483_647,
+                ranks=1,
+                phases=("solid", "liquid"),
+            )
+        )
+
+    assert not (tmp_path / "out").exists()
