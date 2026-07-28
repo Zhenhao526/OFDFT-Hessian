@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.build_kedf_fusion_enthalpy_manifest import build_manifest
+from scripts.build_kedf_fusion_enthalpy_manifest import (
+    build_manifest,
+    build_point_from_roots,
+)
 
 
 def write_pair(
@@ -89,7 +92,7 @@ def test_builds_method_specific_pressure_gate(
         stress_available=stress_available,
     )
 
-    result = build_manifest([(root, pressure)])
+    result = build_manifest([([root], pressure)])
     point = result["points"][0]
 
     assert result["target_kedf"] == method
@@ -107,7 +110,7 @@ def test_rejects_volume_mismatch(tmp_path: Path) -> None:
     pressure.write_text(json.dumps(report))
 
     with pytest.raises(ValueError, match="liquid.*volumes differ"):
-        build_manifest([(root, pressure)])
+        build_manifest([([root], pressure)])
 
 
 def test_rejects_unverified_zero_pressure(tmp_path: Path) -> None:
@@ -119,4 +122,52 @@ def test_rejects_unverified_zero_pressure(tmp_path: Path) -> None:
     pressure.write_text(json.dumps(report))
 
     with pytest.raises(ValueError, match="zero-pressure.*not verified"):
-        build_manifest([(root, pressure)])
+        build_manifest([([root], pressure)])
+
+
+def test_combines_independently_passed_phase_roots(tmp_path: Path) -> None:
+    solid_root = tmp_path / "solid-source"
+    liquid_root = tmp_path / "liquid-source"
+    pressure = tmp_path / "pressure.json"
+    write_pair(
+        solid_root,
+        pressure,
+        method="lkt",
+        stress_available=True,
+    )
+    write_pair(
+        liquid_root,
+        tmp_path / "unused-pressure.json",
+        method="lkt",
+        stress_available=True,
+    )
+    solid_summary = json.loads(
+        (solid_root / "confirmation_summary.json").read_text()
+    )
+    solid_summary["status"] = "volume_confirmation_failed"
+    solid_summary["results"][1]["status"] = "failed"
+    (solid_root / "confirmation_summary.json").write_text(
+        json.dumps(solid_summary)
+    )
+    liquid_summary = json.loads(
+        (liquid_root / "confirmation_summary.json").read_text()
+    )
+    liquid_summary["status"] = "volume_confirmation_failed"
+    liquid_summary["results"][0]["status"] = "failed"
+    (liquid_root / "confirmation_summary.json").write_text(
+        json.dumps(liquid_summary)
+    )
+
+    point = build_point_from_roots(
+        [solid_root, liquid_root],
+        pressure,
+    )
+
+    assert point["solid_run"] == str(solid_root / "solid")
+    assert point["liquid_run"] == str(liquid_root / "liquid")
+    assert point["solid_steps"] == 3000
+    assert point["liquid_steps"] == 3000
+    assert set(point["enthalpy_trajectory_provenance"]) == {
+        "solid",
+        "liquid",
+    }
