@@ -84,6 +84,7 @@ def analyze(
         du_values = [float(row[du_key]) for row in production]
         temperatures = [float(row["temperature_k"]) for row in production]
         production_du.append(du_values)
+        msd_last = rows[-1].get("msd_angstrom2")
         windows.append(
             {
                 "lambda": float(rows[0]["lambda"]),
@@ -102,7 +103,9 @@ def analyze(
                     float(summary["minimum_distance_angstrom"]),
                     min(row["nearest_neighbor_angstrom"] for row in rows),
                 ),
-                "msd_last_angstrom2": float(rows[-1]["msd_angstrom2"]),
+                "msd_last_angstrom2": (
+                    float(msd_last) if msd_last is not None else None
+                ),
                 "block_means": block_means,
             }
         )
@@ -206,8 +209,11 @@ def analyze(
             <= temperature_tolerance
             for window in windows
         ),
-        "liquid_diffusion": all(
-            window["msd_last_angstrom2"] >= minimum_liquid_msd for window in windows
+        "liquid_diffusion": minimum_liquid_msd <= 0.0
+        or all(
+            window["msd_last_angstrom2"] is not None
+            and window["msd_last_angstrom2"] >= minimum_liquid_msd
+            for window in windows
         ),
         "block_standard_error": block_se <= max_block_se,
         "half_drift": half_drift <= max_half_drift,

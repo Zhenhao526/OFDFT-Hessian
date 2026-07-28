@@ -12,23 +12,24 @@ def write_window(
     *,
     minimum_distance: float,
     du_offset: float,
+    include_msd: bool = True,
 ) -> None:
     window = root / f"lambda_{coupling:.3f}".replace(".", "p")
     window.mkdir(parents=True)
     rows = []
     for index in range(40):
-        rows.append(
-            {
-                "lambda": coupling,
-                "temperature_k": 900.0 + (index % 3) - 1.0,
-                "du_pair_minus_suf_ev_per_atom": du_offset
-                + 0.0001 * ((index % 5) - 2),
-                "nearest_neighbor_angstrom": minimum_distance
-                if index == 5
-                else 2.3,
-                "msd_angstrom2": 2.0 * index / 39.0,
-            }
-        )
+        row = {
+            "lambda": coupling,
+            "temperature_k": 900.0 + (index % 3) - 1.0,
+            "du_pair_minus_suf_ev_per_atom": du_offset
+            + 0.0001 * ((index % 5) - 2),
+            "nearest_neighbor_angstrom": minimum_distance
+            if index == 5
+            else 2.3,
+        }
+        if include_msd:
+            row["msd_angstrom2"] = 2.0 * index / 39.0
+        rows.append(row)
     (window / "trajectory.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
     )
@@ -69,3 +70,41 @@ def test_unsafe_pair_endpoint_fails_target_distance_gate(tmp_path: Path):
     assert result["status"] == "production_gate_failed"
     assert result["checks"]["numerical_stability"] is True
     assert result["checks"]["target_windows_stable"] is False
+
+
+def test_einstein_windows_can_disable_liquid_diffusion_gate(tmp_path: Path):
+    for coupling in (0.0, 0.5, 1.0):
+        write_window(
+            tmp_path,
+            coupling,
+            minimum_distance=2.1,
+            du_offset=-0.0570 - 0.0001 * coupling,
+            include_msd=False,
+        )
+
+    result = analyze(
+        tmp_path,
+        blocks=5,
+        reference_label="Einstein",
+        minimum_liquid_msd=0.0,
+    )
+
+    assert result["status"] == "verified"
+    assert result["checks"]["liquid_diffusion"] is True
+    assert all(window["msd_last_angstrom2"] is None for window in result["windows"])
+
+
+def test_missing_liquid_msd_fails_when_diffusion_is_required(tmp_path: Path):
+    for coupling in (0.0, 0.5, 1.0):
+        write_window(
+            tmp_path,
+            coupling,
+            minimum_distance=2.1,
+            du_offset=-0.0570 - 0.0001 * coupling,
+            include_msd=False,
+        )
+
+    result = analyze(tmp_path, blocks=5)
+
+    assert result["status"] == "production_gate_failed"
+    assert result["checks"]["liquid_diffusion"] is False
