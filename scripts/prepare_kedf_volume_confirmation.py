@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -72,6 +73,8 @@ def prepare(args: argparse.Namespace) -> None:
         source = load_atom_source(
             source_path, "last", "Al", include_velocities=False
         )
+        source_file = Path(str(source["source"])).resolve()
+        source_sha256 = hashlib.sha256(source_file.read_bytes()).hexdigest()
         atoms = scaled_to_volume(
             source["atoms"], float(volume_per_atom) * source["atoms"].natoms
         )
@@ -97,6 +100,7 @@ def prepare(args: argparse.Namespace) -> None:
                 "volume_A3": volume_per_atom * atoms.natoms,
                 "source": source["source"],
                 "source_step": source["step"],
+                "source_structure_sha256": source_sha256,
                 "source_velocities_discarded": True,
                 "abacus_init_vel": 0,
                 "stress_available": stress_available,
@@ -112,6 +116,7 @@ def prepare(args: argparse.Namespace) -> None:
                 "run": str(run),
                 "source": source["source"],
                 "source_step": source["step"],
+                "source_structure_sha256": source_sha256,
                 "volume_per_atom_A3": volume_per_atom,
                 "md_seed": point_config["md_seed"],
             }

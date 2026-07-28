@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -34,11 +35,14 @@ def test_prepare_uses_fresh_velocities_and_method_stress(
     class Atoms:
         natoms = 1
 
+    source_file = tmp_path / "source"
+    source_file.write_text("source structure\n")
+    source_sha256 = hashlib.sha256(source_file.read_bytes()).hexdigest()
     monkeypatch.setattr(
         "scripts.prepare_kedf_volume_confirmation.load_atom_source",
         lambda *args, **kwargs: {
             "atoms": Atoms(),
-            "source": "source",
+            "source": str(source_file),
             "step": 20,
         },
     )
@@ -84,6 +88,11 @@ def test_prepare_uses_fresh_velocities_and_method_stress(
         call[1]["extra_metadata"]["source_velocities_discarded"] is True
         for call in captured
     )
+    assert all(
+        call[1]["extra_metadata"]["source_structure_sha256"]
+        == source_sha256
+        for call in captured
+    )
 
 
 def test_generated_run_script_disables_mpi_binding(tmp_path: Path) -> None:
@@ -120,11 +129,14 @@ def test_prepare_can_select_one_phase(
     class Atoms:
         natoms = 1
 
+    source_file = tmp_path / "source"
+    source_file.write_text("source structure\n")
+    source_sha256 = hashlib.sha256(source_file.read_bytes()).hexdigest()
     monkeypatch.setattr(
         "scripts.prepare_kedf_volume_confirmation.load_atom_source",
         lambda *args, **kwargs: {
             "atoms": Atoms(),
-            "source": "source",
+            "source": str(source_file),
             "step": 20,
         },
     )
@@ -166,6 +178,7 @@ def test_prepare_can_select_one_phase(
         (out / "confirmation_manifest.json").read_text()
     )
     assert [item["phase"] for item in manifest["phases"]] == ["solid"]
+    assert manifest["phases"][0]["source_structure_sha256"] == source_sha256
     assert len(captured) == 1
     assert captured[0][0][3]["mpirun_np"] == 72
 
