@@ -1,0 +1,55 @@
+protocol_id: qm9_complete_total_relaxed_q_stage2p5_split_v1
+frozen_at: 2026-07-23
+stage: train59_relaxed_q_unseen_direction_diagnostic_split
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+scope:
+  purpose: >-
+    Freeze a parent-grouped train/held-direction split over the 59 parents that
+    passed the preregistered relaxed-q v1 audit. This is a Stage-2.5 diagnostic,
+    not formal train100 readiness and not unseen-parent evidence.
+  scalar_owner: >-
+    q(v)=v^T H v comes from the same complete-total density-relaxed scalar
+    energy and scalar-derived force. It is not a vector HVP or an independent
+    Hessian head.
+  allowed_parent_split: random1000 train800 only
+  validation_access_allowed: false
+  test100_access_allowed: false
+
+inputs:
+  eligibility_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_relaxed_q_train100_v1.yaml
+  eligibility_protocol_sha256: 7eb8b1aa0fd1baa40d06ba5fa61b2e81c8f274045185e1745f931e98ac941517
+  eligibility_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_q_train100_v1/eligibility_audit/summary.json
+  eligibility_summary_sha256: 64dfa9c686e5c032a1687bbb1b84b09920a41a63c23ccc1199a4107deb026d0c
+  eligibility_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_q_train100_v1/eligibility_audit/manifest.json
+  eligibility_manifest_sha256: 6160c8d132d0642b0e7bf0e0feb6161f7f0cde8c1e65dc203754ae41e0f8fab8
+  replay_baseline_success_csv: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/replay_baseline_v3_uniform_A_merged/replay_baseline_success.csv
+  replay_baseline_success_csv_sha256: d1079686b6581b691a256649506cb27ee74d17045214e328277ceba31ed2db22
+  pbe_hessian_manifest: /scratch/xzh/models/hvp100/20260716/pbe_hessians/pbe_hessian_manifest_train100_val20.json
+  pbe_hessian_manifest_sha256: bee31003d563e8cd2fe516a6e90b2255d228b8ad6446a6b026dfd8005bfdc672
+
+data:
+  expected_parent_count: 59
+  expected_audit_eligible_direction_count: 214
+  expected_selected_parent_direction_count: 196
+  sample_id: 0
+  minimum_eligible_directions_per_parent: 3
+  parent_grouping_required: true
+
+direction_split:
+  seed: 20260723
+  heldout_count_per_parent: 1
+  rule: >-
+    For every parent, rank eligible directions by SHA256 of
+    seed:molecule_id:direction_index:direction_kind and hold out the lowest
+    digest. All remaining eligible directions are training directions. The
+    rule is fixed before any candidate feature jet or model metric is read.
+
+decision:
+  formal_stage3_authorized: false
+  test100_authorized: false
+  next_step: >-
+    Use the split only for a train-only scalar-capacity and unseen-direction
+    diagnostic. Any candidate must still pass full-Hessian and independent-
+    parent validation with train800 energy/force replay.

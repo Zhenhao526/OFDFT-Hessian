@@ -1,0 +1,87 @@
+protocol_id: qm9_complete_total_relaxed_vector_stage2p5_split_v1
+frozen_at: 2026-07-23
+stage: train20_complete_total_relaxed_vector_unseen_direction_split
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+scope:
+  purpose: >-
+    Replace the failed scalar-Rayleigh q diagnostic with a train-only
+    complete-total relaxed vector-HVP/secant diagnostic. Parent selection uses
+    only the pre-existing vector numerical-stability mask and molecular
+    metadata, never q59 candidate errors.
+  scalar_owner: >-
+    One frozen EGF checkpoint owns source base energy, relaxed force, and
+    relaxed force-secant HVP. A scalar local correction supplies energy,
+    force=-dE/dR, and HVP=d2E/dR2 v. No force or HVP head is allowed.
+  allowed_parent_split: random1000 train800 only
+  validation_access_allowed: false
+  test100_access_allowed: false
+
+inputs:
+  train100_selection_manifest: /scratch/xzh/models/hvp100/20260716/selection/manifest.json
+  train100_selection_manifest_sha256: f5cb984daeb7d4b02490600aedfb5c0b2b39bcc92fb737d9f292e3c3b6edc5d5
+  parent_stability_csv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/analysis/parent_stability.csv
+  parent_stability_csv_sha256: 68a7e2d9f06ea72390fe9da09efd7397c08415906bd11e8c0699563ba96de61a
+  direction_stability_csv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/analysis/direction_stability.csv
+  direction_stability_csv_sha256: abd9028ad93056e870c9f95319148dea0917742cf76b31f21bbc9ff583093128
+  tasks_tsv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/train100_tasks.tsv
+  tasks_tsv_sha256: bc658ab5594f30f4dc9a92080d1f64f9ef61f80477de9afa9a6b34897113dacd
+  tasks_json: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/train100_tasks.json
+  tasks_json_sha256: 43f9c0cb8b74f6410ac62350151443b74bf8c40b43b35f095258f22e9768f251
+  task_root: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/train100_tasks
+  q59_direction_split_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_q_train100_v1/stage2p5_direction_split_v1_retry1/direction_split_manifest.json
+  q59_direction_split_manifest_sha256: c514c7fc3a550b0d5e19ddb0e35ad0d72908d627eb5523ff33be34625c3a5043
+  feature_jet_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_q_train100_v1/stage2p5_local_scalar_v1/feature_jet_audit/feature_jet_manifest.json
+  feature_jet_manifest_sha256: 061a2752ae603bae334bc0c4f6f6e90097e05a79142af34f2f9858681947ecfc
+  replay_baseline_success_csv: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/replay_baseline_v3_uniform_A_merged/replay_baseline_success.csv
+  replay_baseline_success_csv_sha256: d1079686b6581b691a256649506cb27ee74d17045214e328277ceba31ed2db22
+  source_checkpoint: /scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203/checkpoints/epoch_009.ckpt
+  source_checkpoint_sha256: 722afe50e15455fea4d516128cdf4036f5982b76fbb5e71b5a183c650d5f1f96
+  source_run_spec: >-
+    vector_source=/scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203=/scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203/checkpoints/epoch_009.ckpt
+
+inventory:
+  train100_parent_count: 100
+  parent_gate_pass_count: 74
+  direction_count: 400
+  parent_gate_and_vector_stable_direction_count: 172
+  candidate_parent_count: 31
+  candidate_stable_direction_count: 100
+  minimum_stable_directions_per_parent: 3
+  selected_parent_count: 20
+  heldout_direction_count_per_parent: 1
+
+selection:
+  seed: 20260724
+  atom_count_bins:
+    - {name: small, minimum: 0, maximum: 15}
+    - {name: medium, minimum: 16, maximum: 19}
+    - {name: large, minimum: 20, maximum: 999}
+  composition_definition: sorted_unique_heavy_elements
+  rule: >-
+    Group the 31 eligible candidates by atom-count bin and unique heavy-element
+    composition. Sort strata and members by independent SHA256 keys and select
+    round-robin until 20 parents are fixed. Within each selected parent, hold
+    out the stable direction with the lowest SHA256 key and train on every
+    other stable direction. Candidate q59 predictions are forbidden inputs.
+
+vector_target:
+  branches: [sad_continuation, label_continuation, sad_independent]
+  selected_force_secant_step_bohr: 1.0e-5
+  definition: >-
+    Branch-mean finite difference of complete scalar-derived total source
+    forces after strict density relaxation; reference is analytic PBE H v.
+  source_base_recompute_required: true
+  source_base_initialization: label_reference
+  strict_density_threshold: 1.0e-8
+
+decision:
+  formal_stage3_authorized: false
+  replacement_labels_authorized: false
+  validation_authorized: false
+  test100_authorized: false
+  next_gate: >-
+    The vector-HVP model must pass frozen train/held-direction accuracy plus
+    same-source energy/force and symmetry gates before any replay or full
+    Hessian successor may be designed.

@@ -1,0 +1,79 @@
+protocol_id: qm9_complete_total_relaxed_vector_stage2p5_local_scalar_v1
+frozen_at: 2026-07-23
+stage: train20_complete_total_relaxed_vector_local_scalar_diagnostic
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_total(R)=E_source,epoch9,complete-total-relaxed(R)+c^T phi(R).
+    Force=-dE_total/dR and HVP=d2E_total/dR2 v. Source base E/F and relaxed
+    force-secant HVP are bound to the same checkpoint. No force, HVP, or
+    Hessian head is allowed.
+  experiment_scope: >-
+    Train-only 20-parent vector-HVP Stage-2.5 diagnostic. It tests held
+    directions on the same parents, not unseen-parent transfer.
+
+inputs:
+  selection_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_vector_train20_v1/selection/manifest.json
+  selection_manifest_sha256: 8585e4e6cdf56187598d4906d1459beb9e284a1a94d37cc310655405d1221d69
+  vector_target_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_vector_train20_v1/vector_targets/manifest.json
+  vector_target_manifest_sha256: 8152cf5e991dad4d1266bd6561b99662e5c779d626fb3e07efafcf1485669870
+  source_baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_vector_train20_v1/source_baseline_merged/replay_baseline_manifest.json
+  source_baseline_manifest_sha256: 409409249d6a4d1e0279e72263e40ee225d9229feef0e1c36182d97218351726
+  source_baseline_success_csv: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_vector_train20_v1/source_baseline_merged/replay_baseline_success.csv
+  source_baseline_success_csv_sha256: fed5adac0214d3eab019c416fdfcc46b708f26441f8a204768a0e54487b7b3f7
+  feature_jet_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_q_train100_v1/stage2p5_local_scalar_v1/feature_jet_audit/feature_jet_manifest.json
+  feature_jet_manifest_sha256: 061a2752ae603bae334bc0c4f6f6e90097e05a79142af34f2f9858681947ecfc
+  feature_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_relaxed_q_stage2p5_local_scalar_v1.yaml
+  feature_protocol_sha256: c173ef85db9bfd2add21445414e4d9c893d57bc634541e597aa50c12c5c1fd09
+  v9_checkpoint: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_random_feature_kernel_capacity_v9/exact_ridge_v2/random_feature_ceiling.pt
+  v9_checkpoint_sha256: 993014374f8eedf19d708f977a6bd019e5add43bc38e5295d07f007290dc497e
+  source_checkpoint: /scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203/checkpoints/epoch_009.ckpt
+  source_checkpoint_sha256: 722afe50e15455fea4d516128cdf4036f5982b76fbb5e71b5a183c650d5f1f96
+  target_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_relaxed_vector_stage2p5_targets_v1.yaml
+  target_protocol_sha256: 6517a27cce2b3e69342bfd7a71b4040cc062d66981e85d0e88f9f609637cb0e2
+
+data:
+  parent_count: 20
+  train_direction_count: 44
+  heldout_direction_count: 20
+  global_feature_count: 42027
+  validation_access_allowed: false
+  test100_access_allowed: false
+
+loss:
+  energy_scale_hartree: 0.1
+  force_scale_hartree_per_bohr: 0.05
+  hvp_absolute_scale_hartree_per_bohr2: 0.1
+  hvp_relative_fraction: 0.5
+  hvp_reference_norm_floor_hartree_per_bohr2: 0.1
+  hvp_absolute_normalized_target_cap: 10.0
+  hvp_relative_normalized_target_cap: 10.0
+  vector_component_mean_normalization: true
+  heldout_hvp_forbidden_in_fit: true
+  train800_full_replay_included: false
+
+solver:
+  definition: column_normalized_float64_dual_gram_cholesky
+  ridge_grid: [1.0e-10, 1.0e-8, 1.0e-6, 1.0e-4, 1.0e-2, 1.0]
+  column_floor: 1.0e-10
+  selection_rule: >-
+    Reject arms whose median base energy or force error exceeds 1.05 times
+    source. Among remaining arms minimize held-vector relative-L2 median,
+    P90, then train median. This grid and ordering are frozen before any
+    vector candidate metric is computed.
+
+diagnostic_gates:
+  train_hvp_median_relative_error_max: 0.05
+  train_hvp_p90_relative_error_max: 0.15
+  heldout_hvp_median_relative_error_max: 0.15
+  heldout_hvp_p90_relative_error_max: 0.20
+  heldout_hvp_fraction_at_or_below_0_15_min: 0.80
+  heldout_hvp_improved_fraction_min: 0.80
+  energy_median_ratio_max: 1.05
+  force_median_ratio_max: 1.05
+  correction_hessian_asym_over_sym_max: 1.0e-10
+  rule: >-
+    Passing authorizes only a newly frozen same-source full-Hessian and
+    train800-replay diagnostic. It does not authorize validation or Test100.

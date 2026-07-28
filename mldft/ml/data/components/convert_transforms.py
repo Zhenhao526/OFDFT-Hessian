@@ -17,6 +17,8 @@ from mldft.ofdft.basis_integrals import (
 )
 from mldft.utils.grids import grid_setup
 from mldft.utils.molecules import build_molecule_ofdata
+
+PRESERVE_INJECTED_OVERLAP = "preserve_injected_overlap_matrix"
 from mldft.utils.sparse import construct_block_diag_coo_indices_and_shape
 
 
@@ -265,6 +267,19 @@ class AddOverlapMatrix:
         Args:
             sample: the molecule in the OFData format
         """
+        # Geometry-derivative callers may explicitly inject a graph-connected overlap. The
+        # one-shot marker prevents an already transformed overlap from being reused later while
+        # reconstructing inverse basis transformations.
+        if PRESERVE_INJECTED_OVERLAP in sample:
+            preserve_existing = bool(sample[PRESERVE_INJECTED_OVERLAP])
+            sample.delete_item(PRESERVE_INJECTED_OVERLAP)
+            if not preserve_existing:
+                raise ValueError(f"{PRESERVE_INJECTED_OVERLAP} must be true when provided")
+            if "overlap_matrix" not in sample or sample.overlap_matrix is None:
+                raise ValueError(
+                    f"{PRESERVE_INJECTED_OVERLAP} requires an injected overlap_matrix"
+                )
+            return sample
         mol = build_molecule_ofdata(sample, self.basis_info.basis_dict)
         # The overlap matrix is only ever needed to compute the natrep transformation matrix.
         sample.add_item("overlap_matrix", get_overlap_matrix(mol), Representation.BILINEAR_FORM)

@@ -1,0 +1,9 @@
+defaults:
+  - qm9
+
+dataset_name: "QM9PBEForcePilot"
+
+datamodule:
+  dataset_kwargs:
+    limit_scf_iterations: 1
+    keep_initial_guess: false

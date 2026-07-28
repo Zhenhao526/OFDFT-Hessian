@@ -12,11 +12,85 @@ from mldft.ml.data.components.basis_info import BasisInfo
 from mldft.ml.data.components.convert_transforms import to_torch
 from mldft.ml.data.components.of_data import OFData
 from mldft.ofdft import libxc_functionals, torch_functionals
-from mldft.ofdft.energies import Energies
+from mldft.ofdft.energies import Energies, TensorEnergies
 from mldft.utils.coeffs_to_grid import coeffs_to_rho
 from mldft.utils.molecules import build_molecule_ofdata
 
 LIBXC_PREFIX = "libxc_"
+
+
+def hartree_energy_tensor(
+    coeffs: torch.Tensor, coulomb_matrix: torch.Tensor
+) -> torch.Tensor:
+    """Return the differentiable Hartree energy ``0.5 * c.T @ J @ c``."""
+    return 0.5 * coeffs @ (coulomb_matrix @ coeffs)
+
+
+def nuclear_attraction_energy_tensor(
+    coeffs: torch.Tensor, nuclear_attraction_vector: torch.Tensor
+) -> torch.Tensor:
+    """Return the differentiable electron-nuclear attraction energy ``c.T @ v_ext``."""
+    return coeffs @ nuclear_attraction_vector
+
+
+def nuclear_repulsion_energy_tensor(
+    positions: torch.Tensor,
+    atomic_numbers: torch.Tensor,
+    batch: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Return nuclear repulsion without leaving the coordinate autograd graph.
+
+    Atom pairs are constructed without diagonal entries, so this path never differentiates
+    ``norm(0)`` self interactions. ``batch`` prevents interactions between different molecules.
+    Positions are expected in Bohr and the returned energy is in Hartree.
+    """
+    if positions.ndim != 2 or positions.shape[1] != 3:
+        raise ValueError(f"positions must have shape (n_atom, 3), got {positions.shape}")
+    if atomic_numbers.shape != (positions.shape[0],):
+        raise ValueError(
+            "atomic_numbers must have shape (n_atom,), got "
+            f"{atomic_numbers.shape} for {positions.shape[0]} atoms"
+        )
+
+    pair_i, pair_j = torch.triu_indices(
+        positions.shape[0], positions.shape[0], offset=1, device=positions.device
+    )
+    if batch is not None:
+        batch = batch.to(device=positions.device)
+        same_molecule = batch[pair_i] == batch[pair_j]
+        pair_i = pair_i[same_molecule]
+        pair_j = pair_j[same_molecule]
+    if pair_i.numel() == 0:
+        return positions.sum() * 0.0
+
+    displacement = positions[pair_i] - positions[pair_j]
+    squared_distance = torch.sum(displacement * displacement, dim=-1)
+    if bool(torch.any(squared_distance == 0).detach().cpu()):
+        raise ValueError("Coincident nuclei make the nuclear repulsion singular")
+    distance = torch.sqrt(squared_distance)
+    charges = atomic_numbers.to(dtype=positions.dtype, device=positions.device)
+    return torch.sum(charges[pair_i] * charges[pair_j] / distance)
+
+
+def electron_number_tensor(
+    coeffs: torch.Tensor, dual_basis_integrals: torch.Tensor
+) -> torch.Tensor:
+    """Return the electron number represented by auxiliary-density coefficients."""
+    return dual_basis_integrals @ coeffs
+
+
+def constrained_energy_lagrangian(
+    total_energy: torch.Tensor,
+    coeffs: torch.Tensor,
+    dual_basis_integrals: torch.Tensor,
+    n_electron: torch.Tensor | float,
+    multiplier: torch.Tensor,
+) -> torch.Tensor:
+    """Return ``E + mu * (q.T @ c - N)`` for constrained response calculations."""
+    target = torch.as_tensor(n_electron, dtype=coeffs.dtype, device=coeffs.device)
+    return total_energy + multiplier * (
+        electron_number_tensor(coeffs, dual_basis_integrals) - target
+    )
 
 
 def requires_grid(
@@ -358,6 +432,86 @@ class FunctionalFactory:
 
         return energies, gradient
 
+    def evaluate_tensor_functional(
+        self,
+        sample: OFData,
+        coulomb_matrix: torch.Tensor,
+        nuclear_attraction_vector: torch.Tensor,
+        nuclear_repulsion: torch.Tensor | None = None,
+    ) -> TensorEnergies:
+        """Evaluate a scalar total energy while preserving its full torch graph.
+
+        This is the force/response API. Unlike :meth:`evaluate_functional`, it never converts
+        energy contributions to Python or NumPy scalars. At present it deliberately supports the
+        learned OFDFT path plus Hartree and electron-nuclear terms. LibXC, grid penalties, and the
+        historical callable API must first receive tensor-native implementations before they can
+        be used here.
+
+        Integral tensors may themselves depend on geometry. Keeping them as tensors here allows
+        an analytic, custom-autograd, or audited finite-difference integral provider to supply the
+        moving-basis/Pulay derivatives without changing this energy assembly layer.
+        """
+        unsupported = []
+        for contribution in self.contributions:
+            if isinstance(contribution, str) and contribution not in {
+                "hartree",
+                "nuclear_attraction",
+            }:
+                unsupported.append(contribution)
+            elif not isinstance(contribution, (str, torch.nn.Module)):
+                unsupported.append(getattr(contribution, "__name__", repr(contribution)))
+        if unsupported:
+            raise NotImplementedError(
+                "Tensor functional does not yet support contributions: "
+                + ", ".join(unsupported)
+            )
+
+        if nuclear_repulsion is None:
+            nuclear_repulsion = nuclear_repulsion_energy_tensor(
+                sample.pos,
+                sample.atomic_numbers,
+                getattr(sample, "batch", None),
+            )
+        energies = TensorEnergies(nuclear_repulsion=nuclear_repulsion)
+
+        for contribution in self.contributions:
+            if contribution == "hartree":
+                energy = hartree_energy_tensor(sample.coeffs, coulomb_matrix)
+                name = contribution
+            elif contribution == "nuclear_attraction":
+                energy = nuclear_attraction_energy_tensor(
+                    sample.coeffs, nuclear_attraction_vector
+                )
+                name = contribution
+            elif isinstance(contribution, torch.nn.Module):
+                model_dtype = getattr(contribution, "dtype", sample.coeffs.dtype)
+                if model_dtype != sample.coeffs.dtype:
+                    converted_sample = to_torch(
+                        sample.clone(),
+                        float_dtype=model_dtype,
+                        device=sample.coeffs.device,
+                    )
+                else:
+                    converted_sample = sample
+
+                if hasattr(contribution, "forward_predictions"):
+                    prediction = contribution.forward_predictions(
+                        converted_sample,
+                        compute_density_gradients=False,
+                        compute_forces=False,
+                    )[0]
+                else:
+                    converted_sample = contribution.sample_forward(converted_sample)
+                    prediction = converted_sample.pred_energy
+                energy = prediction.sum()
+                name = contribution.target_key
+            else:  # pragma: no cover - guarded by the unsupported check above
+                raise AssertionError(f"Unhandled contribution {contribution}")
+
+            energies[name] = energy
+
+        return energies
+
     def construct(
         self,
         mol: gto.Mole,
@@ -396,6 +550,20 @@ class FunctionalFactory:
             grid_weights=grid_weights,
             ao=ao,
             max_xc_memory=max_xc_memory,
+        )
+
+    def construct_tensor(
+        self,
+        coulomb_matrix: torch.Tensor,
+        nuclear_attraction_vector: torch.Tensor,
+        nuclear_repulsion: torch.Tensor | None = None,
+    ) -> Callable[[OFData], TensorEnergies]:
+        """Construct a graph-preserving energy functional for one molecular geometry."""
+        return partial(
+            self.evaluate_tensor_functional,
+            coulomb_matrix=coulomb_matrix,
+            nuclear_attraction_vector=nuclear_attraction_vector,
+            nuclear_repulsion=nuclear_repulsion,
         )
 
     def get_energies_label(self, sample: OFData, basis_info: BasisInfo) -> Energies:

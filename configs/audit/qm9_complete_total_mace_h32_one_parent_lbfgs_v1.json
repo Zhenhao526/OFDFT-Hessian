@@ -1,0 +1,38 @@
+{
+  "protocol_id": "qm9_complete_total_mace_lbfgs_v1",
+  "frozen_at": "2026-07-23",
+  "purpose": "Single-parent h32/l<=3/correlation-3/three-interaction MACE response ceilings from the immutable stable5-only smoke step-3 checkpoint; diagnostic only.",
+  "parent_scope": "stable5_one_parent_diagnostic",
+  "diagnostic_parent_ids": [
+    "0028399",
+    "0031108",
+    "0132419",
+    "0031012",
+    "0121249"
+  ],
+  "source_protocol": "/scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_mace_h32_deep_capacity_v6e.yaml",
+  "source_protocol_sha256": "886c68e61ee4a8b5867beed47399c434565da86bac94db553ff11fcaa9f16764",
+  "source_arm_id": "E11e_mace_h32_l3_corr3_int3_cut20_scale1000",
+  "source_checkpoint": "/scratch/xzh/models/complete_total_capacity/20260717/stage5_mace_h32_deep_v6e/smoke/E11e_mace_h32_l3_corr3_int3_cut20_scale1000/best.ckpt",
+  "source_checkpoint_sha256": "1ac92a219ed416c12653bddfdef205102c879b308e60f91465e0212e0cc2b848",
+  "source_checkpoint_step": 3,
+  "source_summary": "/scratch/xzh/models/complete_total_capacity/20260717/stage5_mace_h32_deep_v6e/smoke/E11e_mace_h32_l3_corr3_int3_cut20_scale1000/summary.json",
+  "source_summary_sha256": "3435f15cc429ebc97cc2f7574fc414eed57863df2df19dd26f19021dfefd4cbc",
+  "scalar_owner": "The reference-anchored MACE h32/l<=3/correlation-3/three-interaction scalar energy with fixed output scale 1000; force and Hessian are its first and second geometry derivatives.",
+  "independent_force_head_allowed": false,
+  "lbfgs": {
+    "joint": {
+      "iterations": 50,
+      "learning_rate": 0.5,
+      "history_size": 20,
+      "max_evaluations_per_iteration": 3,
+      "tolerance_grad": 1e-09,
+      "tolerance_change": 1e-12,
+      "log_interval": 10,
+      "parent_cv_authorization_allowed": false
+    }
+  },
+  "validation_accessed": false,
+  "test100_accessed": false,
+  "test100_evaluations_used": 0
+}

@@ -1,0 +1,15 @@
+defaults:
+  - default
+
+strategy: ddp
+accelerator: gpu
+devices: 8
+num_nodes: 1
+sync_batchnorm: True
+inference_mode: False
+
+# Batch size in data.datamodule.batch_size is per GPU/process.
+accumulate_grad_batches: 1
+
+# Full-scale runs should checkpoint by validation and keep a resumable last.ckpt.
+log_every_n_steps: 50

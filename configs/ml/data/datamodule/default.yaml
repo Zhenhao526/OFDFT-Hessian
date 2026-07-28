@@ -10,6 +10,20 @@ pin_memory: false
 shuffle_train: true
 shuffle_val: false
 shuffle_test: false
+# Optional parent-pair batching and stable-HVP replay. Disabled for ordinary training.
+pair_grouped_train_batches: false
+pair_batch_seed: 1729
+pair_source_markers: []
+infer_pair_metadata_from_filename: false
+pair_replay_sidecar_dir: null
+pair_replay_interval: 1
+pair_replay_phase: 0
+hvp_replay_sidecar_dir: null
+hvp_replay_per_batch: false
+hvp_replay_interval: 1
+hvp_replay_phase: 0
+# Fixed-step protocols can disable held-out split construction completely.
+train_only: false
 # Dataset settings
 dataset_kwargs:
   add_irreps: true # required for local frames

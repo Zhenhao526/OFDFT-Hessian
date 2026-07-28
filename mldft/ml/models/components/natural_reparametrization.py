@@ -21,10 +21,74 @@ respect to unitary transformations, the latter (symmetric) describes the origina
 best and is provably equivariant with respect to such transformations, e.g. local frame rotations.
 """
 
+import os
 from typing import Literal
 
 import numpy as np
 import torch
+
+
+class _SymmetricMatrixPower(torch.autograd.Function):
+    """Stable first derivative of an SPD symmetric matrix square root or inverse root.
+
+    PyTorch's generic ``eigh`` backward differentiates eigenvectors and contains inverse
+    eigenvalue gaps. Atom-centred overlap matrices have exact or near degeneracies, so that route
+    can produce NaNs even though the symmetric matrix functions themselves are smooth. Their
+    Loewner derivatives have gap-free closed forms for powers ``+/- 1/2``.
+    """
+
+    @staticmethod
+    def forward(ctx, matrix: torch.Tensor, power: float) -> torch.Tensor:
+        symmetric = 0.5 * (matrix + matrix.transpose(-1, -2))
+        eigenvalues, eigenvectors = torch.linalg.eigh(symmetric)
+        if bool(torch.any(eigenvalues <= 0).detach().cpu()):
+            raise ValueError("Natural reparametrization requires a positive-definite overlap")
+        ctx.save_for_backward(eigenvalues, eigenvectors)
+        ctx.power = float(power)
+        powered = eigenvalues.pow(power)
+        return torch.einsum("...ij,...j,...kj->...ik", eigenvectors, powered, eigenvectors)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        eigenvalues, eigenvectors = ctx.saved_tensors
+        square_roots = torch.sqrt(eigenvalues)
+        root_i = square_roots.unsqueeze(-1)
+        root_j = square_roots.unsqueeze(-2)
+        if ctx.power == 0.5:
+            loewner = 1.0 / (root_i + root_j)
+        elif ctx.power == -0.5:
+            loewner = -1.0 / (root_i * root_j * (root_i + root_j))
+        else:  # pragma: no cover - callers below only expose the two stable powers
+            raise NotImplementedError(f"Unsupported symmetric matrix power {ctx.power}")
+        symmetric_grad = 0.5 * (grad_output + grad_output.transpose(-1, -2))
+        rotated_grad = eigenvectors.transpose(-1, -2) @ symmetric_grad @ eigenvectors
+        grad_matrix = eigenvectors @ (loewner * rotated_grad) @ eigenvectors.transpose(-1, -2)
+        return 0.5 * (grad_matrix + grad_matrix.transpose(-1, -2)), None
+
+
+def symmetric_matrix_power(matrix: torch.Tensor, power: float) -> torch.Tensor:
+    """Apply the stable SPD symmetric matrix power ``+1/2`` or ``-1/2``."""
+    if power not in (0.5, -0.5):
+        raise ValueError("Only powers +0.5 and -0.5 have stable implementations")
+    mode = os.environ.get(
+        "MLDFT_SYMMETRIC_MATRIX_POWER_MODE", "stable_first_order"
+    )
+    if mode == "eigh_second_order_audit":
+        symmetric = 0.5 * (matrix + matrix.transpose(-1, -2))
+        eigenvalues, eigenvectors = torch.linalg.eigh(symmetric)
+        if bool(torch.any(eigenvalues <= 0).detach().cpu()):
+            raise ValueError(
+                "Natural reparametrization requires a positive-definite overlap"
+            )
+        return torch.einsum(
+            "...ij,...j,...kj->...ik",
+            eigenvectors,
+            eigenvalues.pow(power),
+            eigenvectors,
+        )
+    if mode != "stable_first_order":
+        raise ValueError(f"Unknown symmetric matrix power mode {mode!r}")
+    return _SymmetricMatrixPower.apply(matrix, power)
 
 
 def natural_reparametrization_matrices(
@@ -105,30 +169,20 @@ def natural_reparametrization_matrices_torch(
             msg=f"Overlap matrix must be symmetric. {overlap_matrix=}",
         )
 
-    # get eigenvalues and eigenvectors of the overlap matrix
-    # using eigh because a) it's symmetric and b) eig does not guarantee that eigvec.T = eigvec^-1
-    # c) its faster
-    eigvals, eigvecs = torch.linalg.eigh(overlap_matrix)
-
-    # make sure eigenvalue decomposition worked as intended, i.e. W=QΛ(Q.T)
-    # assert torch.allclose(eigvecs @ torch.diag(eigvals) @ eigvecs.T, overlap_matrix)
-    if do_sanity_checks:
-        torch.testing.assert_close(
-            torch.einsum("...ij, ...j, ...kj", eigvecs, eigvals, eigvecs),
-            overlap_matrix,
-            atol=1e-3,
-            rtol=1e-4,
-        )
-    eigvals_sqrt = torch.sqrt(eigvals)
-
-    eigvals_sqrt_inv = 1 / eigvals_sqrt
-
     if orthogonalization == "symmetric":  # M = Q @ Λ^0.5 @ Q.T, M^{-1} = Q @ Λ^{-0.5} @ Q.T
-        m = torch.einsum("...ij, ...j, ...kj -> ...ik", eigvecs, eigvals_sqrt, eigvecs)
-        m_inv = torch.einsum("...ij, ...j, ...kj -> ...ik", eigvecs, eigvals_sqrt_inv, eigvecs)
+        m = symmetric_matrix_power(overlap_matrix, 0.5)
+        m_inv = symmetric_matrix_power(overlap_matrix, -0.5)
 
     elif orthogonalization == "canonical":  # M = Q @ Λ^0.5, M^{-1} = Λ^-{0.5} @ Q.T
+        # Canonical orthogonalization exposes an eigenvector gauge and is intentionally left on
+        # the generic path. Conservative nuclear derivatives require the symmetric form above.
+        eigvals, eigvecs = torch.linalg.eigh(overlap_matrix)
+        eigvals_sqrt = torch.sqrt(eigvals)
+        eigvals_sqrt_inv = 1 / eigvals_sqrt
         m = torch.einsum("...ij, ...j -> ...ij", eigvecs, eigvals_sqrt)
         m_inv = torch.einsum(" ...j ,...ij-> ...ji", eigvals_sqrt_inv, eigvecs)
+
+    else:
+        raise ValueError(f"Unknown orthogonalization {orthogonalization}")
 
     return m, m_inv

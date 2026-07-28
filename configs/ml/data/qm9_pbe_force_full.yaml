@@ -1,0 +1,10 @@
+defaults:
+  - qm9
+
+dataset_name: "QM9PBEForceFull"
+
+datamodule:
+  split_file: ${oc.env:DFT_DATA}/${data.dataset_name}/split.pkl
+  dataset_kwargs:
+    limit_scf_iterations: 1
+    keep_initial_guess: false

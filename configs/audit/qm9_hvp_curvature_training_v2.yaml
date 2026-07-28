@@ -1,0 +1,102 @@
+protocol_id: qm9_random1000_hvp_curvature_training_v2
+frozen_at: 2026-07-16
+supersedes: qm9_random1000_hvp_curvature_training_v1
+revision_reason: hierarchical_parent_vs_direction_stability_aggregation_frozen_after_train12_pilot
+stability_protocol: qm9_random1000_hvp_branch_stability_v3
+strict_sensitivity_protocol: qm9_random1000_hvp_branch_stability_v2
+test100_access_allowed: false
+
+data:
+  source_split_sha256: 919c5f6c250b0d2e9f14f43522894fcac8b179d6d4fd5b774c2cec1ea249034b
+  train100_selection_sha256: 8982fc6349b520b9b98f52fa684e81558b6afab16d14a100f3c3843608503f0b
+  train_parent_count: 800
+  curvature_candidate_parent_count: 100
+  stable_direction_count_min_per_parent: 3
+  parent_electronic_branch_gate_must_pass_all_directions: true
+  directions_per_parent: 4
+  unlabelled_train_parent_count: 700
+
+pilot_evidence_available_before_freeze:
+  train_parents_complete: 12
+  stable_directions: 19
+  total_directions: 48
+  strict_all_four_stable_parents: 0
+  test100_accessed: false
+  interpretation: direction_specific_fd_failures_should_mask_directions_not_clean_parent_branches
+
+variants:
+  A:
+    terms: [energy, density_gradient, scalar_energy_force]
+  B:
+    terms: [energy, density_gradient, scalar_energy_force, learned_energy_secant]
+    secant_weight: 1.0e-2
+  C:
+    terms: [energy, density_gradient, scalar_energy_force, direct_hvp]
+    prediction: learned_energy_fixed_density_hvp
+    target: pbe_analytic_complete_total_hvp
+  D:
+    terms: [energy, density_gradient, scalar_energy_force, relaxed_force_secant]
+    prediction: learned_scalar_energy_endpoint_force_secant
+    target: pbe_complete_total_ks_density_relaxed_endpoint_force_secant
+    directions_per_parent: 1
+  E:
+    terms: [energy, density_gradient, scalar_energy_force, implicit_target_hvp]
+    prediction: learned_energy_fixed_density_hvp
+    target: baseline_ofdft_implicit_complete_total_hvp
+    status: surrogate_not_end_to_end_implicit_prediction
+    parent_count_max: 10
+    parent_selection: lexicographically_first_hierarchically_stable_train100_parents
+    target_branch_reduction: arithmetic_mean_over_three_passing_density_branches
+
+training:
+  initialization_checkpoint: random1000_egf_force_weight_1_seed_676368232_epoch_9
+  seeds: [20260716, 314159, 676368232]
+  screen_seed: 676368232
+  learning_rate: 2.0e-5
+  max_steps: 1200
+  per_gpu_batch_size: 4
+  gradient_accumulation: 8
+  curvature_weights: [1.0e-5, 1.0e-4, 1.0e-3]
+  reference_scale_floors: [1.0e-2, 5.0e-2]
+  max_normalized_graph_loss: 10.0
+  hvp_warmup_start_step: 100
+  hvp_weight_ramp_steps: 200
+  gradnorm_hvp_to_force_target: 0.25
+  curvature_parent_gradient_clip: soft_rational_cap
+
+replay_schedule:
+  period_batches: 4
+  pair_phase: 0
+  hvp_phase: 1
+  ordinary_only_phases: [2, 3]
+  pair_and_hvp_phases_disjoint: true
+  expected_ordinary_graph_fraction: 0.8125
+
+validation:
+  fixed_density_hvp_eligibility_protocol: qm9_random1000_hvp_branch_stability_v3
+  fixed_density_hvp_stable_parents_and_directions_only: true
+  fixed_density_hvp_minimum_stable_parent_count: 5
+  unstable_parents_or_directions_used_in_average_selection: false
+  order:
+    - validation_energy_force_and_train700_forgetting
+    - multidirection_fixed_density_hvp
+    - stable_only_strict_complete_total_hvp
+    - representative_full_hessian_and_vibrations
+  full_hessian_parent_count: [5, 10]
+  energy_mae_relative_degradation_max: 0.05
+  train700_energy_mae_relative_degradation_max: 0.05
+  train700_force_mae_relative_degradation_max: 0.05
+  train700_forgetting_gates_required_seeds: 3
+  force_improved_seed_count_min: 2
+  stable_complete_total_hvp_improved_seed_count_min: 2
+  majority_molecule_wins_required: true
+  majority_direction_wins_required: true
+  full_hessian_and_vibrations_must_not_degrade: true
+  test100_evaluations_before_candidate_freeze: 0
+  test100_evaluations_after_candidate_freeze_max: 1
+
+known_limitations:
+  - The strict v2 all-four eligibility result remains mandatory sensitivity evidence.
+  - D has one existing exact paired direction per parent rather than four.
+  - E supervises a fixed-density learned-energy HVP with an implicit complete-total teacher target.
+  - End-to-end differentiable implicit prediction is blocked by detached geometry integrals, density solve, and SciPy MINRES.

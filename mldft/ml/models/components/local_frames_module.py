@@ -41,6 +41,31 @@ class LocalBasisModule(MessagePassing):
         else:
             self.k = 2
 
+    def _dummy_positions(self, pos: Tensor, n_dummy_atoms: int) -> Tensor:
+        """Return reproducible translation-covariant fallback frame points.
+
+        Random dummy atoms make the scalar model energy change between identical geometry
+        rebuilds, invalidating finite-difference forces and loop-conservativity tests. The fixed
+        irrational-looking directions avoid common Cartesian/bond alignments while the molecular
+        centroid keeps the construction invariant under global translations.
+        """
+        if n_dummy_atoms == 0:
+            return pos.new_empty((0, 3))
+        directions = pos.new_tensor(
+            [
+                [0.754877666, 0.569840296, 0.326648991],
+                [-0.438447187, 0.812394211, 0.389721513],
+                [0.287193405, -0.491833182, 0.822718371],
+            ]
+        )
+        directions = directions / torch.linalg.vector_norm(
+            directions, dim=-1, keepdim=True
+        )
+        if n_dummy_atoms > directions.shape[0]:
+            raise ValueError(f"At most {directions.shape[0]} dummy atoms are supported")
+        center = pos.mean(dim=0, keepdim=True)
+        return center + self.dummy_distance * directions[:n_dummy_atoms]
+
     def aggregate(self, inputs: Tensor) -> Tensor:
         """Aggregates the messages from the neighboring atoms.
 
@@ -107,18 +132,7 @@ class LocalBasisModule(MessagePassing):
             ), "The dummy distance might be too small for the molecule"
 
             # add dummy atoms to the graph at self.dummy_distance. If dummy_atoms is 0, this does nothing
-            pos = torch.cat(
-                [
-                    pos,
-                    self.dummy_distance
-                    * torch.randn(
-                        [n_dummy_atoms] + list(pos[0].size()),
-                        dtype=pos.dtype,
-                        layout=pos.layout,
-                        device=pos.device,
-                    ),
-                ]
-            )
+            pos = torch.cat([pos, self._dummy_positions(pos, n_dummy_atoms)])
             edge_index = knn_graph(pos, self.k, batch, loop=False, flow=self.flow)
 
         else:
@@ -148,18 +162,7 @@ class LocalBasisModule(MessagePassing):
             assert batch is None, "batching is not supported if ignore_hydrogen is True"
 
             heavy_atom_ind = torch.argwhere(heavy_atom_mask)
-            pos = torch.cat(
-                [
-                    pos,
-                    self.dummy_distance
-                    * torch.randn(
-                        [n_dummy_atoms] + list(pos[0].size()),
-                        dtype=pos.dtype,
-                        layout=pos.layout,
-                        device=pos.device,
-                    ),
-                ]
-            )
+            pos = torch.cat([pos, self._dummy_positions(pos, n_dummy_atoms)])
 
             # construct distance matrix between heavy atoms and all atoms
             dist_mat = torch.cdist(pos, pos[heavy_atom_mask])

@@ -1,0 +1,127 @@
+protocol_id: qm9_complete_total_hessian_geometry_parent_cv_v1
+frozen_at: "2026-07-22T01:28:00+08:00"
+
+scope:
+  source: QM9PBEForceRandom1000 train20 only for Hessian labels
+  parent_count: 20
+  fold_count: 5
+  parents_per_fit_fold: 16
+  parents_per_held_fold: 4
+  validation_parent_access_allowed: false
+  test100_accessed: false
+  test100_evaluations_used: 0
+
+frozen_inputs:
+  source_definition: strict complete-total original-A baseline at sample_id=0
+  baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/selection_uniform_A_v1/selected_baseline_manifest.json
+  baseline_manifest_sha256: e81e00ecbf99e7d14751c079aeb081d06455ca720bbb3ca5c758e39de359f127
+  design_root: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/shared_descriptor_design_v2
+  design_summary_sha256: dee0135cad11c68e4366dd68d74048268a623dc32f41e68742f8aba40ea061b1
+  three_body_design_sha256: e011227f7579114d8367891215b3430b98d96503acabc84c53e2cefb5f645706
+  three_body_constraints_sha256: aff0484279ab55f3b807daf74d095da6b434e3f592cdf08e2d5ed1d5064fdbd0
+  three_body_keys_sha256: 7e279a6eb6366083e33d89c3f0651de850223042f03b01350667fda037364a8c
+  four_body_design_sha256: 25eb6a60103474403c6f80f873d670f8188e9d89d349b46dda1acafb18ee1844
+  four_body_constraints_sha256: d1317463f41179ed07c4768338aa418d8e929a4bf7a3b92cf9ccbbc930bd6eb9
+  four_body_keys_sha256: bdb1953e29bcde1f73b97118c6f44fb501815bca6000e30b5cd6d606129b3a42
+  feature_inventory_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/train800_feature_inventory_floor1_v3/train800_feature_inventory_manifest.json
+  feature_inventory_manifest_sha256: 42ab2a5393ee55598d562d299f958297faf2b582b38d2e6f1758caa2fe02ec6a
+  replay_cache_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/replay_descriptor_cache_train800_union_floor1_v2_merged/replay_descriptor_cache_manifest.json
+  replay_cache_manifest_sha256: 322a4597d7afcd89bdce8b7aec7bbbceaa8c42a198c63810d857786708455489
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+
+cross_validation:
+  definition: >-
+    Five-fold train20 Hessian-label-heldout audit. Held parents never contribute
+    complete Hessian/HVP gradients or checkpoint selection. G1 may observe their
+    energy/force records through the frozen train800 replay cache, so it is not an
+    unseen-molecule claim.
+  fold_assignment:
+    - ["0121249", "0082761", "0049017", "0124009"]
+    - ["0036972", "0038511", "0132419", "0016298"]
+    - ["0091752", "0015047", "0031108", "0028399"]
+    - ["0031012", "0123863", "0096630", "0064547"]
+    - ["0057270", "0091176", "0016142", "0132608"]
+  base_seed: 20260722
+  base_replay_seed: 20261722
+  checkpoint_selection: fit16 scalar objective plus frozen replay-eval subset only
+  held_hessian_evaluation: exactly once after each fold checkpoint is frozen
+
+model:
+  representation: shared invariant three-body plus parity-even four-body descriptor scalar
+  architecture: one-hidden-layer float64 Softplus
+  scalar_energy_owner: true
+  force_head_allowed: false
+  hidden_size: 128
+  active_feature_count: 32121
+  feature_scale: train800 inventory with floor 1.0
+  initialization: exact zero scalar residual with seeded hidden features
+  hessian_definition: analytic second derivative of the same scalar residual plus strict original-A baseline
+
+preregistered_variants:
+  - id: G0_h128_fullh_no_replay
+    role: transferable-geometry capacity upper bound; diagnostic only
+    train800_energy_force_replay: false
+    runtime_parameters: &common_runtime
+      hidden_size: 128
+      deep_hidden_size: 0
+      atom_count_extensive: false
+      steps: 30000
+      learning_rate: 3.0e-5
+      gradient_clip: 10.0
+      log_interval: 100
+      energy_scale: 0.1
+      force_scale: 0.05
+      lambda_energy: 1.0
+      lambda_force: 1.0
+      lambda_hessian: 10.0
+      lambda_spectrum: 0.0
+      lambda_parameter: 1.0e-8
+      lambda_replay_energy: 0.0
+      lambda_replay_force: 0.0
+      hvp_warmup_steps: 1000
+      pcgrad: true
+      pcgrad_max_curvature_to_replay_norm_ratio: .inf
+      column_norm_relative_cutoff: 0.0
+      feature_scale_mode: floored_column_norm
+      feature_scale_floor: 1.0
+      absolute_hessian_scale: 0.1
+      relative_loss_fraction: 0.5
+      hvp_tail_fraction: 0.2
+      hvp_tail_weight: 0.0
+      replay_batch_size: 0
+      replay_eval_size: 64
+      replay_cpu_cache_size: 256
+  - id: G1_h128_fullh_replay
+    role: promotable only if all Hessian and energy/force gates pass
+    train800_energy_force_replay: true
+    runtime_parameters:
+      <<: *common_runtime
+      lambda_replay_energy: 1.0
+      lambda_replay_force: 1.0
+      pcgrad_max_curvature_to_replay_norm_ratio: 1.0
+      replay_batch_size: 4
+
+advancement_gates:
+  hessian_median_relative_frobenius_max: 0.10
+  hessian_fraction_at_or_below_0_15_min: 0.80
+  hessian_p90_relative_frobenius_max: 0.20
+  asym_over_sym_frobenius_max: 0.005
+  held_energy_median_regression_max_fraction: 0.05
+  held_force_median_regression_max_fraction: 0.05
+  frequency_mae_target_cm1: [100.0, 200.0]
+  wrong_imaginary_modes: no_material_regression
+  mode_overlap: improve_over_source
+
+decision:
+  no_replay_arm_may_promote: false
+  replay_arm_required_for_advancement: true
+  if_G0_fails: >-
+    The shared geometry scalar does not transfer at h128 even with complete fit-parent
+    Hessians. Do not add replay or access validation; audit local/equivariant capacity,
+    width, and descriptor support under a separately frozen protocol.
+  if_G0_passes_and_G1_fails: >-
+    Curvature transfer exists but replay optimization conflicts. Keep validation frozen
+    and repair gradient balancing or alternating replay before a new preregistered run.
+  if_G1_passes: >-
+    Freeze one all-train20 G1 checkpoint and its selection rules before exactly one
+    seven-parent unseen-molecule validation. Test100 remains forbidden.

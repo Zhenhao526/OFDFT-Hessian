@@ -1,0 +1,8 @@
+throughput_monitor:
+  _target_: mldft.ml.callbacks.ThroughputMonitor
+  output_dir: ${paths.output_dir}/throughput
+  log_every_n_steps: 10
+  warmup_steps: 2
+  estimate_num_samples: 535540
+  estimate_epochs: [10, 20]
+  target_num_devices: 8

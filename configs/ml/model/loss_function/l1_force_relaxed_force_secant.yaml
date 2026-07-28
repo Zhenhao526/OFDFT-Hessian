@@ -1,0 +1,12 @@
+defaults:
+  - l1_force
+  - _self_
+
+relaxed_force_secant_loss:
+  weight: 1.0e-4
+  loss:
+    _target_: mldft.ml.models.components.loss_function.PairRelaxedForceSecantLoss
+    strict_pairs: false
+    reference_scale_floor: 1.0e-2
+    max_normalized_loss: 10.0
+    loss_function: {_target_: torch.nn.L1Loss, reduction: none}

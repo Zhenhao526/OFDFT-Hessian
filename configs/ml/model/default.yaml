@@ -18,3 +18,22 @@ metric_interval: 1
 logging_mixin_interval: 1000
 # Setting this to true will show the logging mixins in the progress bar, can be useful for debugging.
 show_logging_mixins_in_progress_bar: false
+
+# Maximum training-batch fraction eligible for direct HVP autograd. It has no effect when the
+# configured loss does not contain hvp_loss.
+hvp_batch_fraction: 1.0
+
+# Sparse diagnostic reverse passes for per-loss parameter-gradient scales.
+loss_gradient_norm_interval: null
+loss_gradient_norm_max_logs: 5
+
+# Direct-HVP scheduling and optional sparse GradNorm-style balancing. These defaults preserve
+# the historical behavior; curvature-supervised experiments override them explicitly.
+hvp_start_step: 0
+hvp_ramp_steps: 0
+hvp_update_interval: 1
+hvp_update_phase: 0
+loss_balance_mode: none
+hvp_gradnorm_target_ratio: 0.25
+gradnorm_multiplier_min: 0.05
+gradnorm_multiplier_max: 5.0

@@ -1,0 +1,15 @@
+# @package _global_
+
+defaults:
+  - str25/default
+  - override /data: qm9_pbe_force_pilot
+
+tags: ["qm9_pbe_force_pilot", "eg", "kin_plus_xc", "graphformer"]
+
+trainer:
+  max_epochs: 20
+
+data:
+  datamodule:
+    batch_size: 32
+    num_workers: 4

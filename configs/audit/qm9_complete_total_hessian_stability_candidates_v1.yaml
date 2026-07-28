@@ -1,0 +1,41 @@
+protocol_id: qm9_complete_total_hessian_stability_candidates_v1
+frozen_at: 2026-07-20
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+data:
+  source_dataset: QM9PBEForceRandom1000
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  sample_id: 0
+  pbe_reference: analytic_PBE_energy_force_hessian
+  parent_grouping_required: true
+  require_all_stability_directions: false
+  selection_rule: >-
+    Smallest-natoms train100 parents that pass the pre-existing parent_stable gate with exactly
+    three of four stable audit directions, excluding all parents already used in Stage1. This is
+    a numerical full-Hessian stability audit only and cannot select model hyperparameters.
+  stage1_parents:
+    - {molecule_id: "0043438", natoms: 12, reason: smallest_parent_stable_3of4}
+    - {molecule_id: "0016298", natoms: 15, reason: next_smallest_parent_stable_3of4}
+    - {molecule_id: "0064547", natoms: 15, reason: next_smallest_parent_stable_3of4}
+  stage1_role: numerical_stability_audit_only
+  validation_parents_consumed_by_stage1: 0
+
+loss:
+  low_mode: {mode_count: 6, wrong_curvature_multiplier: 2.0}
+  initial_weights:
+    lambda_E: 1.0
+    lambda_F: 1.0
+    lambda_rho: 0.1
+    lambda_H: 1.0
+    lambda_Q: 0.0
+    lambda_spec: 0.1
+
+stage1:
+  gate:
+    training_all_parent_relative_frobenius_max: 0.05
+    antisymmetric_over_symmetric_fro_max: 0.005
+
+numerical_acceptance:
+  strict_density_gradient_max: 1.0e-8
+  baseline_asym_over_pbe_frobenius_max: 0.005

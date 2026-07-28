@@ -1,0 +1,100 @@
+protocol_id: qm9_complete_total_hessian_local_random_feature_stage2_v10
+frozen_at: 2026-07-22
+stage: train20_unseen_direction_nonlinear_local_scalar
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_total_correction(R) = c^T [phi_central_radial_angular(R),
+    phi_even_bonded_torsion(R), phi_multiscale_tanh_kernel(R)].
+  force: F = -d E / dR
+  hessian: H = d2 E / dR2
+  independent_force_head_allowed: false
+  fit_labels: energy, force, and only directions whose frozen role is train
+  evaluation_only_labels: heldout-direction HVP and full PBE Hessian
+
+inputs:
+  selected_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/selection_uniform_A_v1/selected_baseline_manifest.json
+  selected_manifest_sha256: e81e00ecbf99e7d14751c079aeb081d06455ca720bbb3ca5c758e39de359f127
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  v9_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_random_feature_kernel_capacity_v9/exact_ridge_v2/summary.json
+  v9_summary_sha256: e4786a1cda781df6a3a6c96e1706586c75c3fb90ea8e5a1cda07af470ff6ee1e
+  v9_vibrational_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_random_feature_kernel_capacity_v9/exact_ridge_v2/vibrational_v1/summary.json
+  v9_vibrational_summary_sha256: f449a98671f9bb073f26c0793bebadef1882121387a959cb3726f8dd588e3a71
+  v9_checkpoint: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_random_feature_kernel_capacity_v9/exact_ridge_v2/random_feature_ceiling.pt
+  v9_checkpoint_sha256: 993014374f8eedf19d708f977a6bd019e5add43bc38e5295d07f007290dc497e
+  v9_protocol_sha256: c8d23b99f5ddfdc7616f357d9e1436d50c6c6d6cb06e23bf006997afb16108bb
+
+data:
+  source_dataset: QM9PBEForceRandom1000
+  parent_count: 20
+  sample_id: 0
+  parent_grouping_required: true
+  split: train_only
+  validation_access_allowed: false
+  test100_access_allowed: false
+
+directions:
+  source: frozen Stage-2 direction files embedded in selected_manifest
+  total_count: 24
+  train_count: 17
+  heldout_count: 7
+  split_before_model_fit: true
+  heldout_labels_forbidden_in_fit: true
+
+representation:
+  angular_model:
+    activation: tanh
+    seed: 20260727
+    hidden_size: 128
+    radial_size: 7
+    angular_order: 4
+    cutoff_bohr: 8.0
+    radial_feature_scale: 4.0
+    angular_feature_scale: 16.0
+  base_feature_definition:
+    angular_feature_mode: central_element_resolved
+    center_min_bohr: 1.0
+    center_max_bohr: 4.0
+    center_count: 4
+    sigma_bohr: 0.75
+    torsion_order: 5
+    bond_scale: 1.35
+  nonlinear_kernel: frozen exactly from v9_checkpoint
+
+feature_jet:
+  definition: exact full feature Hessian without opening heldout labels
+  dtype: float64
+  feature_chunk_size: 32
+  large_parent_min_natoms: 20
+  large_parent_feature_chunk_size: 24
+  parent_cache: hash_bound_atomic_write
+
+training:
+  energy_scale: 0.1
+  force_scale: 0.05
+  absolute_hvp_scale: 0.1
+  relative_loss_fraction: 0.5
+  hvp_reference_floor: 0.1
+
+solver:
+  definition: streamed_column_normalized_float64_gram_cholesky
+  ridge: 1.0e-8
+  column_floor: 1.0e-10
+  row_chunk_size: 512
+
+stage2_gates:
+  train_hvp_all_parent_max: 0.05
+  heldout_hvp_median_max: 0.15
+  heldout_hvp_p90_max: 0.20
+  full_hessian_median_max: 0.15
+  full_hessian_p90_max: 0.20
+  full_hessian_fraction_below_0p15_min: 0.80
+  energy_median_ratio_max: 1.05
+  force_median_ratio_max: 1.05
+  antisymmetric_over_symmetric_frobenius_max: 0.005
+  rule: >-
+    All checks must pass before train20 vibration closure. Independent validation parents,
+    train100 expansion, and Test100 remain forbidden regardless of intermediate metrics.
+

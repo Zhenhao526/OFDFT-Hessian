@@ -65,7 +65,7 @@ def read_xyz_file(file_path):
 
             # Read atom data
             for _ in range(num_atoms):
-                line = f.readline().split()
+                line = f.readline().replace("*^", "e").split()
                 symbol, x, y, z = (
                     line[0],
                     float(line[1]),
@@ -98,6 +98,7 @@ def build_molecule_np(
     basis: str | dict | None = "6-31G(2df,p)",
     unit: str = "Bohr",
     output: Optional[str] = None,
+    charge: Optional[int] = None,
     spin: Optional[int] = None,
 ) -> gto.Mole:
     """Given the charges and positions in arrays, build a molecule object using pyscf.
@@ -108,13 +109,21 @@ def build_molecule_np(
         basis: Basis set to use for the molecule.
         unit: Unit of the positions.
         output: Optional output file name.
+        charge: Optional total molecular charge. Defaults to PySCF's neutral molecule default.
         spin: Optional spin of the molecule. Defaults to None.
     Returns:
         gto.Mole: A pyscf molecule object.
     """
     # Reformat charges and positions to [(charge, (x, y, z)), ...] for pyscf.
     charge_positions_list = list(zip(charges, positions))
-    molecule = gto.M(atom=charge_positions_list, unit=unit, basis=basis, output=output, spin=spin)
+    molecule = gto.M(
+        atom=charge_positions_list,
+        unit=unit,
+        basis=basis,
+        output=output,
+        charge=charge,
+        spin=spin,
+    )
     return molecule
 
 
@@ -324,6 +333,7 @@ def construct_aux_mol(
                     mol.atom_coords(),
                     split_name[4],
                     unit=unit,
+                    charge=mol.charge,
                     spin=spin,
                 )
         aux_mol = build_mol_with_even_tempered_basis(
@@ -365,7 +375,12 @@ def construct_aux_mol(
         aux_mol.build()
     else:
         aux_mol = build_molecule_np(
-            mol.atom_charges(), mol.atom_coords(), aux_basis_name, unit=unit, spin=spin
+            mol.atom_charges(),
+            mol.atom_coords(),
+            aux_basis_name,
+            unit=unit,
+            charge=mol.charge,
+            spin=spin,
         )
     return aux_mol
 

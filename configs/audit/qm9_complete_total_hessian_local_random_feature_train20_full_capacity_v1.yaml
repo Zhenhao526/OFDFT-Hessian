@@ -1,0 +1,33 @@
+protocol_id: qm9_complete_total_hessian_local_random_feature_train20_full_capacity_v1
+frozen_at: 2026-07-22
+scope: train20_full_hessian_fit_only_capacity
+promotion_allowed: false
+generalization_claim_allowed: false
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+source:
+  stage2_protocol: configs/audit/qm9_complete_total_hessian_local_random_feature_stage2_v10.yaml
+  stage2_protocol_sha256: f2809b41ce3e5d37b9d34bd5a7a297001132db0dfdd5a32497c3dfb0d8b833dd
+  feature_jet_dir: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/feature_jets_v1
+
+fit:
+  parents: 20
+  labels: energy_force_complete_pbe_hessian
+  random_width_per_scale: 512
+  ridge: 1.0e-8
+  scalar_owner_only: true
+
+capacity_gates:
+  hessian_median_max: 0.05
+  hessian_all_parent_max: 0.10
+  energy_median_ratio_max: 1.05
+  force_median_ratio_max: 1.05
+  antisymmetric_over_symmetric_frobenius_max: 0.005
+
+interpretation: >-
+  This audit consumes every train20 PBE Hessian element and therefore cannot measure unseen
+  directions. It only determines whether the frozen v9 scalar feature span can simultaneously fit
+  complete curvature on 20 parents. Failure requires a representation change; success still
+  requires a newly frozen unseen-direction confirmation.
+

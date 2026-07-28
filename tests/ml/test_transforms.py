@@ -15,8 +15,10 @@ from mldft.ml.data.components.basis_transforms import (
 from mldft.ml.data.components.convert_transforms import (
     AddAtomCooIndices,
     AddOverlapMatrix,
+    PRESERVE_INJECTED_OVERLAP,
     ToTorch,
 )
+from mldft.ml.data.components.of_data import Representation
 from mldft.utils.utils import set_default_torch_dtype
 
 TEST_DATASET = "QM9subset"
@@ -115,3 +117,44 @@ def test_master_transform(dummy_sample, dummy_basis_info):
             torch.as_tensor(dummy_sample.gradient_label, dtype=torch.float64),
             retransformed_sample.gradient_label,
         )
+
+
+@set_default_torch_dtype(torch.float64)
+def test_add_overlap_matrix_preserves_injected_differentiable_overlap(
+    dummy_sample, dummy_basis_info
+):
+    """A caller-owned overlap must retain its moving-geometry autograd graph."""
+    sample = dummy_sample.clone()
+    n_basis = int(sample.n_basis)
+    overlap = torch.eye(n_basis, dtype=torch.float64, requires_grad=True)
+    sample.add_item("overlap_matrix", overlap, Representation.BILINEAR_FORM)
+    sample.add_item(PRESERVE_INJECTED_OVERLAP, True, Representation.NONE)
+
+    transformed = AddOverlapMatrix(dummy_basis_info)(sample)
+
+    assert transformed is sample
+    assert transformed.overlap_matrix is overlap
+    assert PRESERVE_INJECTED_OVERLAP not in transformed
+    gradient = torch.autograd.grad(transformed.overlap_matrix.square().sum(), overlap)[0]
+    torch.testing.assert_close(gradient, 2.0 * overlap)
+
+
+def test_add_overlap_matrix_populates_missing_overlap(dummy_sample, dummy_basis_info):
+    sample = dummy_sample.clone()
+    assert "overlap_matrix" not in sample
+
+    transformed = AddOverlapMatrix(dummy_basis_info)(sample)
+
+    assert "overlap_matrix" in transformed
+    assert transformed.overlap_matrix.shape == (int(sample.n_basis), int(sample.n_basis))
+
+
+def test_add_overlap_matrix_rebuilds_unmarked_existing_overlap(dummy_sample, dummy_basis_info):
+    sample = dummy_sample.clone()
+    n_basis = int(sample.n_basis)
+    stale_overlap = torch.eye(n_basis, dtype=torch.float64)
+    sample.add_item("overlap_matrix", stale_overlap, Representation.BILINEAR_FORM)
+
+    transformed = AddOverlapMatrix(dummy_basis_info)(sample)
+
+    assert transformed.overlap_matrix is not stale_overlap

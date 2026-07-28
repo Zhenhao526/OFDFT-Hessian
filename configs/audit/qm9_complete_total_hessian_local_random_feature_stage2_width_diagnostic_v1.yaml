@@ -1,0 +1,34 @@
+protocol_id: qm9_complete_total_hessian_local_random_feature_stage2_width_diagnostic_v1
+frozen_at: 2026-07-22
+scope: train20_random_feature_width_diagnostic_only
+promotion_allowed: false
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+source:
+  stage2_protocol: configs/audit/qm9_complete_total_hessian_local_random_feature_stage2_v10.yaml
+  stage2_protocol_sha256: f2809b41ce3e5d37b9d34bd5a7a297001132db0dfdd5a32497c3dfb0d8b833dd
+  baseline_width_per_scale: 512
+  baseline_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/direction_fit_v1/summary.json
+  baseline_summary_sha256: 385936bc64dee020656e3f85625bc7a0347bf5831cc3250b97e3123b424fe073
+  feature_jet_dir: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/feature_jets_v1
+
+width_per_scale_grid:
+  - 0
+  - 16
+  - 32
+  - 64
+  - 128
+  - 256
+
+fixed_solver:
+  ridge: 1.0e-8
+
+interpretation:
+  selection_metric: heldout_hvp_relative_frobenius.median
+  rule: >-
+    Each subset retains the complete explicit angular/four-body basis and takes the same leading
+    width from every frozen tanh scale and central-element block. This is a one-shot diagnostic of
+    curvature-subspace overcapacity. No width may be promoted from this split; an apparent pass
+    requires stable5 revalidation and a newly frozen direction confirmation.
+

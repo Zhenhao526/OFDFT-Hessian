@@ -1,0 +1,72 @@
+protocol_id: qm9_complete_total_hessian_bounded_equivariant_capacity_v1
+frozen_at: 2026-07-23
+stage: stable5_fit_only_bounded_equivariant_scalar_capacity
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_total(R) = E_A(R0) - F_A(R0) dot dR + 0.5 dR^T sym(H_A(R0)) dR
+    + C_theta(R) - C_theta(R0) - grad(C_theta(R0)) dot dR.
+  correction: bounded PaiNN-style local scalar/vector message passing with atomic scalar readout
+  force: F = -d E_total / dR
+  hessian: H = d2 E_total / dR2
+  independent_force_head_allowed: false
+  scope: stable5 fit-only capacity before any train20 direction use
+
+inputs:
+  baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/selection_uniform_A_v1/selected_baseline_manifest.json
+  baseline_manifest_sha256: e81e00ecbf99e7d14751c079aeb081d06455ca720bbb3ca5c758e39de359f127
+  stable5_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_capacity_v1_stable5_v2.yaml
+  stable5_protocol_sha256: 05c7ace0fbcd85195cec81255f64f75ba140c5b135bf7c1dc3fc1ccd1a3dc23c
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  sample_id: 0
+  pbe_reference: analytic_PBE_energy_force_hessian
+  parents: ["0028399", "0031108", "0132419", "0031012", "0121249"]
+
+training:
+  dtype: float64
+  smoke_steps: 5
+  formal_steps: 3000
+  log_interval_smoke: 1
+  log_interval_formal: 50
+  parent_batch_size: 1
+  anchor_energy_force: true
+  absolute_hessian_scale: 0.1
+  relative_loss_fraction: 0.5
+  hessian_reference_floor: 0.1
+  lambda_energy: 1.0
+  lambda_force: 1.0
+  lambda_hessian: 1.0
+  lambda_parameter: 1.0e-10
+  energy_scale: 0.1
+  force_scale: 0.05
+  hessian_warmup_steps: 100
+  gradient_clip: 10.0
+  pcgrad: false
+  checkpoint_selection: median_plus_max_full_hessian_relative_frobenius
+  source_hessian_policy: symmetrize_before_local_quadratic_scalar
+
+arms:
+  - id: E1_bounded_equivariant_h32_l2
+    architecture: bounded_equivariant_vector_message_passing
+    seed: 20260730
+    hidden_size: 32
+    radial_size: 8
+    interaction_layers: 2
+    cutoff_bohr: 8.0
+    learning_rate: 1.0e-4
+
+capacity_gate:
+  training_median_relative_frobenius_max: 0.05
+  training_all_parent_relative_frobenius_max: 0.05
+  energy_median_ratio_to_source_max: 1.05
+  force_median_ratio_to_source_max: 1.05
+  antisymmetric_over_symmetric_frobenius_max: 0.005
+  rule: all stable5 full-Hessian, E/F, and symmetry checks must pass
+
+next_stage_if_passed:
+  action: freeze a train20 unseen-direction protocol for this representation
+  validation_access_allowed: false
+  train100_expansion_allowed: false
+  test100_access_allowed: false

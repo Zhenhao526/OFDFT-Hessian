@@ -219,6 +219,329 @@ class CoefficientLoss(PerSampleWeightedPerCoeffLossFunction):
         return self.loss_function(pred_diff, batch.coeffs - batch.ground_state_coeffs)
 
 
+class ForceLoss(SingleLossFunction):
+    """Calculates the loss between autograd forces and reference nuclear forces."""
+
+    def get_loss(self, batch: Batch, pred_forces: Tensor | None, **_) -> Tensor:
+        """Return one force loss value per atom."""
+        if pred_forces is None:
+            raise ValueError("pred_forces is required for ForceLoss.")
+        if not hasattr(batch, "force_label"):
+            raise AttributeError("ForceLoss requires batch.force_label.")
+        loss = self.loss_function(pred_forces, batch.force_label)
+        if loss.ndim == 1:
+            return loss
+        return loss.flatten(start_dim=1).mean(dim=1)
+
+    def weigh_loss(self, batch: OFData, loss: Tensor) -> Tensor:
+        """Apply optional per-molecule sample weights to per-atom force losses."""
+        weights = self.sample_weigher.get_weights(batch)
+        atom_batch = getattr(batch, "atomic_numbers_batch", None)
+        if atom_batch is None:
+            atom_batch = getattr(batch, "batch", None)
+        if atom_batch is None:
+            raise AttributeError(
+                "ForceLoss with a sample_weigher requires atom-to-molecule batch indices."
+            )
+        assert loss.shape == atom_batch.shape, f"{loss.shape} != {atom_batch.shape}"
+        return loss * weights[atom_batch]
+
+
+class DirectionalHVPLoss(SingleLossFunction):
+    """Normalized direct Hessian-vector-product loss for labelled graphs.
+
+    ``pred_hvp`` and ``batch.hvp_label`` are energy-Hessian products in Cartesian
+    coordinates. The per-graph component error is averaged over ``3N`` components, divided by
+    the sampled direction norm and by a reference RMS scale. This makes the loss invariant to
+    direction rescaling and prevents large molecules from dominating solely through atom count.
+    """
+
+    def __init__(
+        self,
+        reference_scale_floor: float = 1e-8,
+        max_normalized_loss: float | None = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if self.sample_weigher is not None:
+            raise ValueError("DirectionalHVPLoss does not support a sample weigher")
+        if reference_scale_floor <= 0:
+            raise ValueError("reference_scale_floor must be positive")
+        if max_normalized_loss is not None and max_normalized_loss <= 0:
+            raise ValueError("max_normalized_loss must be positive")
+        self.reference_scale_floor = float(reference_scale_floor)
+        self.max_normalized_loss = (
+            None if max_normalized_loss is None else float(max_normalized_loss)
+        )
+
+    def get_loss(
+        self,
+        batch: Batch,
+        pred_hvp: Tensor | None,
+        hvp_active_mask: Tensor | None = None,
+        **_,
+    ) -> Tensor:
+        if pred_hvp is None:
+            raise ValueError("pred_hvp is required for DirectionalHVPLoss")
+        required = (
+            "hvp_label",
+            "hvp_label_mask",
+            "hvp_direction_norm",
+            "hvp_reference_scale",
+        )
+        missing = [key for key in required if getattr(batch, key, None) is None]
+        if missing:
+            raise AttributeError(f"DirectionalHVPLoss requires fields {missing}")
+        atom_batch = getattr(batch, "atomic_numbers_batch", None)
+        if atom_batch is None:
+            atom_batch = getattr(batch, "batch", None)
+        if atom_batch is None:
+            raise AttributeError("DirectionalHVPLoss requires atom-to-graph indices")
+
+        component_loss = self.loss_function(pred_hvp, batch.hvp_label)
+        if component_loss.ndim == 2:
+            component_loss = component_loss.mean(dim=1)
+        elif component_loss.ndim != 1:
+            component_loss = component_loss.reshape(component_loss.shape[0], -1).mean(dim=1)
+        graph_count = int(batch.batch_size)
+        per_graph_sum = torch.zeros(
+            graph_count, dtype=component_loss.dtype, device=component_loss.device
+        )
+        per_graph_sum.scatter_add_(0, atom_batch, component_loss)
+        atom_count = torch.bincount(atom_batch, minlength=graph_count).clamp_min(1)
+        per_graph = per_graph_sum / atom_count
+        direction_norm = batch.hvp_direction_norm.reshape(-1).to(per_graph).clamp_min(
+            torch.finfo(per_graph.dtype).tiny
+        )
+        reference_scale = batch.hvp_reference_scale.reshape(-1).to(per_graph).clamp_min(
+            self.reference_scale_floor
+        )
+        mask = (
+            batch.hvp_label_mask if hvp_active_mask is None else hvp_active_mask
+        ).reshape(-1).bool()
+        if mask.numel() != graph_count:
+            raise ValueError("hvp_label_mask must contain one value per graph")
+        if not bool(mask.any()):
+            return pred_hvp.sum().reshape(1) * 0.0
+        normalized = (per_graph / (direction_norm * reference_scale))[mask]
+        if self.max_normalized_loss is not None:
+            cap = torch.as_tensor(
+                self.max_normalized_loss,
+                dtype=normalized.dtype,
+                device=normalized.device,
+            )
+            normalized = cap * normalized / (cap + normalized)
+        return normalized
+
+
+class PairEnergySecantLoss(SingleLossFunction):
+    """Match directional ``kin_plus_xc`` energy secants for exact geometry pairs.
+
+    The loss uses scalar energy labels and predictions only. It therefore preserves an explicitly
+    conservative learned-energy objective and does not reinterpret a total PBE force as the
+    derivative of the learned ``kin_plus_xc`` contribution.
+    """
+
+    def __init__(self, strict_pairs: bool = True, **kwargs):
+        super().__init__(**kwargs)
+        if self.sample_weigher is not None:
+            raise ValueError("PairEnergySecantLoss does not support a per-sample weigher")
+        self.strict_pairs = bool(strict_pairs)
+
+    @staticmethod
+    def _graph_positions(batch: Batch, graph_index: int) -> Tensor:
+        ptr = getattr(batch, "atomic_numbers_ptr", None)
+        if ptr is None:
+            ptr = getattr(batch, "ptr", None)
+        if ptr is None:
+            raise AttributeError("PairEnergySecantLoss requires graph atom pointers")
+        start = int(ptr[graph_index])
+        stop = int(ptr[graph_index + 1])
+        return batch.pos[start:stop]
+
+    def get_loss(self, batch: Batch, pred_energy: Tensor, **_) -> Tensor:
+        required = (
+            "source_molecule_id",
+            "perturbation_pair_id",
+            "perturbation_pair_sign",
+            "paired_perturbations",
+        )
+        missing = [key for key in required if getattr(batch, key, None) is None]
+        if missing:
+            raise AttributeError(f"PairEnergySecantLoss requires metadata fields {missing}")
+
+        pred = pred_energy.reshape(-1)
+        labels = batch.energy_label.reshape(-1).to(pred)
+        has_label = batch.has_energy_label.reshape(-1).bool()
+        source = torch.as_tensor(batch.source_molecule_id).reshape(-1)
+        pair_id = torch.as_tensor(batch.perturbation_pair_id).reshape(-1)
+        sign = torch.as_tensor(batch.perturbation_pair_sign).reshape(-1)
+        is_pair = torch.as_tensor(batch.paired_perturbations).reshape(-1).bool()
+        if not all(value.numel() == pred.numel() for value in (source, pair_id, sign, is_pair)):
+            raise ValueError("Pair metadata must contain one value per graph")
+
+        groups: dict[tuple[int, int], dict[int, int]] = {}
+        for index in range(pred.numel()):
+            if not bool(is_pair[index]) or not bool(has_label[index]):
+                continue
+            key = (int(source[index]), int(pair_id[index]))
+            pair_sign = int(sign[index])
+            if pair_sign not in (-1, 1):
+                continue
+            if pair_sign in groups.setdefault(key, {}):
+                raise ValueError(f"Duplicate sign {pair_sign} for pair {key}")
+            groups[key][pair_sign] = index
+
+        losses = []
+        incomplete = []
+        for key, indices in groups.items():
+            if set(indices) != {-1, 1}:
+                incomplete.append(key)
+                continue
+            minus_index = indices[-1]
+            plus_index = indices[1]
+            plus_positions = self._graph_positions(batch, plus_index)
+            minus_positions = self._graph_positions(batch, minus_index)
+            if plus_positions.shape != minus_positions.shape:
+                raise ValueError(f"Geometry shape mismatch for pair {key}")
+            separation = torch.linalg.vector_norm(plus_positions - minus_positions)
+            if not bool(separation > 0):
+                raise ValueError(f"Zero geometry separation for pair {key}")
+            predicted_secant = (pred[plus_index] - pred[minus_index]) / separation
+            target_secant = (labels[plus_index] - labels[minus_index]) / separation
+            losses.append(self.loss_function(predicted_secant, target_secant))
+
+        if incomplete and self.strict_pairs:
+            raise ValueError(f"Incomplete geometry pairs in batch: {incomplete[:5]}")
+        if not losses:
+            if self.strict_pairs:
+                raise ValueError("No complete labelled geometry pair in batch")
+            return pred.sum().reshape(1) * 0.0
+        return torch.stack([loss.reshape(()) for loss in losses])
+
+
+class PairRelaxedForceSecantLoss(SingleLossFunction):
+    """Match PBE complete-total relaxed-force secants for exact geometry pairs.
+
+    Both predicted endpoint forces are derivatives of the learned scalar energy. Reference
+    endpoint forces are the complete PBE forces evaluated after the KS density has converged.
+    This is a force-secant curvature surrogate; it is not an implicit density-relaxed OFDFT HVP.
+    """
+
+    def __init__(
+        self,
+        strict_pairs: bool = True,
+        reference_scale_floor: float = 1e-2,
+        max_normalized_loss: float | None = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if self.sample_weigher is not None:
+            raise ValueError("PairRelaxedForceSecantLoss does not support a sample weigher")
+        if reference_scale_floor <= 0:
+            raise ValueError("reference_scale_floor must be positive")
+        if max_normalized_loss is not None and max_normalized_loss <= 0:
+            raise ValueError("max_normalized_loss must be positive")
+        self.strict_pairs = bool(strict_pairs)
+        self.reference_scale_floor = float(reference_scale_floor)
+        self.max_normalized_loss = (
+            None if max_normalized_loss is None else float(max_normalized_loss)
+        )
+
+    @staticmethod
+    def _atom_slice(batch: Batch, graph_index: int) -> slice:
+        ptr = getattr(batch, "atomic_numbers_ptr", None)
+        if ptr is None:
+            ptr = getattr(batch, "ptr", None)
+        if ptr is None:
+            raise AttributeError("PairRelaxedForceSecantLoss requires graph atom pointers")
+        return slice(int(ptr[graph_index]), int(ptr[graph_index + 1]))
+
+    def get_loss(self, batch: Batch, pred_forces: Tensor | None, **_) -> Tensor:
+        if pred_forces is None:
+            raise ValueError("pred_forces is required for PairRelaxedForceSecantLoss")
+        if not hasattr(batch, "force_label"):
+            raise AttributeError("PairRelaxedForceSecantLoss requires batch.force_label")
+        required = (
+            "source_molecule_id",
+            "perturbation_pair_id",
+            "perturbation_pair_sign",
+            "paired_perturbations",
+        )
+        missing = [key for key in required if getattr(batch, key, None) is None]
+        if missing:
+            raise AttributeError(f"PairRelaxedForceSecantLoss requires fields {missing}")
+
+        graph_count = int(batch.batch_size)
+        source = torch.as_tensor(batch.source_molecule_id).reshape(-1)
+        pair_id = torch.as_tensor(batch.perturbation_pair_id).reshape(-1)
+        sign = torch.as_tensor(batch.perturbation_pair_sign).reshape(-1)
+        is_pair = torch.as_tensor(batch.paired_perturbations).reshape(-1).bool()
+        has_label = batch.has_energy_label.reshape(-1).bool()
+        if not all(
+            value.numel() == graph_count
+            for value in (source, pair_id, sign, is_pair, has_label)
+        ):
+            raise ValueError("Pair metadata must contain one value per graph")
+
+        groups: dict[tuple[int, int], dict[int, int]] = {}
+        for index in range(graph_count):
+            if not bool(is_pair[index]) or not bool(has_label[index]):
+                continue
+            pair_sign = int(sign[index])
+            if pair_sign not in (-1, 1):
+                continue
+            key = (int(source[index]), int(pair_id[index]))
+            if pair_sign in groups.setdefault(key, {}):
+                raise ValueError(f"Duplicate sign {pair_sign} for pair {key}")
+            groups[key][pair_sign] = index
+
+        losses = []
+        incomplete = []
+        for key, indices in groups.items():
+            if set(indices) != {-1, 1}:
+                incomplete.append(key)
+                continue
+            minus_index, plus_index = indices[-1], indices[1]
+            minus_slice = self._atom_slice(batch, minus_index)
+            plus_slice = self._atom_slice(batch, plus_index)
+            minus_positions = batch.pos[minus_slice]
+            plus_positions = batch.pos[plus_slice]
+            if minus_positions.shape != plus_positions.shape:
+                raise ValueError(f"Geometry shape mismatch for pair {key}")
+            separation = torch.linalg.vector_norm(plus_positions - minus_positions)
+            if not bool(separation > 0):
+                raise ValueError(f"Zero geometry separation for pair {key}")
+            predicted = (
+                pred_forces[plus_slice] - pred_forces[minus_slice]
+            ) / separation
+            reference = (
+                batch.force_label[plus_slice] - batch.force_label[minus_slice]
+            ) / separation
+            component_loss = self.loss_function(predicted, reference)
+            component_mean = component_loss.reshape(-1).mean()
+            reference_scale = torch.sqrt(torch.mean(reference.square())).clamp_min(
+                self.reference_scale_floor
+            )
+            normalized = component_mean / reference_scale
+            if self.max_normalized_loss is not None:
+                cap = torch.as_tensor(
+                    self.max_normalized_loss,
+                    dtype=normalized.dtype,
+                    device=normalized.device,
+                )
+                normalized = cap * normalized / (cap + normalized)
+            losses.append(normalized)
+
+        if incomplete and self.strict_pairs:
+            raise ValueError(f"Incomplete geometry pairs in batch: {incomplete[:5]}")
+        if not losses:
+            if self.strict_pairs:
+                raise ValueError("No complete labelled geometry pair in batch")
+            return pred_forces.sum().reshape(1) * 0.0
+        return torch.stack(losses)
+
+
 class WeightedLoss(nn.Module):
     """Module used to combine multiple losses with different weights.
 

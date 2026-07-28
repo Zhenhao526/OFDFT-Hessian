@@ -1,0 +1,39 @@
+# @package _global_
+defaults:
+  - override /dataset: qm9_geom_perturbed
+
+dataset:
+  name: QM9PBEForceRandom1000PairedTrain
+  filename: qm9_pbe_force_random1000_paired_train
+  num_perturbations: 2
+  perturbation_std: 0.01
+  max_displacement: 0.05
+  # Reference labels already exist in QM9PBEForceRandom1000; generate only +/- samples here.
+  include_reference: false
+  remove_translation: true
+  paired_perturbations: true
+  random_seed: 20260701
+
+# The launch manifest must restrict generation to parent molecules in the existing
+# random1000 training split. Validation and test parents must never be linked here.
+n_molecules: -1
+start_idx: 0
+num_processes: 20
+num_threads_per_process: 1
+max_memory_per_process: 5000
+verify_files: true
+remove_broken_files: false
+log_level: INFO
+
+kohn_sham:
+  basis: "6-31G(2df,p)"
+  xc: "PBE"
+  initialization: "minao"
+  grid_level: 3
+  prune_method: "nwchem_prune"
+  density_fit_basis: "def2-universal-jfit"
+  density_fit_threshold: 30
+  convergence_tolerance: 1e-9
+  compute_forces: true
+  compute_hessian: false
+  use_perturbation: false

@@ -1,0 +1,99 @@
+protocol_id: qm9_complete_total_relaxed_q_stage2p5_local_scalar_v1
+frozen_at: 2026-07-23
+stage: train59_relaxed_q_unseen_direction_local_scalar_diagnostic
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_total(R)=E_source,complete-total-relaxed(R)+c^T phi(R). Energy,
+    force=-dE/dR, and scalar curvature q(v)=v^T d2E/dR2 v are derivatives
+    of this one scalar. No force, HVP, or Hessian head is allowed.
+  q_scope: >-
+    Strict complete-total relaxed scalar Rayleigh quotients from the frozen q
+    audit. q is not a vector HVP.
+  experiment_scope: >-
+    Train-only Stage-2.5 capacity and unseen-direction diagnostic over 59
+    eligible parents. It is not formal train100 or unseen-parent evidence.
+
+inputs:
+  direction_split_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_q_train100_v1/stage2p5_direction_split_v1_retry1/direction_split_manifest.json
+  direction_split_manifest_sha256: c514c7fc3a550b0d5e19ddb0e35ad0d72908d627eb5523ff33be34625c3a5043
+  direction_split_protocol_sha256: 00ed8590abacc5b3047b4522a6adeb2baa6664df9d18264fd48690a25370cae2
+  v9_checkpoint: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_random_feature_kernel_capacity_v9/exact_ridge_v2/random_feature_ceiling.pt
+  v9_checkpoint_sha256: 993014374f8eedf19d708f977a6bd019e5add43bc38e5295d07f007290dc497e
+  v9_protocol_sha256: c8d23b99f5ddfdc7616f357d9e1436d50c6c6d6cb06e23bf006997afb16108bb
+
+data:
+  parent_count: 59
+  train_direction_count: 137
+  heldout_direction_count: 59
+  sample_id: 0
+  split: random1000 train800 only
+  validation_access_allowed: false
+  test100_access_allowed: false
+
+representation:
+  angular_model:
+    activation: tanh
+    seed: 20260727
+    hidden_size: 128
+    radial_size: 7
+    angular_order: 4
+    cutoff_bohr: 8.0
+    radial_feature_scale: 4.0
+    angular_feature_scale: 16.0
+  base_feature_definition:
+    angular_feature_mode: central_element_resolved
+    center_min_bohr: 1.0
+    center_max_bohr: 4.0
+    center_count: 4
+    sigma_bohr: 0.75
+    torsion_order: 5
+    bond_scale: 1.35
+  nonlinear_kernel: frozen exactly from v9_checkpoint
+
+feature_jet:
+  dtype: float64
+  feature_chunk_size: 32
+  large_parent_min_natoms: 20
+  large_parent_feature_chunk_size: 24
+  parent_cache: hash_bound_atomic_write
+
+training:
+  labels: [total_energy, total_relaxed_force, complete_total_relaxed_q]
+  energy_scale_hartree: 0.1
+  force_scale_hartree_per_bohr: 0.05
+  q_absolute_scale_hartree_per_bohr2: 0.1
+  q_relative_loss_fraction: 0.5
+  q_reference_floor_hartree_per_bohr2: 0.1
+  base_parent_energy_force_included: true
+  train800_full_replay_included: false
+  heldout_q_forbidden_in_fit: true
+  limitation: >-
+    This first diagnostic includes base E/F for all 59 parents but not all 3200
+    train800 replay geometries. A passing q result authorizes only a separately
+    frozen replay implementation, never a candidate promotion.
+
+solver:
+  definition: column_normalized_float64_dual_gram_cholesky
+  ridge_grid: [1.0e-12, 1.0e-10, 1.0e-8, 1.0e-6, 1.0e-4]
+  column_floor: 1.0e-10
+  selection_rule: >-
+    Reject arms whose median energy or force error exceeds 1.05 times source;
+    among remaining arms minimize heldout-q median, then heldout-q P90, then
+    train-q median. The grid and ordering are frozen before feature jets exist.
+
+diagnostic_gates:
+  train_q_median_relative_error_max: 0.05
+  train_q_p90_relative_error_max: 0.15
+  heldout_q_median_relative_error_max: 0.15
+  heldout_q_p90_relative_error_max: 0.20
+  heldout_q_fraction_at_or_below_0_15_min: 0.80
+  energy_median_ratio_max: 1.05
+  force_median_ratio_max: 1.05
+  correction_hessian_asym_over_sym_max: 5.0e-12
+  rule: >-
+    Passing authorizes only train800 replay engineering and strict full-Hessian
+    checks on a newly frozen train-only subset. It does not authorize formal
+    Stage 3, validation-parent access, or Test100.

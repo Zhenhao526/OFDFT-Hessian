@@ -216,3 +216,58 @@ def test_local_frames_matrix_dense(
         torch.testing.assert_close(
             mat.T @ mat, torch.eye(sample.n_basis, dtype=mat.dtype, device=mat.device)
         )
+
+
+def test_insufficient_heavy_atom_dummy_frames_are_reproducible_and_translation_invariant():
+    module = LocalBasisModule(ignore_hydrogen=True)
+    positions = torch.tensor(
+        [
+            [-1.2, 0.1, -0.2],
+            [1.0, -0.3, 0.4],
+            [-1.7, 1.1, 0.6],
+            [1.4, 0.8, -0.7],
+        ],
+        dtype=torch.float64,
+    )
+    atomic_numbers = torch.tensor([6, 6, 1, 1])
+    first = module(positions, atomic_numbers)
+    second = module(positions, atomic_numbers)
+    translated = module(
+        positions + torch.tensor([2.3, -1.7, 0.9], dtype=positions.dtype),
+        atomic_numbers,
+    )
+
+    torch.testing.assert_close(first, second, atol=0, rtol=0)
+    torch.testing.assert_close(first, translated, atol=1e-12, rtol=1e-12)
+
+
+def test_insufficient_heavy_atom_dummy_frame_gradient_matches_finite_difference():
+    module = LocalBasisModule(ignore_hydrogen=True)
+    positions = torch.tensor(
+        [
+            [-1.2, 0.1, -0.2],
+            [1.0, -0.3, 0.4],
+            [-1.7, 1.1, 0.6],
+            [1.4, 0.8, -0.7],
+        ],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    atomic_numbers = torch.tensor([6, 6, 1, 1])
+    weight = torch.arange(36, dtype=torch.float64).reshape(4, 3, 3) / 17.0
+    value = torch.sum(module(positions, atomic_numbers) * weight)
+    gradient = torch.autograd.grad(value, positions)[0]
+
+    step = 1e-5
+    plus = positions.detach().clone()
+    minus = positions.detach().clone()
+    plus[0, 0] += step
+    minus[0, 0] -= step
+    finite_difference = (
+        torch.sum(module(plus, atomic_numbers) * weight)
+        - torch.sum(module(minus, atomic_numbers) * weight)
+    ) / (2.0 * step)
+
+    torch.testing.assert_close(
+        gradient[0, 0], finite_difference, atol=2e-9, rtol=2e-8
+    )

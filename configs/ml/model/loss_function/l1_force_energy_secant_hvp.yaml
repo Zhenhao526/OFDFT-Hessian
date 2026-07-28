@@ -1,0 +1,10 @@
+defaults:
+  - l1_force_hvp
+  - _self_
+
+energy_secant_loss:
+  weight: 0.01
+  loss:
+    _target_: mldft.ml.models.components.loss_function.PairEnergySecantLoss
+    strict_pairs: true
+    loss_function: {_target_: torch.nn.L1Loss, reduction: none}

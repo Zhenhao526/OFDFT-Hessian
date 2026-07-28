@@ -1,0 +1,18 @@
+defaults:
+  - learning_rate_monitor
+  - model_checkpoint
+  - print_overrides
+  - custom_scalars
+  - throughput_monitor
+  - _self_
+
+interval: 1000
+
+model_checkpoint:
+  dirpath: ${paths.output_dir}/checkpoints
+  filename: "epoch_{epoch:03d}"
+  monitor: "val_loss/total"
+  mode: "min"
+  save_last: True
+  save_top_k: 2
+  auto_insert_metric_name: False

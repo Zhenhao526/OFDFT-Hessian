@@ -26,6 +26,21 @@ from mldft.utils.log_utils.config_in_tensorboard import log_config_text_to_tenso
 log = RankedLogger(__name__, rank_zero_only=True)
 
 
+def _configure_multiprocessing_sharing_strategy(cfg: DictConfig) -> None:
+    """Configure DataLoader tensor sharing explicitly for cluster portability."""
+    strategy = cfg.get("multiprocessing_sharing_strategy", "file_system")
+    if strategy is None:
+        return
+    available = torch.multiprocessing.get_all_sharing_strategies()
+    if strategy not in available:
+        raise ValueError(
+            f"Unsupported multiprocessing sharing strategy {strategy!r}; "
+            f"available strategies are {sorted(available)}"
+        )
+    torch.multiprocessing.set_sharing_strategy(strategy)
+    log.info(f"Multiprocessing sharing strategy: {strategy}")
+
+
 @task_wrapper
 def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Trains the model. Can additionally evaluate on a testset, using best weights obtained during
@@ -58,8 +73,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     log.info(f"Logging config to {yaml_path}")
     OmegaConf.save(cfg, yaml_path, resolve=False)
     OmegaConf.save(cfg, yaml_path_resolved, resolve=True)
-    # This might be needed in the future, if error "too many open files" occurs
-    torch.multiprocessing.set_sharing_strategy("file_system")
+    _configure_multiprocessing_sharing_strategy(cfg)
     torch.set_float32_matmul_precision("high")
     # If precision is 64, set default dtype to float64 which changes the dtype in the last to_torch transform
     if cfg.trainer.precision == 64:

@@ -1,0 +1,38 @@
+{
+  "protocol_id": "qm9_complete_total_bounded_equivariant_lbfgs_v1",
+  "frozen_at": "2026-07-23",
+  "purpose": "Extended full-stable5 LBFGS capacity ceiling from the immutable E4 Adam step-750 checkpoint after the registered 30-iteration audit was still descending.",
+  "parent_scope": "stable5_fit_only",
+  "parents": [
+    "0028399",
+    "0031108",
+    "0132419",
+    "0031012",
+    "0121249"
+  ],
+  "source_protocol": "/scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_bounded_equivariant_long_range_v3.yaml",
+  "source_protocol_sha256": "e5da680ecc5eff5cfc221f1d62ce8d276d470bd1dcd180857f319ecf1a12dc50",
+  "source_arm_id": "E4_bounded_equivariant_h64_l2_cut20",
+  "source_checkpoint": "/scratch/xzh/models/complete_total_capacity/20260717/stage5_bounded_equivariant_v3_long_range/lbfgs_v2/adam_best_through_s750.ckpt",
+  "source_checkpoint_sha256": "2e10ca9049765afaafb85a5f1cfc7c885af58045957522f661eec751e0afc36e",
+  "source_checkpoint_step": 750,
+  "source_selection_rule": "lowest registered median-plus-max score through Adam step 750",
+  "scalar_owner": "The long-range bounded equivariant atomic scalar energy; force and Hessian are its first and second geometry derivatives.",
+  "independent_force_head_allowed": false,
+  "lbfgs": {
+    "joint": {
+      "iterations": 100,
+      "learning_rate": 0.5,
+      "history_size": 20,
+      "max_evaluations_per_iteration": 3,
+      "tolerance_grad": 1e-09,
+      "tolerance_change": 1e-12,
+      "log_interval": 10,
+      "parent_cv_authorization_allowed": true
+    }
+  },
+  "advancement_rule": "Only a complete stable5 joint gate pass may authorize a newly frozen train20 protocol; no automatic submission is permitted.",
+  "validation_accessed": false,
+  "test100_accessed": false,
+  "test100_evaluations_used": 0
+}

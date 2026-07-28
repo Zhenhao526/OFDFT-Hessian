@@ -10,6 +10,8 @@ from hydra.utils import instantiate
 from mldft.ml.data.components.convert_transforms import AddOverlapMatrix
 from mldft.ml.models.components.natural_reparametrization import (
     natural_reparametrization_matrices,
+    natural_reparametrization_matrices_torch,
+    symmetric_matrix_power,
 )
 from mldft.utils.utils import set_default_torch_dtype
 
@@ -89,3 +91,82 @@ def test_symmetric_natural_reparametrization_matrices(
         np.testing.assert_allclose(m, m.T, rtol=1e-05, atol=1e-07)
         np.testing.assert_allclose(m_inv, m_inv.T, rtol=1e-05, atol=1e-07)
         np.testing.assert_allclose(m @ m, overlap_matrix, rtol=1e-05, atol=1e-07)
+
+
+@pytest.mark.parametrize("power", [0.5, -0.5])
+def test_symmetric_matrix_power_has_finite_gradient_at_degenerate_eigenvalues(power):
+    matrix = torch.eye(4, dtype=torch.float64, requires_grad=True)
+    weight = torch.tensor(
+        [
+            [1.0, 0.2, -0.3, 0.1],
+            [0.2, -0.4, 0.5, 0.0],
+            [-0.3, 0.5, 0.8, -0.2],
+            [0.1, 0.0, -0.2, 0.6],
+        ],
+        dtype=torch.float64,
+    )
+    value = torch.sum(symmetric_matrix_power(matrix, power) * weight)
+    gradient = torch.autograd.grad(value, matrix)[0]
+
+    assert torch.isfinite(gradient).all()
+    expected = power * 0.5 * (weight + weight.T)
+    torch.testing.assert_close(gradient, expected, atol=1e-12, rtol=1e-12)
+
+
+def test_symmetric_natural_reparametrization_degenerate_overlap_backward():
+    overlap = torch.eye(5, dtype=torch.float64, requires_grad=True)
+    m, m_inv = natural_reparametrization_matrices_torch(
+        overlap, orthogonalization="symmetric"
+    )
+    loss = m.square().sum() + 0.3 * m_inv.square().sum()
+    gradient = torch.autograd.grad(loss, overlap)[0]
+
+    assert torch.isfinite(gradient).all()
+    torch.testing.assert_close(m @ m, overlap, atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close(
+        m @ m_inv, torch.eye(5, dtype=overlap.dtype), atol=1e-12, rtol=1e-12
+    )
+
+
+@pytest.mark.parametrize("power", [0.5, -0.5])
+def test_eigh_matrix_power_second_derivative_matches_gradient_fd(
+    monkeypatch, power
+):
+    monkeypatch.setenv(
+        "MLDFT_SYMMETRIC_MATRIX_POWER_MODE", "eigh_second_order_audit"
+    )
+    matrix = torch.tensor(
+        [[2.0, 0.2, -0.1], [0.2, 1.4, 0.15], [-0.1, 0.15, 0.9]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    weight = torch.tensor(
+        [[0.7, -0.2, 0.1], [-0.2, 0.4, 0.3], [0.1, 0.3, -0.5]],
+        dtype=torch.float64,
+    )
+    direction = torch.tensor(
+        [[0.1, -0.3, 0.2], [-0.3, 0.4, -0.1], [0.2, -0.1, 0.2]],
+        dtype=torch.float64,
+    )
+    value = torch.sum(symmetric_matrix_power(matrix, power) * weight)
+    gradient = torch.autograd.grad(value, matrix, create_graph=True)[0]
+    hvp = torch.autograd.grad(
+        gradient, matrix, grad_outputs=direction
+    )[0]
+
+    def gradient_at(displaced):
+        displaced = displaced.detach().requires_grad_(True)
+        displaced_value = torch.sum(
+            symmetric_matrix_power(displaced, power) * weight
+        )
+        return torch.autograd.grad(displaced_value, displaced)[0]
+
+    step = 1.0e-5
+    finite_difference = (
+        gradient_at(matrix + step * direction)
+        - gradient_at(matrix - step * direction)
+    ) / (2.0 * step)
+    assert torch.isfinite(hvp).all()
+    torch.testing.assert_close(
+        hvp, finite_difference, atol=2.0e-8, rtol=2.0e-7
+    )

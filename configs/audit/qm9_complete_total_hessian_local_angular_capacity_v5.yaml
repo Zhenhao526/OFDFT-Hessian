@@ -1,0 +1,103 @@
+protocol_id: qm9_complete_total_hessian_local_angular_capacity_v5
+frozen_at: 2026-07-22
+stage: stable5_fit_only_angular_scalar_capacity
+contingency: >-
+  Run only after post-v4 diagnostics report no five-percent capacity evidence for the
+  invariant-distance message-passing scalar.
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_local(R) = E_A - F_A dot dR + 0.5 dR^T sym(H_A) dR
+    + C_angular_theta(R) - C_angular_initial(R).
+  source: strict complete-total relaxed original-A at sample_id=0
+  force: F = -d E_local / dR
+  hessian: H = d2 E_local / dR2
+  independent_force_head_allowed: false
+  scope: stable5 fit-only explicit-angular representation capacity; not parent generalization
+  changed_factor: >-
+    Replace invariant distance message passing with a local-additive atom-centered scalar over
+    element-resolved radial RBF sums and neighbor-pair-resolved RBF outer products times Legendre
+    angular functions. Keep data, source scalar, E/F/H loss, optimizer, warm-up, and gates fixed.
+
+inputs:
+  post_v4_diagnostic_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_scalar_three_task_pcgrad_v4/post_v4_diagnostics_no_formal_v1/analysis_v1/summary.json
+  post_v4_diagnostic_summary_sha256: 152c3ed97a47a27c365f3579677a8c8af2b52673e8b3d9cf1ee7e078df6e2ad4
+  required_post_v4_diagnosis: no_five_percent_capacity_evidence_with_preregistered_local_diagnostics
+  baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/selection_uniform_A_v1/selected_baseline_manifest.json
+  baseline_manifest_sha256: e81e00ecbf99e7d14751c079aeb081d06455ca720bbb3ca5c758e39de359f127
+  stable5_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_capacity_v1_stable5_v2.yaml
+  stable5_protocol_sha256: 05c7ace0fbcd85195cec81255f64f75ba140c5b135bf7c1dc3fc1ccd1a3dc23c
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  sample_id: 0
+  pbe_reference: analytic_PBE_energy_force_hessian
+  parents: ["0028399", "0031108", "0132419", "0031012", "0121249"]
+
+training:
+  dtype: float64
+  smoke_steps: 20
+  formal_steps: 3000
+  log_interval_smoke: 2
+  log_interval_formal: 100
+  parent_batch_size: 2
+  anchor_energy_force: false
+  absolute_hessian_scale: 0.1
+  relative_loss_fraction: 0.5
+  hessian_reference_floor: 0.1
+  lambda_energy: 1.0
+  lambda_force: 1.0
+  lambda_hessian: 1.0
+  lambda_parameter: 1.0e-10
+  energy_scale: 0.1
+  force_scale: 0.05
+  hessian_warmup_steps: 200
+  gradnorm_balance: true
+  gradnorm_target_ratio: 1.0
+  gradnorm_min_scale: 1.0e-3
+  gradnorm_max_scale: 1.0e4
+  pcgrad: true
+  pcgrad_max_hessian_to_energy_force_norm_ratio: 1.0
+  gradient_clip: 5.0
+  checkpoint_selection: median_plus_max_full_hessian_relative_frobenius_plus_EF_gate_penalty
+  source_hessian_policy: symmetrize_before_local_quadratic_scalar
+
+arms:
+  - id: M1_local_angular_tanh
+    architecture: local_angular_symmetry_network
+    activation: tanh
+    seed: 20260727
+    hidden_size: 128
+    radial_size: 6
+    angular_order: 3
+    cutoff_bohr: 8.0
+    radial_feature_scale: 4.0
+    angular_feature_scale: 16.0
+    learning_rate: 1.0e-5
+
+smoke_gate:
+  final_median_relative_frobenius_max: 2.5
+  final_selection_score_max: 5.5
+  positive_raw_hessian_gradient_required: true
+  positive_energy_force_gradient_required: true
+  peak_gpu_memory_mb_max: 75000
+  rule: >-
+    Formal is allowed only if every positive-step diagnostic is finite, both task gradients are
+    positive, the untouched median is reduced below 2.5 within 20 steps, final joint score is below
+    5.5, and one A100 remains below 75 GB allocated memory.
+
+capacity_gate:
+  training_median_relative_frobenius_max: 0.05
+  training_all_parent_relative_frobenius_max: 0.05
+  energy_median_ratio_to_source_max: 1.05
+  force_median_ratio_to_source_max: 1.05
+  antisymmetric_over_symmetric_frobenius_max: 0.005
+  rule: >-
+    No direction/parent expansion until the formal model and its postprocessed vibration metrics
+    pass every frozen stable5 gate.
+
+next_stage_if_passed:
+  action: freeze a 20-parent unseen-direction protocol with immutable held directions and train800 E/F replay
+  validation_access_allowed: false
+  train100_expansion_allowed: false
+  test100_access_allowed: false

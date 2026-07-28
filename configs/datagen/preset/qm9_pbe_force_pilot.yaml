@@ -1,0 +1,34 @@
+# @package _global_
+defaults:
+  - override /dataset: qm9_geom_perturbed
+
+dataset:
+  name: QM9PBEForcePilot
+  filename: qm9_pbe_force_pilot
+  num_perturbations: 3
+  perturbation_std: 0.01
+  max_displacement: 0.05
+  include_reference: true
+  remove_translation: true
+  random_seed: 20260701
+
+n_molecules: 1000
+start_idx: 0
+num_processes: 4
+num_threads_per_process: 2
+max_memory_per_process: 6000
+verify_files: true
+log_level: INFO
+
+kohn_sham:
+  basis: "6-31G(2df,p)"
+  xc: "PBE"
+  initialization: "minao"
+  grid_level: 3
+  prune_method: "nwchem_prune"
+  density_fit_basis: "def2-universal-jfit"
+  density_fit_threshold: 30
+  convergence_tolerance: 1e-9
+  compute_forces: true
+  compute_hessian: false
+  use_perturbation: false

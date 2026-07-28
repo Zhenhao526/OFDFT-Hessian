@@ -1,0 +1,53 @@
+protocol_id: qm9_complete_total_relaxed_q_train100_v1
+frozen_at: 2026-07-23
+stage: train100_existing_artifact_relaxed_scalar_curvature_eligibility
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definition:
+  scalar_owner: >-
+    q(v) = v^T H v is evaluated from the same complete-total density-relaxed
+    scalar energy and its scalar-derived force. It is a directional curvature,
+    not a vector HVP and not an independent force or Hessian head.
+  purpose: >-
+    Identify directions whose scalar curvature is numerically stable even when
+    orthogonal components of the vector finite-difference HVP are unstable.
+  downstream_model: >-
+    A density-independent Taylor-anchored scalar correction may consume only
+    eligible q targets. Its value and force at the parent geometry must be
+    exactly zero so train800 energy/force replay cannot be forgotten there.
+
+inputs:
+  selection_manifest: /scratch/xzh/models/hvp100/20260716/selection/manifest.json
+  selection_manifest_sha256: f5cb984daeb7d4b02490600aedfb5c0b2b39bcc92fb737d9f292e3c3b6edc5d5
+  tasks_tsv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/train100_tasks.tsv
+  tasks_tsv_sha256: bc658ab5594f30f4dc9a92080d1f64f9ef61f80477de9afa9a6b34897113dacd
+  tasks_json: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/train100_tasks.json
+  tasks_json_sha256: 43f9c0cb8b74f6410ac62350151443b74bf8c40b43b35f095258f22e9768f251
+  task_root: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/train100_tasks
+  parent_stability_csv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/analysis/parent_stability.csv
+  parent_stability_csv_sha256: 68a7e2d9f06ea72390fe9da09efd7397c08415906bd11e8c0699563ba96de61a
+  vector_direction_stability_csv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/analysis/direction_stability.csv
+  vector_direction_stability_csv_sha256: abd9028ad93056e870c9f95319148dea0917742cf76b31f21bbc9ff583093128
+
+numerical_gate:
+  require_parent_density_branch_kkt_gate: true
+  branches: [sad_continuation, label_continuation, sad_independent]
+  small_steps_bohr: [3.0e-6, 1.0e-5, 3.0e-5]
+  selected_force_secant_step_bohr: 1.0e-5
+  scalar_energy_closure_step_bohr: 1.0e-3
+  curvature_floor_hartree_per_bohr2: 0.1
+  maximum_small_step_relative_spread: 0.05
+  maximum_branch_relative_spread: 0.05
+  maximum_implicit_relaxed_relative_difference: 0.05
+  maximum_energy_force_relative_difference: 0.05
+  maximum_direction_mismatch: 1.0e-10
+  minimum_eligible_directions_per_parent: 3
+
+decision:
+  train100_q_ready_parent_count: 80
+  rule: >-
+    This audit may authorize only a q-supervision pilot when at least 80 of the
+    frozen 100 parents pass with at least three directions. It cannot authorize
+    Test100, cannot relabel q as HVP, and cannot waive later full-Hessian and
+    unseen-parent validation.
