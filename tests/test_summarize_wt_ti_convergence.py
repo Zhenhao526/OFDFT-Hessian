@@ -156,6 +156,25 @@ class TiConvergenceTests(unittest.TestCase):
 
         self.assertEqual(reports, original)
 
+    def test_supports_generic_kedf_production_schema(self):
+        reports = [report(0.25, 0.4), report(0.50, 0.5), report(0.75, 0.6)]
+        for item in reports:
+            item["schema"] = "kedf-pair-ti-production-analysis-v1"
+            item["delta_f_target_minus_pair_simpson_mev_per_atom"] = item.pop(
+                "delta_f_wt_minus_pair_simpson_mev_per_atom"
+            )
+
+        result = summarize(reports)
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(
+            result["schema"], "kedf-ti-discard-convergence-summary-v1"
+        )
+        self.assertEqual(
+            result["source_analysis_schema"],
+            "kedf-pair-ti-production-analysis-v1",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

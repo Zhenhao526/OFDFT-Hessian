@@ -9,7 +9,10 @@ from typing import Any, Dict, Iterable, List
 
 def load_report(path: Path) -> Dict[str, Any]:
     report = json.loads(path.read_text(encoding="utf-8"))
-    if report.get("schema") != "wt-pair-ti-production-analysis-v1":
+    if report.get("schema") not in {
+        "wt-pair-ti-production-analysis-v1",
+        "kedf-pair-ti-production-analysis-v1",
+    }:
         raise ValueError(f"unsupported TI analysis schema in {path}")
     return report
 
@@ -17,6 +20,12 @@ def load_report(path: Path) -> Dict[str, Any]:
 def spread(values: Iterable[float]) -> float:
     numbers = list(values)
     return max(numbers) - min(numbers)
+
+
+def integral_mev_per_atom(report: Dict[str, Any]) -> float:
+    if report["schema"] == "wt-pair-ti-production-analysis-v1":
+        return float(report["delta_f_wt_minus_pair_simpson_mev_per_atom"])
+    return float(report["delta_f_target_minus_pair_simpson_mev_per_atom"])
 
 
 def phase_failure_reason(sample: Dict[str, Any], phase: str) -> str | None:
@@ -45,10 +54,12 @@ def summarize(
         raise ValueError("at least two discard-fraction reports are required")
     phases = {str(report["phase"]) for report in reports}
     natoms_values = {int(report["natoms"]) for report in reports}
-    if len(phases) != 1 or len(natoms_values) != 1:
+    schemas = {str(report["schema"]) for report in reports}
+    if len(phases) != 1 or len(natoms_values) != 1 or len(schemas) != 1:
         raise ValueError("reports must describe the same phase and atom count")
     phase = phases.pop()
     natoms = natoms_values.pop()
+    source_schema = schemas.pop()
     ordered_reports = sorted(reports, key=lambda report: float(report["discard_fraction"]))
     label_sets = [set(window["label"] for window in report["windows"]) for report in reports]
     if any(labels != label_sets[0] for labels in label_sets[1:]):
@@ -56,29 +67,29 @@ def summarize(
 
     report_summary = []
     for report in ordered_reports:
-        report_summary.append(
-            {
-                "discard_fraction": float(report["discard_fraction"]),
-                "status": report["status"],
-                "checks": report["checks"],
-                "delta_f_wt_minus_pair_mev_per_atom": float(
-                    report["delta_f_wt_minus_pair_simpson_mev_per_atom"]
-                ),
-                "block_standard_error_mev_per_atom": float(
-                    report["block_standard_error_mev_per_atom"]
-                ),
-                "half_drift_mev_per_atom": float(report["half_drift_mev_per_atom"]),
-                "quadrature_difference_mev_per_atom": float(
-                    report["quadrature_difference_mev_per_atom"]
-                ),
-                "minimum_adjacent_effective_sample_fraction": float(
-                    report["minimum_adjacent_effective_sample_fraction"]
-                ),
-                "maximum_adjacent_overlap_closure_mev_per_atom": float(
-                    report["maximum_adjacent_overlap_closure_mev_per_atom"]
-                ),
-            }
-        )
+        integral = integral_mev_per_atom(report)
+        summary = {
+            "discard_fraction": float(report["discard_fraction"]),
+            "status": report["status"],
+            "checks": report["checks"],
+            "delta_f_target_minus_pair_mev_per_atom": integral,
+            "block_standard_error_mev_per_atom": float(
+                report["block_standard_error_mev_per_atom"]
+            ),
+            "half_drift_mev_per_atom": float(report["half_drift_mev_per_atom"]),
+            "quadrature_difference_mev_per_atom": float(
+                report["quadrature_difference_mev_per_atom"]
+            ),
+            "minimum_adjacent_effective_sample_fraction": float(
+                report["minimum_adjacent_effective_sample_fraction"]
+            ),
+            "maximum_adjacent_overlap_closure_mev_per_atom": float(
+                report["maximum_adjacent_overlap_closure_mev_per_atom"]
+            ),
+        }
+        if source_schema == "wt-pair-ti-production-analysis-v1":
+            summary["delta_f_wt_minus_pair_mev_per_atom"] = integral
+        report_summary.append(summary)
 
     window_summaries = []
     critical_windows = []
@@ -143,7 +154,10 @@ def summarize(
         if reasons:
             critical_windows.append({"label": label, "lambda": lambda_value, "reasons": reasons})
 
-    integrals = [item["delta_f_wt_minus_pair_mev_per_atom"] for item in report_summary]
+    integrals = [
+        item["delta_f_target_minus_pair_mev_per_atom"]
+        for item in report_summary
+    ]
     integral_spread = spread(integrals)
     all_reports_verified = all(report["status"] == "verified" for report in ordered_reports)
     lambda_refinement_required = any(
@@ -160,13 +174,18 @@ def summarize(
     )
     middle = min(report_summary, key=lambda item: abs(item["discard_fraction"] - 0.5))
     return {
-        "schema": "wt-ti-discard-convergence-summary-v1",
+        "schema": (
+            "wt-ti-discard-convergence-summary-v1"
+            if source_schema == "wt-pair-ti-production-analysis-v1"
+            else "kedf-ti-discard-convergence-summary-v1"
+        ),
+        "source_analysis_schema": source_schema,
         "status": "verified" if phase_ready else "extension_or_refinement_required",
         "phase": phase,
         "natoms": natoms,
         "reports": report_summary,
         "integral_consensus_mev_per_atom": middle[
-            "delta_f_wt_minus_pair_mev_per_atom"
+            "delta_f_target_minus_pair_mev_per_atom"
         ],
         "integral_discard_spread_mev_per_atom": integral_spread,
         "maximum_integral_discard_spread_mev_per_atom": (
