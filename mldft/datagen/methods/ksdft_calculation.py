@@ -43,7 +43,7 @@ from typing import Callable
 import numpy as np
 import scipy
 from omegaconf import DictConfig
-from pyscf import dft, gto, scf
+from pyscf import dft, gto, hessian, scf  # noqa: F401
 from pyscf.lib import logger, misc
 from pyscf.lib.diis import BLOCK_SIZE
 
@@ -212,6 +212,8 @@ def ksdft(
     density_fit_basis: str = "def2-universal-jfit",
     density_fit_threshold: int = 30,
     convergence_tolerance: float = 1e-9,
+    compute_forces: bool = False,
+    compute_hessian: bool = False,
     extra_callback: Callable = None,
     use_perturbation: bool = False,
     perturbation_cfg: DictConfig | None = None,
@@ -234,6 +236,8 @@ def ksdft(
         density_fit_threshold: The threshold for the number of atoms in the molecule to use density fitting.
         convergence_tolerance: The convergence tolerance after which the SCF iteration stops. An alternative value can
             be 1meV 0.0000367493, see Appendix C.2 in [M-OFDFT]_.
+        compute_forces: If True, compute PySCF nuclear forces at the same DFT level after SCF.
+        compute_hessian: If True, compute PySCF Hessian at the same DFT level after SCF. This is expensive.
         extra_callback: Additional callback function to be called after the original callback is called each iteration.
         use_perturbation: If True, the Fock matrix is perturbed each iteration.
         perturbation_cfg: Configuration for the perturbation of the Fock matrix.
@@ -314,6 +318,35 @@ def ksdft(
 
     if not mf.converged:
         raise ConvergenceError("The calculation did not converge.")
+
+    if compute_forces or compute_hessian:
+        derivatives = {
+            "dft_level": f"{xc_functional}/{mol.basis}",
+            "forces_enabled": compute_forces,
+            "hessian_enabled": compute_hessian,
+        }
+        derivative_errors = {}
+        if compute_forces:
+            try:
+                nuclear_gradient = mf.nuc_grad_method().kernel()
+                derivatives["nuclear_gradient"] = nuclear_gradient
+                derivatives["forces"] = -nuclear_gradient
+            except Exception as e:
+                logger.warn(mf, "Nuclear force calculation failed: %s", e)
+                derivative_errors["forces"] = repr(e)
+        if compute_hessian:
+            try:
+                hessian = mf.Hessian().kernel()
+                natoms = len(mol.atom_charges())
+                hessian_matrix = hessian.transpose(0, 2, 1, 3).reshape(3 * natoms, 3 * natoms)
+                derivatives["hessian"] = hessian
+                derivatives["hessian_matrix"] = hessian_matrix
+            except Exception as e:
+                logger.warn(mf, "Hessian calculation failed: %s", e)
+                derivative_errors["hessian"] = repr(e)
+        scf.chkfile.save(mf.chkfile, "Derivatives", derivatives)
+        if derivative_errors:
+            scf.chkfile.save(mf.chkfile, "DerivativeErrors", derivative_errors)
 
     res = {
         "converged": mf.converged,

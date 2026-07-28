@@ -9,6 +9,26 @@ from mldft.ml.data.components.basis_info import BasisInfo
 from mldft.ml.data.components.of_data import OFData
 
 
+def _safe_edge_lengths(pos: Tensor, edge_index: Tensor) -> Tensor:
+    """Compute edge lengths without taking second derivatives through self-loop norms.
+
+    ``torch.norm(0)`` has a finite first derivative in PyTorch but an undefined
+    second derivative that materializes as NaN. Full-edge molecular graphs include
+    self loops, so keep their distance as a constant zero and only evaluate the
+    norm on non-self edges.
+    """
+
+    pos_i = pos.index_select(0, edge_index[0])
+    pos_j = pos.index_select(0, edge_index[1])
+    dist = pos_i - pos_j
+    non_self = edge_index[0] != edge_index[1]
+
+    length = dist.new_zeros((dist.shape[0], 1))
+    if bool(non_self.any()):
+        length[non_self] = torch.norm(dist[non_self], dim=-1, keepdim=True)
+    return length
+
+
 class GBFModule(nn.Module):
     """Module to calculate the edge attributes based on gaussian basis functions and the distance
     between nodes."""
@@ -52,16 +72,7 @@ class GBFModule(nn.Module):
         """
         pos = sample.pos
         edge_index = sample.edge_index
-        # get the position of the atom i and j from the edge index
-        # i is the first row of the edge index and j is the second row
-        pos_i = pos.index_select(0, edge_index[0])
-        pos_j = pos.index_select(0, edge_index[1])
-
-        # calculate the distance vector between the atoms
-        dist = pos_i - pos_j
-
-        # calculate the norm of the distance vector
-        length = torch.norm(dist, dim=-1, keepdim=True)  # Shape E x 1
+        length = _safe_edge_lengths(pos, edge_index)
 
         squared_diff = torch.square(length - self.shift)
         squared_scale = torch.square(self.scale)
@@ -139,11 +150,6 @@ class GaussianLayer(nn.Module):
         pos = sample.pos
         edge_index = sample.edge_index
 
-        # get the position of the atom i and j from the edge index
-        # i is the first row of the edge index and j is the second row
-        pos_i = pos.index_select(0, edge_index[0])
-        pos_j = pos.index_select(0, edge_index[1])
-
         # same for atom types
         atom_i = sample.atom_ind.index_select(0, edge_index[0])
         atom_j = sample.atom_ind.index_select(0, edge_index[1])
@@ -154,7 +160,7 @@ class GaussianLayer(nn.Module):
             edge_types = torch.min(atom_i, atom_j) * self.n_types + torch.max(atom_i, atom_j)
 
         # calculate the edge lengths
-        x = torch.norm(pos_i - pos_j, dim=-1, keepdim=True)
+        x = _safe_edge_lengths(pos, edge_index)
         length = x.clone()
 
         mul = self.mul(edge_types)
@@ -164,7 +170,11 @@ class GaussianLayer(nn.Module):
         mean = self.means.weight.view(-1)
         std = self.stds.weight.view(-1).abs() + 1e-5
 
+        # Follow the model parameter dtype. An unconditional float32 distance cast makes
+        # float64 scalar-energy finite differences disagree with autograd below float32 spatial
+        # resolution, because autograd treats the cast as an identity in the backward pass.
+        x = x.to(dtype=mean.dtype)
         if self.normalized:
-            return gaussian(x.float(), mean, std).type_as(self.means.weight), length
+            return gaussian(x, mean, std).type_as(self.means.weight), length
         else:
-            return rbf(x.float(), mean, std).type_as(self.means.weight), length
+            return rbf(x, mean, std).type_as(self.means.weight), length

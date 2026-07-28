@@ -77,7 +77,14 @@ class GitInfo(AnyRunCallback):
             callback_logger.error("GitPython is not installed, aborting")
             return
 
-        repo = git.Repo(search_parent_directories=True)
+        try:
+            repo = git.Repo(search_parent_directories=True)
+        except Exception as exc:
+            callback_logger.warning(f"Git repository unavailable, skipping git logging: {exc}")
+            if self.clean:
+                callback_logger.error("Repo is unavailable and clean=True, aborting")
+                os._exit(1)
+            return
         sha = repo.head.object.hexsha
         is_dirty = repo.is_dirty(untracked_files=True)
         branch_name = repo.active_branch.name  # Get the branch name

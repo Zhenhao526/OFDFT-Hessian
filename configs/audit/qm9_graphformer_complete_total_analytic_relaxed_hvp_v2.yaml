@@ -1,0 +1,149 @@
+protocol_id: qm9_graphformer_complete_total_analytic_relaxed_hvp_v2
+frozen_at: 2026-07-24
+stage: graphformer_complete_total_analytic_relaxed_hvp_single_parent_audit
+validation_access_allowed: false
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_total(R,c;theta)=E_Graphformer_kin_plus_xc(R,c;theta)+E_H(R,c)
+    +E_ext(R,c)+E_nn(R).
+  total_relaxed_force: >-
+    F_theta(R)=-d E_total(R,c_star(R;theta);theta)/dR from the constrained
+    scalar Lagrangian at a density with projected gradient below 1e-8.
+  complete_total_relaxed_hvp: >-
+    H_theta v=L_RR v+L_Ry y_v, where the center density is strictly converged,
+    G_y y_v=-G_R v is solved without a detached/fixed-density fallback, and
+    PySCF integral second-directional derivatives are central differences of
+    complete first-derivative integral bundles. No displaced density is used.
+  parameter_backward: >-
+    The dense tangent solve uses an implicit adjoint. The stationary center
+    density uses a constrained implicit parameter VJP.
+  stochastic_training_loss: >-
+    One fresh unnormalized Rademacher probe v=B^T z in the complete 3N-6
+    orthonormal internal basis per step. Its squared HVP error is an unbiased
+    estimator of the internal-space Hessian Frobenius-squared error.
+  independent_force_or_hessian_head_allowed: false
+  proxy_or_silent_fallback_allowed: false
+  fixed_or_stale_density_hvp_allowed: false
+
+source:
+  name: original_A
+  run_name: qm9_hvp_curvature_v1_A_w0ep00_f1em02_seed314159_s1200
+  run_dir: /home/shenwei01/xzh_node02_20260724/artifacts/original_A/run
+  checkpoint: /home/shenwei01/xzh_node02_20260724/artifacts/original_A/last.ckpt
+  checkpoint_sha256: e6516b04917a9dfaae3c4d960b10d77c768f3e5e784f95290ff41c1202f9d9bc
+  require_no_complete_total_capacity_state: true
+  model_class: Graphformer
+
+parent_sets:
+  stable5:
+    source_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_relaxed_hvp/manifests/stable5_parent_manifest.json
+    source_manifest_sha256: 72ecaab022402fb59de405487e4259e33d3438691013c2fcb67ae2d3379d774e
+    molecule_ids: ["0028399", "0031108", "0132419", "0031012", "0121249"]
+
+directions:
+  source_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_relaxed_hvp/directions/stable5/manifest.json
+  source_manifest_sha256: 1d9d235719805b3bf298fe3baf783b1b17a262e352b4193388f0be4f9b65bd74
+  seed: 20260723
+  remove_translation_rotation: true
+  complete_internal_basis_required: true
+  orthonormality_max_abs: 1.0e-10
+  external_overlap_max_abs: 1.0e-10
+
+numerics:
+  dtype: float64
+  displacement_bohr: 1.0e-3
+  integral_derivative_step_bohr: 1.0e-4
+  integral_directional_second_step_bohr: 1.0e-4
+  density:
+    initialization: label_reference
+    stage1_adam_lr: 1.0e-3
+    stage1_max_cycles: 1000
+    stage1_threshold: 1.0e-2
+    fallback_adam_lr: 3.0e-4
+    fallback_max_cycles: 10000
+    fallback_threshold: 1.0e-5
+    lbfgs_refine: true
+    newton_refine: true
+    strict_projected_gradient_threshold: 1.0e-8
+  analytic_geometry_response:
+    required: true
+    solver: dense_direct_implicit_adjoint
+    damping: 0.0
+    residual_tolerance: 1.0e-8
+    displaced_density_optimization_allowed_for_audit_only: true
+    displaced_density_response_initialization: c0_plus_or_minus_h_cv
+  implicit_parameter_response:
+    required: true
+    tolerance: 3.0e-5
+    max_iterations: 2500
+    damping: 1.0e-8
+    diagonal_probes: 0
+    warm_start: true
+    failure_action: raise_without_fallback
+
+loss:
+  formula: >-
+    lambda_E*L_total_energy + lambda_F*L_total_relaxed_force
+    +lambda_rho*L_Euler + lambda_H*L_internal_Hutchinson_Frobenius
+  energy:
+    absolute_scale_hartree: 0.1
+  force:
+    absolute_relative_mix: 0.5
+    absolute_scale_hartree_per_bohr: 0.01
+    relative_rms_floor_hartree_per_bohr: 1.0e-3
+  density:
+    scale_hartree_per_density_coefficient: 1.0e-2
+  hvp:
+    absolute_relative_mix: 0.0
+    absolute_scale_hartree_per_bohr2: 0.1
+    relative_rms_floor_hartree_per_bohr2: 1.0e-2
+    norm: unbiased_internal_frobenius_squared
+  low_mode:
+    mode_count: 0
+    wrong_curvature_multiplier: 2.0
+  initial_weights:
+    lambda_E: 1.0
+    lambda_F: 1.0
+    lambda_rho: 0.1
+    lambda_H: 1.0
+    lambda_Q: 0.0
+    lambda_spec: 0.0
+
+verification:
+  molecule_id: "0028399"
+  direction_index: 0
+  analytic_vs_fresh_strict_fd_relative_l2_max: 1.0e-5
+  parameter_fd_steps: [1.0e-4, 3.0e-5, 1.0e-5]
+  parameter_gradient_best_relative_error_max: 0.05
+  full_basis_direction_count: 39
+  full_basis_asym_over_sym_max: 0.005
+  require_nonzero_parameter_gradient: true
+  require_all_finite: true
+  target_training_step_speedup_min: 10.0
+  maximum_training_step_seconds: 60.0
+
+stage1:
+  order: [single_direction_derivative_audit, one_parent_full_basis, one_step_timing]
+  optimization:
+    learning_rates: [1.0e-6, 3.0e-6]
+    max_steps: [1, 20, 200]
+    directions_per_step: 1
+    direction_repeat_steps: 1
+    density_parameter_response_predictor: true
+    gradient_clip_norm: 1.0
+  gate:
+    analytic_vs_fd_relative_l2_max: 1.0e-5
+    parameter_gradient_relative_error_max: 0.05
+    full_basis_relative_frobenius_nonregression: true
+    minimum_speedup: 10.0
+    maximum_step_seconds: 60.0
+  failure_action: evaluate_conservative_graph_curvature_corrector_only
+
+access:
+  node: node02
+  maximum_concurrent_gpu_tasks: 1
+  validation_accessed: false
+  test100_accessed: false

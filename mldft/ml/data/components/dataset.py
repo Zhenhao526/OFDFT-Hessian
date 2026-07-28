@@ -66,6 +66,7 @@ class OFDataset(Dataset):
         self.paths = paths
         self.basis_info = basis_info
         self.of_data_kwargs = of_data_kwargs
+        self.epoch = 0
         self.transforms = transforms
 
         # Find out how many samples (scf iterations) there are in total, and construct a list of indices that maps a
@@ -194,6 +195,12 @@ class OFDataset(Dataset):
         """Returns the number of samples in the dataset."""
         return self.n_samples
 
+    def set_epoch(self, epoch: int) -> None:
+        """Set the deterministic epoch used by multi-direction HVP sidecars."""
+        self.epoch = int(epoch)
+        if self.cache_in_memory and self.of_data_kwargs.get("load_hvp_label", False):
+            self.getitem.cache_clear()
+
     def __getitem__(self, item: int) -> OFData:
         """Returns the sample at the given index.
 
@@ -221,11 +228,14 @@ class OFDataset(Dataset):
             self.scf_iterations_per_path[geometry_idx][item - self.path_indices[geometry_idx]]
         )
 
+        of_data_kwargs = dict(self.of_data_kwargs)
+        if of_data_kwargs.get("load_hvp_label", False):
+            of_data_kwargs["hvp_direction_epoch"] = self.epoch
         sample = self.data_class.from_file(
             path=path,
             scf_iteration=scf_iteration,
             basis_info=self.basis_info,
-            **self.of_data_kwargs,
+            **of_data_kwargs,
         )
 
         if self.transforms is not None:

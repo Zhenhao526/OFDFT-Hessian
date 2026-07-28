@@ -28,7 +28,7 @@ import multiprocessing
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable
 
 import hydra
 from loguru import logger
@@ -77,11 +77,15 @@ def save_config(cfg: DictConfig, path: Path) -> None:
     path.chmod(0o770)
 
 
-def load_mol_or_iter(i: int, dataset: DataGenDataset, basis: str) -> gto.Mole | Iterable:
-    charges, position = dataset.load_charges_and_positions(i)
-    mol_or_iter = build_molecule_np(charges, position, basis=basis, unit="Angstrom")
-    mol_or_iter.verbose = 2
-    return mol_or_iter
+def load_molecule_sample(
+    i: int, dataset: DataGenDataset, basis: str, sample_id: int | None = None
+) -> gto.Mole:
+    charges, position, charge, spin = dataset.load_sample(i, sample_id)
+    mol = build_molecule_np(
+        charges, position, basis=basis, unit="Angstrom", charge=charge, spin=spin
+    )
+    mol.verbose = 2
+    return mol
 
 
 def run_ksdft_and_handle_exceptions(
@@ -94,6 +98,8 @@ def run_ksdft_and_handle_exceptions(
     density_fit_threshold: int | None,
     convergence_tolerance: float | None,
     output_file: Path,
+    compute_forces: bool = False,
+    compute_hessian: bool = False,
     use_perturbation: bool = False,
     perturbation_cfg: DictConfig | None = None,
 ):
@@ -109,6 +115,8 @@ def run_ksdft_and_handle_exceptions(
         density_fit_threshold: The threshold of number of atoms to enable density fitting.
         convergence_tolerance: The convergence tolerance for the Kohn-Sham iteration.
         output_file: Path to the output file.
+        compute_forces: Whether to compute same-level PySCF nuclear forces after SCF convergence.
+        compute_hessian: Whether to compute the same-level PySCF Hessian after SCF convergence.
         use_perturbation: Whether to use perturbation in the effective potential.
         perturbation_cfg: Settings for the perturbation.
     """
@@ -125,6 +133,8 @@ def run_ksdft_and_handle_exceptions(
                 density_fit_basis=density_fit_basis,
                 density_fit_threshold=density_fit_threshold,
                 convergence_tolerance=convergence_tolerance,
+                compute_forces=compute_forces,
+                compute_hessian=compute_hessian,
                 use_perturbation=use_perturbation,
                 perturbation_cfg=perturbation_cfg,
             )
@@ -160,19 +170,20 @@ def run_kohn_sham_geometry(
     density_fit_basis: str | None,
     density_fit_threshold: int | None,
     convergence_tolerance: float | None,
+    compute_forces: bool = False,
+    compute_hessian: bool = False,
     use_perturbation: bool = False,
     perturbation_cfg: DictConfig | None = None,
 ):
-    mol_or_iter = load_mol_or_iter(idx, dataset, basis)
-    mol_iterable = isinstance(mol_or_iter, Iterable)
-    molecules = enumerate(mol_or_iter, start=1) if mol_iterable else [(1, mol_or_iter)]
-    for sample_id, mol in molecules:
-        if mol_iterable:
-            output_file = output_dir / f"{filename}_{idx:07}.{sample_id:07}.chk"
-        else:
-            output_file = output_dir / f"{filename}_{idx:07}.chk"
+    for sample_id in dataset.get_sample_ids(idx):
+        mol = load_molecule_sample(idx, dataset, basis, sample_id)
+        output_file = dataset.get_chk_file_from_id(idx, sample_id)
+        if output_file.exists():
+            logger.info(f"Skipping existing Kohn-Sham file {output_file}.")
+            continue
         logger.info(
-            f"Computing molecule {idx} {mole_to_sum_formula(mol, True)} with "
+            f"Computing molecule {idx}, sample {sample_id} "
+            f"{mole_to_sum_formula(mol, True)} with "
             f"{len(mol.atom_charges())} atoms."
         )
         run_ksdft_and_handle_exceptions(
@@ -185,6 +196,8 @@ def run_kohn_sham_geometry(
             density_fit_threshold,
             convergence_tolerance,
             output_file,
+            compute_forces,
+            compute_hessian,
             use_perturbation,
             perturbation_cfg,
         )
@@ -269,6 +282,8 @@ def compute_kohn_sham_dataset(cfg: DictConfig) -> None:
                 density_fit_basis=cfg.kohn_sham.density_fit_basis,
                 density_fit_threshold=cfg.kohn_sham.density_fit_threshold,
                 convergence_tolerance=cfg.kohn_sham.convergence_tolerance,
+                compute_forces=cfg.kohn_sham.compute_forces,
+                compute_hessian=cfg.kohn_sham.compute_hessian,
                 use_perturbation=cfg.kohn_sham.use_perturbation,
                 perturbation_cfg=cfg.kohn_sham.perturbation_cfg,
             )
@@ -291,6 +306,8 @@ def compute_kohn_sham_dataset(cfg: DictConfig) -> None:
                 cfg.kohn_sham.density_fit_basis,
                 cfg.kohn_sham.density_fit_threshold,
                 cfg.kohn_sham.convergence_tolerance,
+                cfg.kohn_sham.compute_forces,
+                cfg.kohn_sham.compute_hessian,
                 cfg.kohn_sham.use_perturbation,
                 cfg.kohn_sham.perturbation_cfg,
             )

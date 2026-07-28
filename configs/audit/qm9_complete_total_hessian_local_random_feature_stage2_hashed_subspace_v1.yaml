@@ -1,0 +1,52 @@
+protocol_id: qm9_complete_total_hessian_local_random_feature_stage2_hashed_subspace_v1
+frozen_at: 2026-07-23
+scope: train20_label_independent_hashed_scalar_subspace_diagnostic
+promotion_allowed: false
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+source:
+  stage2_protocol: configs/audit/qm9_complete_total_hessian_local_random_feature_stage2_v10.yaml
+  stage2_protocol_sha256: f2809b41ce3e5d37b9d34bd5a7a297001132db0dfdd5a32497c3dfb0d8b833dd
+  baseline_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/direction_fit_v1/summary.json
+  baseline_summary_sha256: 385936bc64dee020656e3f85625bc7a0347bf5831cc3250b97e3123b424fe073
+  full20_capacity_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/full_hessian_capacity_v1/summary.json
+  full20_capacity_summary_sha256: aa5fb1e462e20bf278ee01c0625011461e8a3acbd587c06bba1a5bdb13957cf0
+  feature_jet_dir: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/feature_jets_v1
+
+subspace:
+  definition: label_independent_multi_hash_countsketch_of_scalar_features
+  seed: 20260729
+  repetitions: 2
+  dimensions:
+    - 1024
+    - 2048
+    - 4096
+    - 8192
+    - 12288
+    - 16384
+  projection_column_chunk_size: 128
+
+fixed_fit:
+  train_direction_count: 17
+  heldout_direction_count: 7
+  ridge: 1.0e-8
+  full_random_feature_width_per_scale: 512
+  energy_force_replay_source: frozen_EGF_source_plus_train20_residual_constraints
+
+gates:
+  train_hvp_all_parent_max: 0.05
+  heldout_hvp_median_max: 0.15
+  heldout_hvp_p90_max: 0.20
+  full_hessian_median_max: 0.15
+  full_hessian_p90_max: 0.20
+  full_hessian_fraction_below_0p15_min: 0.80
+  energy_median_ratio_max: 1.05
+  force_median_ratio_max: 1.05
+
+interpretation: >-
+  The mapping is frozen from feature indices and a seed before any target is read. It constrains
+  all corrections to one low-dimensional coefficient subspace of the same scalar energy. This is
+  a one-shot diagnostic on the already-used held directions, so no arm may be promoted directly.
+  Any apparent pass must recover stable5 capacity and pass a newly frozen direction split.
+

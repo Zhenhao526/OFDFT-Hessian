@@ -1,0 +1,38 @@
+protocol_id: qm9_complete_total_hessian_local_random_feature_stage2_direction_coverage_v1
+frozen_at: 2026-07-22
+scope: train20_direction_coverage_diagnostic_only
+promotion_allowed: false
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+source:
+  stage2_protocol: configs/audit/qm9_complete_total_hessian_local_random_feature_stage2_v10.yaml
+  stage2_protocol_sha256: f2809b41ce3e5d37b9d34bd5a7a297001132db0dfdd5a32497c3dfb0d8b833dd
+  baseline_train_direction_count: 17
+  frozen_heldout_direction_count: 7
+  baseline_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/direction_fit_v1/summary.json
+  baseline_summary_sha256: 385936bc64dee020656e3f85625bc7a0347bf5831cc3250b97e3123b424fe073
+  feature_jet_dir: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/feature_jets_v1
+
+direction_extension:
+  seed: 20260728
+  generator: geometry_only_random_internal_two_pass_mgs
+  preserve_original_heldout: true
+  targets:
+    - train24
+    - train32
+    - maximal_train_complement
+
+fixed_model:
+  random_width_per_scale: 512
+  ridge: 1.0e-8
+
+interpretation:
+  selection_metric: heldout_hvp_relative_frobenius.median
+  rule: >-
+    Added directions are generated only from geometry, the rigid-mode projector, a frozen seed,
+    and orthogonalization against the original bank. PBE Hessian values do not select them. The
+    original seven held directions remain untouched. This path diagnoses whether 17 directions
+    underconstrain the internal curvature subspace. No arm is promotable without a newly frozen
+    direction confirmation and stable5 revalidation.
+

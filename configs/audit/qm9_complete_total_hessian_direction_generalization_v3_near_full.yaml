@@ -1,0 +1,109 @@
+protocol_id: qm9_complete_total_hessian_direction_generalization_v3_near_full
+frozen_at: 2026-07-21
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_total(R,c;theta) = E_model_kin_plus_xc(R,c;theta) + E_H(R,c)
+    + E_ext(R,c) + E_nn(R)
+  total_relaxed_force: F = -d E_total(R,c_star(R;theta);theta) / dR
+  complete_total_relaxed_hvp: H v from the same strictly relaxed scalar-derived force
+  independent_force_head_allowed: false
+
+data:
+  source_dataset: QM9PBEForceRandom1000
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  sample_id: 0
+  pbe_reference: analytic_PBE_energy_force_hessian
+  parent_grouping_required: true
+  require_parent_stable: true
+  require_all_stability_directions: false
+  candidate_order: ascending_natoms_then_molecule_id
+  final_parent_count: 20
+  numerical_gate:
+    baseline_asym_over_pbe_frobenius_max: 0.005
+    strict_density_gradient_max: 1.0e-8
+  selection_rule: >-
+    Reuse the v1 first-20 numerical parent selection without inspecting fitted accuracy. Generate
+    a new near-full direction bank before fitting and keep at least one held-out direction per
+    populated direction kind immutable.
+  coverage_ladder_audit:
+    v1_median_train_fraction: 0.37777777777777777
+    v1_median_unidentified_qhq_relative_frobenius: 0.6855224358908268
+    v2_median_train_fraction: 0.7692307692307693
+    v2_median_unidentified_qhq_relative_frobenius: 0.41629998990170736
+    motivation: >-
+      A separate full-Hessian oracle reaches 14.2% median and 23.7% max by step 1400, while sparse
+      and dense partial-direction runs retain much larger unseen-direction errors. V3 isolates
+      whether near-complete directional coverage closes this supervision gap.
+  known_complete_baseline_failures:
+    - {molecule_id: "0043438", baseline_asym_over_pbe: 0.011547}
+    - {molecule_id: "0050129", baseline_asym_over_pbe: 0.0367777179}
+    - {molecule_id: "0033410", baseline_asym_over_pbe: 0.0386765866}
+  parent_candidates:
+    - {molecule_id: "0043438", natoms: 12}
+    - {molecule_id: "0016298", natoms: 15}
+    - {molecule_id: "0028399", natoms: 15}
+    - {molecule_id: "0050129", natoms: 15}
+    - {molecule_id: "0064547", natoms: 15}
+    - {molecule_id: "0124009", natoms: 15}
+    - {molecule_id: "0132608", natoms: 15}
+    - {molecule_id: "0016142", natoms: 16}
+    - {molecule_id: "0031108", natoms: 16}
+    - {molecule_id: "0061724", natoms: 16}
+    - {molecule_id: "0096630", natoms: 16}
+    - {molecule_id: "0132419", natoms: 16}
+    - {molecule_id: "0024609", natoms: 17}
+    - {molecule_id: "0049017", natoms: 17}
+    - {molecule_id: "0052472", natoms: 17}
+    - {molecule_id: "0057862", natoms: 17}
+    - {molecule_id: "0082761", natoms: 17}
+    - {molecule_id: "0015047", natoms: 18}
+    - {molecule_id: "0031012", natoms: 18}
+    - {molecule_id: "0038511", natoms: 18}
+    - {molecule_id: "0057270", natoms: 18}
+    - {molecule_id: "0091176", natoms: 18}
+    - {molecule_id: "0123863", natoms: 18}
+    - {molecule_id: "0033410", natoms: 19}
+    - {molecule_id: "0091752", natoms: 19}
+    - {molecule_id: "0083824", natoms: 20}
+    - {molecule_id: "0036972", natoms: 21}
+    - {molecule_id: "0053662", natoms: 21}
+    - {molecule_id: "0070824", natoms: 21}
+    - {molecule_id: "0121249", natoms: 21}
+    - {molecule_id: "0080472", natoms: 22}
+
+directions:
+  seed: 20260722
+  maximum_per_parent: 64
+  heldout_fraction: 0.1
+  structured_per_kind: 12
+  minimum_random_fraction: 0.2
+  kinds: [bond, angle, torsion, low_mode, random_internal]
+  remove_translation_rotation: true
+  split_before_model_fit: true
+  dynamic_training_resampling: true
+
+loss:
+  low_mode: {mode_count: 6, wrong_curvature_multiplier: 2.0}
+  initial_weights:
+    lambda_E: 1.0
+    lambda_F: 1.0
+    lambda_rho: 0.1
+    lambda_H: 10.0
+    lambda_Q: 0.0
+    lambda_spec: 0.1
+
+stage1:
+  gate:
+    training_all_parent_relative_frobenius_max: 0.05
+    antisymmetric_over_symmetric_fro_max: 0.005
+
+stage2_gates:
+  training_direction_relative_error_max: 0.05
+  heldout_direction_relative_error_max: 0.15
+  full_hessian_median_relative_frobenius_max: 0.15
+  preferred_full_hessian_median_relative_frobenius_max: 0.10
+  energy_force_must_not_significantly_degrade: true
+  test100_accessed: false

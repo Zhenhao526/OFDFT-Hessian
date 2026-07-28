@@ -1,5 +1,6 @@
 """Definition of the :class:`OFData` class, whose instances are the inputs to the model."""
 
+import hashlib
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,7 @@ class OFData(Data):
         ground_state_coeffs: np.ndarray = None,
         gradient_label: np.ndarray = None,
         energy_label: list[float] | np.ndarray = None,
+        force_label: np.ndarray = None,
         has_energy_label: bool = None,
         dual_basis_integrals: np.ndarray | str = None,
         add_irreps: bool = False,
@@ -137,6 +139,7 @@ class OFData(Data):
             ground_state_coeffs: Ground-state density coefficients in the linear OF Ansatz. Shape (n_basis,). Optional.
             gradient_label: Gradient of the (by default) kinetic energy w.r.t. the coefficients. Shape (n_basis,). Optional.
             energy_label: Total energy of the molecule. Optional.
+            force_label: Nuclear force label. Shape (n_atom, 3). Optional.
             has_energy_label: Whether the energy label is present. (False for data from the initialisation.) Optional.
             dual_basis_integrals: Dual basis integrals, required to compute the projected gradient. If set to `infer_from_basis`, it will be computed from the basis and be in the untransformed basis.
             add_irreps: Whether to add the irreps of the basis functions per atom to the sample.
@@ -170,6 +173,12 @@ class OFData(Data):
         if energy_label is not None:
             energy_label = np.asarray(energy_label)
             assert energy_label.shape == (1,)
+        if force_label is not None:
+            force_label = np.asarray(force_label)
+            assert force_label.shape == (
+                n_atom,
+                3,
+            ), f"force_label must have shape ({n_atom}, 3), but has shape {force_label.shape}"
         if has_energy_label is not None:
             has_energy_label = np.asarray(has_energy_label)
             assert has_energy_label.shape == (1,)
@@ -221,6 +230,7 @@ class OFData(Data):
             "ground_state_coeffs": Representation.VECTOR,
             "gradient_label": Representation.GRADIENT,
             "energy_label": Representation.SCALAR,
+            "force_label": Representation.NONE,
             "has_energy_label": Representation.NONE,
             "atom_ind": Representation.NONE,
             "n_basis_per_atom": Representation.NONE,
@@ -243,6 +253,7 @@ class OFData(Data):
             ground_state_coeffs=ground_state_coeffs,
             gradient_label=gradient_label,
             energy_label=energy_label,
+            force_label=force_label,
             has_energy_label=has_energy_label,
             atom_ind=atom_ind,
             n_basis_per_atom=n_basis_per_atom,
@@ -305,6 +316,16 @@ class OFData(Data):
         additional_keys_at_scf_iteration: dict[str, Representation] = None,
         additional_keys_at_ground_state: dict[str, Representation] = None,
         additional_keys_per_geometry: dict[str, Representation] = None,
+        load_force_label: bool = False,
+        force_key: str = "metadata/pbe_derivatives/forces",
+        load_pair_metadata: bool = False,
+        load_hvp_label: bool = False,
+        hvp_label_dir: str | Path | None = None,
+        hvp_reference_scale_floor: float = 1e-8,
+        hvp_direction_epoch: int = 0,
+        hvp_direction_seed: int = 0,
+        hvp_direction_index: int | None = None,
+        hvp_target_key: str = "model_hvp_target",
     ) -> "OFData":
         """Load a sample from the DFT data set.
 
@@ -323,6 +344,20 @@ class OFData(Data):
                 i.e. the ground state. Optional.
             additional_keys_per_geometry: List of additional keys to load from the zarr group.
                 The arrays corresponding to these keys will not be indexed. Optional.
+            load_force_label: Whether to load a per-geometry nuclear force label.
+            force_key: Zarr key containing the force label. Defaults to the PBE force label
+                written by the QM9 force datagen path.
+            load_pair_metadata: Load parent molecule, geometry sample, pair id, and pair sign from
+                ``metadata/reference`` using batch-safe field names.
+            load_hvp_label: Load an optional per-geometry directional-Hessian sidecar. Every
+                sample receives shape-compatible tensors; samples without a sidecar have a false
+                mask and zero vectors so PyG batching remains deterministic.
+            hvp_label_dir: Directory containing ``<parent>.<sample_id:07d>.npz`` sidecars.
+            hvp_reference_scale_floor: Lower bound applied to the stored reference RMS scale.
+            hvp_direction_epoch: Epoch used for deterministic multi-direction resampling.
+            hvp_direction_seed: Seed used for deterministic multi-direction resampling.
+            hvp_direction_index: Optional fixed direction index, primarily for audits.
+            hvp_target_key: Sidecar array used as the trainable HVP target.
 
         Returns:
             sample: pytorch geometric data object. It has the following fields:
@@ -388,6 +423,186 @@ class OFData(Data):
         else:
             has_energy_label = [root["ks_labels"]["energies"]["has_energy_label"][scf_iteration]]
 
+        force_label = None
+        if load_force_label:
+            force_label = root[force_key][()]
+
+        if load_pair_metadata:
+            if "metadata/reference" not in root:
+                raise KeyError(f"Pair metadata requested but missing from {path}")
+            reference = root["metadata/reference"]
+            def reference_value(key: str, default):
+                return reference[key][()] if key in reference else default
+
+            metadata_fields = {
+                "source_molecule_id": int(reference["source_molecule_id"][()]),
+                "geometry_sample_id": int(reference["sample_id"][()]),
+                "paired_perturbations": bool(
+                    reference_value("paired_perturbations", False)
+                ),
+                "perturbation_pair_id": int(
+                    reference_value("perturbation_pair_id", -1)
+                ),
+                "perturbation_pair_sign": int(
+                    reference_value("perturbation_pair_sign", 0)
+                ),
+            }
+            additional_keys.update(metadata_fields)
+            additional_key_representations.update(
+                {key: Representation.NONE for key in metadata_fields}
+            )
+
+        if load_hvp_label:
+            if hvp_label_dir is None:
+                raise ValueError("load_hvp_label=True requires hvp_label_dir")
+            if hvp_reference_scale_floor <= 0:
+                raise ValueError("hvp_reference_scale_floor must be positive")
+            reference = root.get("metadata/reference")
+            if reference is not None and "source_molecule_id" in reference:
+                source_molecule_id = int(reference["source_molecule_id"][()])
+                geometry_sample_id = int(reference["sample_id"][()])
+            else:
+                name_parts = Path(path).name.removesuffix(".zarr.zip").split(".")
+                source_molecule_id = int(name_parts[0])
+                geometry_sample_id = int(name_parts[1])
+            sidecar = (
+                Path(hvp_label_dir)
+                / f"{source_molecule_id:07d}.{geometry_sample_id:07d}.npz"
+            )
+            n_atoms = int(geometry["atomic_numbers"].shape[0])
+            hvp_direction = np.zeros((n_atoms, 3), dtype=np.float64)
+            hvp_label = np.zeros((n_atoms, 3), dtype=np.float64)
+            hvp_complete_total_reference = np.zeros((n_atoms, 3), dtype=np.float64)
+            hvp_fixed_density_correction = np.zeros((n_atoms, 3), dtype=np.float64)
+            hvp_label_mask = np.asarray([False], dtype=np.bool_)
+            hvp_direction_norm = np.asarray([1.0], dtype=np.float64)
+            hvp_reference_scale = np.asarray(
+                [hvp_reference_scale_floor], dtype=np.float64
+            )
+            hvp_direction_kind = np.asarray([-1], dtype=np.int64)
+            hvp_selected_direction_index = np.asarray([-1], dtype=np.int64)
+            if sidecar.exists():
+                payload = np.load(sidecar)
+                required = {
+                    "direction",
+                    hvp_target_key,
+                    "complete_total_reference_hvp",
+                    "fixed_density_correction_hvp",
+                }
+                missing = sorted(required.difference(payload.files))
+                if missing:
+                    raise KeyError(f"HVP sidecar {sidecar} is missing {missing}")
+                arrays = {
+                    "direction": np.asarray(payload["direction"], dtype=np.float64),
+                    "model_hvp_target": np.asarray(
+                        payload[hvp_target_key], dtype=np.float64
+                    ),
+                    "complete_total_reference_hvp": np.asarray(
+                        payload["complete_total_reference_hvp"], dtype=np.float64
+                    ),
+                    "fixed_density_correction_hvp": np.asarray(
+                        payload["fixed_density_correction_hvp"], dtype=np.float64
+                    ),
+                }
+                expected_shape = (n_atoms, 3)
+                direction_count = None
+                for key, value in arrays.items():
+                    if value.ndim == 2:
+                        value = value[None, ...]
+                        arrays[key] = value
+                    if value.ndim != 3 or tuple(value.shape[1:]) != expected_shape:
+                        raise ValueError(
+                            f"{key} in {sidecar} has shape {value.shape}, expected "
+                            f"{expected_shape} or (K, {n_atoms}, 3)"
+                        )
+                    if not np.isfinite(value).all():
+                        raise ValueError(f"{key} in {sidecar} contains NaN/Inf")
+                    if direction_count is None:
+                        direction_count = value.shape[0]
+                    elif value.shape[0] != direction_count:
+                        raise ValueError(f"Direction count mismatch in {sidecar}")
+                stability_mask = np.asarray(
+                    payload.get("stability_mask", np.ones(direction_count, dtype=np.bool_)),
+                    dtype=np.bool_,
+                ).reshape(-1)
+                if stability_mask.size != direction_count:
+                    raise ValueError(f"stability_mask in {sidecar} has wrong length")
+                available = np.flatnonzero(stability_mask)
+                if hvp_direction_index is not None:
+                    selected = int(hvp_direction_index)
+                    if selected < 0 or selected >= direction_count:
+                        raise IndexError(
+                            f"hvp_direction_index={selected} outside [0, {direction_count})"
+                        )
+                    if not bool(stability_mask[selected]):
+                        raise ValueError(
+                            f"Requested unstable direction {selected} from {sidecar}"
+                        )
+                elif available.size:
+                    selector = hashlib.sha256(
+                        (
+                            f"{source_molecule_id:07d}:{geometry_sample_id:07d}:"
+                            f"{int(hvp_direction_seed)}:{int(hvp_direction_epoch)}"
+                        ).encode()
+                    ).digest()
+                    selected = int(
+                        available[int.from_bytes(selector[:8], "little") % available.size]
+                    )
+                else:
+                    selected = -1
+                if selected >= 0:
+                    hvp_direction = arrays["direction"][selected]
+                    hvp_label = arrays["model_hvp_target"][selected]
+                    hvp_complete_total_reference = arrays[
+                        "complete_total_reference_hvp"
+                    ][selected]
+                    hvp_fixed_density_correction = arrays[
+                        "fixed_density_correction_hvp"
+                    ][selected]
+                else:
+                    hvp_direction = np.zeros(expected_shape, dtype=np.float64)
+                    hvp_label = np.zeros(expected_shape, dtype=np.float64)
+                    hvp_complete_total_reference = np.zeros(
+                        expected_shape, dtype=np.float64
+                    )
+                    hvp_fixed_density_correction = np.zeros(
+                        expected_shape, dtype=np.float64
+                    )
+                direction_norm = float(np.linalg.norm(hvp_direction))
+                if selected >= 0 and not direction_norm > 0:
+                    raise ValueError(f"HVP direction in {sidecar} has zero norm")
+                reference_rms = float(
+                    np.sqrt(np.mean(hvp_complete_total_reference**2))
+                )
+                if selected >= 0:
+                    hvp_label_mask[0] = True
+                    hvp_direction_norm[0] = direction_norm
+                    hvp_reference_scale[0] = max(
+                        reference_rms, float(hvp_reference_scale_floor)
+                    )
+                    kind_codes = np.asarray(
+                        payload.get("direction_kind_code", -1), dtype=np.int64
+                    ).reshape(-1)
+                    hvp_direction_kind[0] = int(
+                        kind_codes[0] if kind_codes.size == 1 else kind_codes[selected]
+                    )
+                    hvp_selected_direction_index[0] = selected
+            hvp_fields = {
+                "hvp_direction": hvp_direction,
+                "hvp_label": hvp_label,
+                "hvp_complete_total_reference": hvp_complete_total_reference,
+                "hvp_fixed_density_correction": hvp_fixed_density_correction,
+                "hvp_label_mask": hvp_label_mask,
+                "hvp_direction_norm": hvp_direction_norm,
+                "hvp_reference_scale": hvp_reference_scale,
+                "hvp_direction_kind": hvp_direction_kind,
+                "hvp_selected_direction_index": hvp_selected_direction_index,
+            }
+            additional_keys.update(hvp_fields)
+            additional_key_representations.update(
+                {key: Representation.NONE for key in hvp_fields}
+            )
+
         result = cls.construct_new(
             basis_info=basis_info,
             add_irreps=add_irreps,
@@ -399,6 +614,7 @@ class OFData(Data):
             ground_state_coeffs=of_labels["spatial"]["coeffs"][-1],
             gradient_label=of_labels["spatial"][gradient_key][scf_iteration],
             energy_label=[of_labels["energies"][energy_key][scf_iteration]],
+            force_label=force_label,
             has_energy_label=has_energy_label,
             dual_basis_integrals=dual_basis_integrals,
             additional_representations=additional_key_representations,

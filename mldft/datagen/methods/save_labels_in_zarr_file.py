@@ -51,6 +51,11 @@ def save_density_fitted_data(
             dtype=np.uint8,
             **dataset_kwargs,
         )
+        geometry.create_dataset("charge", data=mol_with_density_basis.charge, **dataset_kwargs)
+        geometry.create_dataset("spin", data=mol_with_density_basis.spin, **dataset_kwargs)
+        geometry.create_dataset(
+            "multiplicity", data=mol_with_density_basis.spin + 1, **dataset_kwargs
+        )
 
         of_labels = root.create_group("of_labels")
         of_labels.create_dataset("n_scf_steps", data=n_scf_steps, **dataset_kwargs)

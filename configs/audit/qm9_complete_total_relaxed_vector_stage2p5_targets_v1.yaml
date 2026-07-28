@@ -1,0 +1,63 @@
+protocol_id: qm9_complete_total_relaxed_vector_stage2p5_targets_v1
+frozen_at: 2026-07-23
+stage: train20_complete_total_relaxed_vector_target_materialization
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definition:
+  source: >-
+    Complete-total density-relaxed EGF epoch-9 scalar energy. Base force is
+    -dE/dR and source HVP is the finite difference of that same scalar-derived
+    total force after strict density relaxation.
+  reference: analytic PBE total energy, force, and H v.
+  correction: >-
+    One scalar local correction supplies value, force=-dE/dR, and HVP. There
+    is no independent force, HVP, or Hessian head.
+
+inputs:
+  selection_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_relaxed_vector_stage2p5_split_v1.yaml
+  selection_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_vector_train20_v1/selection/manifest.json
+  selection_manifest_sha256: 8585e4e6cdf56187598d4906d1459beb9e284a1a94d37cc310655405d1221d69
+  selection_protocol_sha256: 03e3a853a62b76994a492133d64d5aa9499befba75a878d2db3980fac7be2fa0
+  source_base_tasks: /scratch/xzh/models/complete_total_capacity/20260717/stage6_relaxed_vector_train20_v1/selection/source_base_tasks.csv
+  source_base_tasks_sha256: 4f3881b8df23731b2711021ec99787eada5d7738db8bf94839eed2cd7cab62cb
+  direction_stability_csv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/analysis/direction_stability.csv
+  direction_stability_csv_sha256: abd9028ad93056e870c9f95319148dea0917742cf76b31f21bbc9ff583093128
+  tasks_tsv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/train100_tasks.tsv
+  tasks_tsv_sha256: bc658ab5594f30f4dc9a92080d1f64f9ef61f80477de9afa9a6b34897113dacd
+  task_root: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/train100_tasks
+  source_checkpoint: /scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203/checkpoints/epoch_009.ckpt
+  source_checkpoint_sha256: 722afe50e15455fea4d516128cdf4036f5982b76fbb5e71b5a183c650d5f1f96
+  raw_task_run: >-
+    Baseline=/scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203=/scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203/checkpoints/epoch_009.ckpt
+  source_base_run: >-
+    vector_source=/scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203=/scratch/xzh/models/train/runs/qm9_random1000_egf_forcew1p0_e10_20260714_202203/checkpoints/epoch_009.ckpt
+
+inventory:
+  parent_count: 20
+  train_direction_count: 44
+  heldout_direction_count: 20
+  branch_count_per_direction: 3
+
+vector_gate:
+  branches: [sad_continuation, label_continuation, sad_independent]
+  selected_step_bohr: 1.0e-5
+  vector_norm_floor_hartree_per_bohr2: 0.1
+  maximum_source_branch_relative_spread: 0.05
+  maximum_pbe_branch_relative_spread: 1.0e-10
+  maximum_direction_mismatch: 1.0e-10
+  maximum_direction_norm_error: 1.0e-10
+
+source_base:
+  initialization: label_reference
+  optimizer_stage1: {name: Adam, lr: 1.0e-3, max_cycle: 1000, threshold: 1.0e-2}
+  optimizer_stage2: {name: Adam, lr: 3.0e-4, max_cycle: 10000, threshold: 1.0e-5}
+  lbfgs_threshold: 1.0e-8
+  newton_threshold: 1.0e-8
+  strict_threshold: 1.0e-8
+
+authorization:
+  formal_stage3: false
+  replacement_labels: false
+  validation: false
+  test100: false

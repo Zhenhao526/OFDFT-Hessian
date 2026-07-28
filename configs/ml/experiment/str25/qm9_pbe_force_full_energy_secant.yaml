@@ -1,0 +1,60 @@
+# @package _global_
+
+defaults:
+  - str25/default
+  - override /data: qm9_pbe_force_full
+  - override /model/loss_function: l1_energy_secant
+  - override /trainer: ddp_8xa100
+  - override /callbacks: qm9_full_scale
+  - override /logger: tensorboard
+
+tags:
+  ["qm9", "parent_grouped", "energy_secant", "kin_plus_xc", "conservative", "graphformer"]
+
+model:
+  force_supervision: false
+  profile_timing: true
+  logging_mixin_interval: null
+  metric_interval: 0
+  validation_loss_function:
+    _target_: mldft.ml.models.components.loss_function.WeightedLoss
+    energy_loss:
+      weight: 0.2
+      loss:
+        _target_: mldft.ml.models.components.loss_function.EnergyLoss
+        loss_function:
+          _target_: torch.nn.L1Loss
+          reduction: none
+        sample_weigher:
+          _target_: mldft.ml.models.components.sample_weighers.HasEnergyLabelSampleWeigher
+    gradient_loss:
+      weight: 0.8
+      loss:
+        _target_: mldft.ml.models.components.loss_function.EnergyGradientLoss
+        loss_function:
+          _target_: torch.nn.L1Loss
+          reduction: none
+        sample_weigher:
+          _target_: mldft.ml.models.components.sample_weighers.HasEnergyLabelSampleWeigher
+
+trainer:
+  max_epochs: 10
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  accumulate_grad_batches: 1
+  use_distributed_sampler: false
+
+data:
+  datamodule:
+    batch_size: 4
+    num_workers: 8
+    pin_memory: true
+    shuffle_train: true
+    shuffle_val: false
+    pair_grouped_train_batches: true
+    pair_batch_seed: 1729
+    pair_source_markers: ["QM9PBEForceRandom1000PairedTrain"]
+    infer_pair_metadata_from_filename: true
+    dataset_kwargs:
+      load_force_label: false
+      load_pair_metadata: true

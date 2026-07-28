@@ -1,0 +1,72 @@
+protocol_id: qm9_complete_total_hessian_unseen_parent_shared_operator_v1
+frozen_at: "2026-07-21T23:30:48+08:00"
+amended_at: "2026-07-21T23:41:35+08:00"
+amendment: >-
+  Before any shared-operator validation Hessian was read, add one matched
+  replay-aware source arm because the formal objective requires train800 E/F replay.
+  Both arms use fixed Stage2-v5 directions and identical operator settings.
+amendment_2_at: "2026-07-21T23:50:42+08:00"
+amendment_2: >-
+  Before any shared-operator validation Hessian was read, bind median and P90
+  validation energy/force regression gates to at most 5% versus original-A.
+
+scope:
+  source: QM9PBEForceRandom1000
+  validation_parent_ids:
+    - "0000751"
+    - "0023317"
+    - "0027926"
+    - "0039447"
+    - "0056113"
+    - "0131469"
+    - "0132890"
+  validation_parent_count: 7
+  test100_accessed: false
+  test100_evaluations_used: 0
+
+frozen_inputs:
+  validation_baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/validation_baselines_v1_uniform_A/validation_baseline_manifest.json
+  validation_baseline_manifest_sha256: b1937e31c13e9906b94e8bdf1516e988adad974fc70dc34eb5292eeae108772d
+  h512_source_checkpoint: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/robust_floor1_no_replay_h512_h1_seed20260720_s30000/best.ckpt
+  h512_source_checkpoint_sha256: cc76dcee62dfc826d1a0d79995abf7a07659ce2f6fc49b2a0e207e1f9f6d7ecc
+  active_feature_schema: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/active_feature_schema_train800_union_floor1_v1/active_feature_schema_manifest.json
+  active_feature_schema_sha256: 5f0c58413d0437e4613b7526efda1f6ea0ad80ff668f974a25f1611ad715093b
+  stage2_candidate_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/spectral_block_parent_conditioned_symmetric_completion_v5_v1/summary.json
+  stage2_candidate_summary_sha256: 4539a2b45b0050ff7674c7b0e2a67aff6d48646a40d8f9adf188a74bfac26217
+  shared_coefficients: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/spectral_block_parent_conditioned_symmetric_completion_v5_v1/coefficients.npz
+  shared_coefficients_sha256: a7b62e5c5d3916d69fb2f49b638255e0b5b9f7e0c358b09888c4bf7fe755ae19
+  replay_source_checkpoint: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/robust_replay_train_h1_seed20260720_s5000_to_s30000/best.ckpt
+  replay_source_checkpoint_sha256: 83ac62943deb4fbc05cbe01428222c68a8b213c0c1f50df5eb9648e7e75b9b79
+  replay_source_candidate_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/spectral_block_parent_conditioned_symmetric_completion_replay_source_v5_v1/summary.json
+  replay_source_candidate_summary_sha256: ae68b0463720b7ea0dd64fe96a11c28179b9cbc0fcb9219dc035cc3ef8a4bc73
+  replay_source_shared_coefficients: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/spectral_block_parent_conditioned_symmetric_completion_replay_source_v5_v1/coefficients.npz
+  replay_source_shared_coefficients_sha256: 690a93f0e111364c217fd3bfd8964d09c3b9a9f88278e0ee5762ef7dd8ec9d82
+
+evaluation:
+  definition: >-
+    Apply only the frozen chemistry-conditioned spectral and equivariant atom-block
+    operator coefficients to unseen parents. The reference-anchored scalar quadratic
+    preserves source energy and force at R0 and supplies the Hessian correction.
+  exact_parent_hvp_interpolant_allowed: false
+  per_parent_fitting_allowed: false
+  validation_hvp_labels_allowed: false
+  polynomial_degree: 5
+  rbf_centers: [-0.25, 0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 4.5]
+  rbf_width: 0.5
+  parent_feature_normalization: frozen_from_stage2_candidate
+
+gates:
+  hessian_median_relative_frobenius_max: 0.10
+  hessian_fraction_at_or_below_0_15_min: 0.80
+  hessian_p90_relative_frobenius_max: 0.20
+  asym_over_sym_frobenius_max: 0.005
+  energy_median_regression_max_fraction: 0.05
+  energy_p90_regression_max_fraction: 0.05
+  force_median_regression_max_fraction: 0.05
+  force_p90_regression_max_fraction: 0.05
+  energy_force_change_from_h512_source: exactly_zero_by_anchor
+  decision: >-
+    Rank the two frozen arms by the full Hessian distribution gate, then require
+    source E/F to satisfy the replay regression gate. Passing both permits preparation
+    of train100 HVP plus train800 E/F replay. Failure keeps Test100 frozen and returns
+    to transferable operator design.

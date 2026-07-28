@@ -8,8 +8,11 @@ from functools import partial
 from pathlib import Path
 
 import hydra
+import numpy as np
+import zarr
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from pyscf.lib.chkfile import load as load_chk_group
 from tqdm import tqdm
 
 from mldft.datagen.datasets.dataset import DataGenDataset
@@ -51,6 +54,44 @@ def get_zarr_file_path(label_dir: Path, molecule_id: int, sample_id: int | None 
         return label_dir / f"{molecule_id:07}.zarr.zip"
 
 
+def _replace_zarr_dataset(group: zarr.Group, key: str, value):
+    if value is None:
+        return
+    if isinstance(value, bytes):
+        value = value.decode()
+    if isinstance(value, np.ndarray) and value.dtype.kind == "S" and value.shape == ():
+        value = value.item().decode()
+    if key in group:
+        del group[key]
+    group.create_dataset(key, data=value, compressor=None)
+
+
+def append_kohn_sham_derivatives(label_path: Path, chk_file: Path) -> None:
+    """Append optional same-level PySCF force/Hessian results from the chk file to labels."""
+    try:
+        derivatives = load_chk_group(chk_file, "Derivatives")
+    except (KeyError, OSError):
+        derivatives = None
+    try:
+        derivative_errors = load_chk_group(chk_file, "DerivativeErrors")
+    except (KeyError, OSError):
+        derivative_errors = None
+    if derivatives is None and derivative_errors is None:
+        return
+
+    with zarr.ZipStore(label_path, mode="a") as zipstore:
+        root = zarr.open(zipstore, mode="a")
+        metadata = root.require_group("metadata")
+        if derivatives is not None:
+            group = metadata.require_group("pbe_derivatives")
+            for key, value in derivatives.items():
+                _replace_zarr_dataset(group, key, value)
+        if derivative_errors is not None:
+            group = metadata.require_group("pbe_derivative_errors")
+            for key, value in derivative_errors.items():
+                _replace_zarr_dataset(group, key, value)
+
+
 @unpack_args_for_imap
 def run_labelgen_task(
     dataset: DataGenDataset,
@@ -62,34 +103,48 @@ def run_labelgen_task(
 ):
     """Run the label generation task for a single molecule."""
     molecule_id, sample_id = get_id_and_sample_id_from_chk_file(chk_file)
-    # Load charges and build molecule in a way similar to the improved Kohn-Sham logic:
-    charges, positions = dataset.load_charges_and_positions(molecule_id)
-    mol_orbital_basis = build_molecule_np(charges, positions, basis=orbital_basis, unit="Angstrom")
-    mol_density_basis = construct_aux_mol(
-        mol_orbital_basis, aux_basis_name=of_basis_set, unit="Bohr"
-    )
-    logger.info(
-        f"Computing molecule {molecule_id} {mole_to_sum_formula(mol_orbital_basis, True)} with "
-        f"{len(mol_orbital_basis.atom_charges())} atoms."
-    )
+    try:
+        # Load charges and build molecule in a way similar to the Kohn-Sham logic.
+        charges, positions, charge, spin = dataset.load_sample(molecule_id, sample_id)
+        mol_orbital_basis = build_molecule_np(
+            charges,
+            positions,
+            basis=orbital_basis,
+            unit="Angstrom",
+            charge=charge,
+            spin=spin,
+        )
+        mol_density_basis = construct_aux_mol(
+            mol_orbital_basis, aux_basis_name=of_basis_set, unit="Bohr", spin=spin
+        )
+        logger.info(
+            f"Computing molecule {molecule_id} {mole_to_sum_formula(mol_orbital_basis, True)} "
+            f"with {len(mol_orbital_basis.atom_charges())} atoms."
+        )
 
-    label_path = get_zarr_file_path(dataset.label_dir, molecule_id, sample_id)
-    results, initialization, data_of_iteration = load_scf(chk_file)
-    data = calculation_fct(
-        results=results,
-        initialization=initialization,
-        data_of_iteration=data_of_iteration,
-        mol_orbital_basis=mol_orbital_basis,
-        mol_density_basis=mol_density_basis,
-    )
-    save_density_fitted_data(
-        label_path,
-        mol_density_basis,
-        kohn_sham_basis=kohn_sham_basis,
-        path_to_basis_info=(chk_file.parent / "basis_info.npz").as_posix(),
-        molecular_data=data,
-        mol_id=chk_file.stem,
-    )
+        label_path = dataset.get_label_file_from_id(molecule_id, sample_id)
+        results, initialization, data_of_iteration = load_scf(chk_file)
+        data = calculation_fct(
+            results=results,
+            initialization=initialization,
+            data_of_iteration=data_of_iteration,
+            mol_orbital_basis=mol_orbital_basis,
+            mol_density_basis=mol_density_basis,
+        )
+        save_density_fitted_data(
+            label_path,
+            mol_density_basis,
+            kohn_sham_basis=kohn_sham_basis,
+            path_to_basis_info=(chk_file.parent / "basis_info.npz").as_posix(),
+            molecular_data=data,
+            mol_id=chk_file.stem,
+        )
+        append_kohn_sham_derivatives(label_path, chk_file)
+        dataset.save_reference_metadata(label_path, molecule_id, sample_id)
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        logger.exception(f"Label generation failed for {chk_file}: {e}")
 
 
 def save_dataset_info(cfg: DictConfig, label_dir: Path):

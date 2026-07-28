@@ -106,6 +106,30 @@ class DataGenDataset(ABC):
         """
         raise NotImplementedError
 
+    def load_charge_and_spin(self, id: int) -> tuple[int | None, int | None]:
+        """Load total molecular charge and PySCF spin for a molecule.
+
+        PySCF defines spin as N_alpha - N_beta, so singlet closed-shell molecules have spin 0.
+        Existing datasets do not carry charge/spin annotations and keep PySCF defaults.
+        """
+        return None, None
+
+    def get_sample_ids(self, id: int) -> tuple[int | None, ...]:
+        """Return geometry/sample ids that should be generated for one molecule id.
+
+        Datasets without per-molecule sampling keep the historical filename without a sample suffix
+        by returning ``(None,)``. Sampled datasets should return integer sample ids.
+        """
+        return (None,)
+
+    def load_sample(
+        self, id: int, sample_id: int | None = None
+    ) -> tuple[np.ndarray, np.ndarray, int | None, int | None]:
+        """Load charges, positions, charge and spin for a molecule sample."""
+        charges, positions = self.load_charges_and_positions(id)
+        charge, spin = self.load_charge_and_spin(id)
+        return charges, positions, charge, spin
+
     def load_molecule(self, id: int, basis: str) -> gto.Mole:
         """Load nuclear charges and positions for the given molecule index.
 
@@ -113,8 +137,16 @@ class DataGenDataset(ABC):
             id: Index of the molecule to compute.
             basis: Basis set to use for the molecule.
         """
-        charges, positions = self.load_charges_and_positions(id)
-        return build_molecule_np(charges, positions, basis=basis, unit="Angstrom")
+        charges, positions, charge, spin = self.load_sample(id)
+        return build_molecule_np(
+            charges, positions, basis=basis, unit="Angstrom", charge=charge, spin=spin
+        )
+
+    def save_reference_metadata(
+        self, label_path: Path, molecule_id: int, sample_id: int | None = None
+    ) -> None:
+        """Optionally append dataset-specific reference metadata to a generated label file."""
+        return None
 
     def get_all_atomic_numbers(self) -> np.ndarray:
         """Get the atomic numbers of all atoms in the dataset.
@@ -135,26 +167,48 @@ class DataGenDataset(ABC):
         Returns:
             np.ndarray: Array of indices of the molecules that have already been computed.
         """
-        return np.sort(
-            np.intersect1d(
-                self.get_ids(),
-                np.array(
-                    [
-                        int(file.stem.split("_")[-1].split(".")[0])
-                        for file in self.kohn_sham_data_dir.glob("*.chk")
-                    ]
-                ),
-            )
+        return self.get_ids_done_ks_for_ids(self.get_ids())
+
+    def get_ids_done_ks_for_ids(self, ids: np.ndarray) -> np.ndarray:
+        """Get completed molecule ids, restricted to the provided ids."""
+        return np.array(
+            [
+                int(id)
+                for id in ids
+                if all(
+                    self.get_chk_file_from_id(int(id), sample_id).exists()
+                    for sample_id in self.get_sample_ids(int(id))
+                )
+            ],
+            dtype=int,
         )
 
+    def get_label_file_from_id(self, id: int, sample_id: int | None = None) -> Path:
+        """Get the label path for a molecule id/sample id pair."""
+        if sample_id is None:
+            return self.label_dir / f"{id:07}.zarr.zip"
+        return self.label_dir / f"{id:07}.{sample_id:07}.zarr.zip"
+
     def get_ids_done_labelgen(self) -> np.ndarray:
-        """Get the indices of the molecules that have already been computed.
+        """Get the indices of the molecules whose labels have already been computed.
 
         Returns:
             np.ndarray: Array of indices of the molecules that have already been computed.
         """
-        return np.sort(
-            np.array([int(file.stem.split(".")[0]) for file in self.label_dir.glob("*.zarr*")])
+        return self.get_ids_done_labelgen_for_ids(self.get_ids())
+
+    def get_ids_done_labelgen_for_ids(self, ids: np.ndarray) -> np.ndarray:
+        """Get completed label ids, restricted to the provided ids."""
+        return np.array(
+            [
+                int(id)
+                for id in ids
+                if all(
+                    self.get_label_file_from_id(int(id), sample_id).exists()
+                    for sample_id in self.get_sample_ids(int(id))
+                )
+            ],
+            dtype=int,
         )
 
     def get_ids_todo_ks(self, start_idx: int = 0, max_num_molecules: int = 1) -> np.ndarray:
@@ -172,7 +226,7 @@ class DataGenDataset(ABC):
             start_idx + max_num_molecules if max_num_molecules > 0 else self.get_num_molecules()
         )
         ids = self.get_ids()[start_idx:end_idx]
-        ids_done = self.get_ids_done_ks()
+        ids_done = self.get_ids_done_ks_for_ids(ids)
         ids_todo = np.setdiff1d(ids, ids_done)
         logger.info(
             f"Configured to run {max_num_molecules} molecules starting at index {start_idx}, found {len(ids) - len(ids_todo)} already done, processing {len(ids_todo)}."
@@ -194,23 +248,26 @@ class DataGenDataset(ABC):
             start_idx + max_num_molecules if max_num_molecules > 0 else self.get_num_molecules()
         )
         ids = self.get_ids()[start_idx:end_idx]
-        ids_done = self.get_ids_done_labelgen()
+        ids_done = self.get_ids_done_labelgen_for_ids(ids)
         ids_todo = np.setdiff1d(ids, ids_done)
         logger.info(
             f"Configured to run {max_num_molecules} molecules starting at index {start_idx}, found {len(ids) - len(ids_todo)} already done, processing {len(ids_todo)}."
         )
         return ids_todo
 
-    def get_chk_file_from_id(self, id: int) -> Path:
-        """Get the path to the chk file for the given molecule index.
+    def get_chk_file_from_id(self, id: int, sample_id: int | None = None) -> Path:
+        """Get the path to the chk file for the given molecule index/sample id.
 
         Args:
             id: Index of the molecule to compute.
+            sample_id: Optional sample id for datasets with multiple geometries per molecule.
 
         Returns:
             Path: Path to the chk file.
         """
-        return self.kohn_sham_data_dir / f"{self.filename}_{id:07}.chk"
+        if sample_id is None:
+            return self.kohn_sham_data_dir / f"{self.filename}_{id:07}.chk"
+        return self.kohn_sham_data_dir / f"{self.filename}_{id:07}.{sample_id:07}.chk"
 
     def get_all_chk_files_from_id(self, id: int) -> Sequence[Path]:
         """Get the paths to all possible chk files from an id, including those from external

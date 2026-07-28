@@ -1,0 +1,93 @@
+protocol_id: qm9_complete_total_hessian_mace_frozen_invariant_readout_smoke_v6f
+frozen_at: 2026-07-23
+stage: stable5_fit_only_mature_higher_body_scalar_capacity
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_total(R;R0) = E_A(R0) - F_A(R0) dot dR
+    + s times {E_readout(R) - E_readout(R0)
+    - grad_R0 E_readout(R0) dot dR}.  E_readout is an element-resolved
+    linear scalar readout over frozen MACE l=0 node features and fixed tanh
+    random features.  Energy, force, and Hessian all derive from this scalar.
+  correction: >-
+    The hash-bound stable5 h16 MACE step75 checkpoint is frozen.  Only a
+    zero-initialized element-resolved linear readout is trained; no force,
+    HVP, or Hessian head exists.
+  force: F = -d E_total / dR
+  hessian: H = d2 E_total / dR2
+  independent_force_head_allowed: false
+  explicit_hvp_or_hessian_output_loss_allowed: true
+  global_density_relaxed_functional_claim_allowed: false
+  isolated_dependency_path: /scratch/xzh/vendor/mace_torch_0_3_16
+  mace_version: 0.3.16
+  e3nn_version: 0.4.4
+
+inputs:
+  baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/selection_uniform_A_v1/selected_baseline_manifest.json
+  baseline_manifest_sha256: e81e00ecbf99e7d14751c079aeb081d06455ca720bbb3ca5c758e39de359f127
+  stable5_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_capacity_v1_stable5_v2.yaml
+  stable5_protocol_sha256: 05c7ace0fbcd85195cec81255f64f75ba140c5b135bf7c1dc3fc1ccd1a3dc23c
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  sample_id: 0
+  pbe_reference: analytic_PBE_energy_force_hessian
+  parents: ["0028399", "0031108", "0132419", "0031012", "0121249"]
+
+training:
+  dtype: float64
+  smoke_steps: 5
+  formal_steps: 1000
+  log_interval_smoke: 1
+  log_interval_formal: 25
+  parent_batch_size: 1
+  anchor_energy_force: true
+  absolute_hessian_scale: 0.1
+  relative_loss_fraction: 0.5
+  hessian_reference_floor: 0.1
+  lambda_energy: 1.0
+  lambda_force: 1.0
+  lambda_hessian: 1.0
+  lambda_parameter: 1.0e-10
+  energy_scale: 0.1
+  force_scale: 0.05
+  hessian_warmup_steps: 0
+  gradient_clip: 10.0
+  pcgrad: false
+  checkpoint_selection: median_plus_max_full_hessian_relative_frobenius
+  source_hessian_policy: symmetrize_before_scalar_reference
+
+arms:
+  - id: E11a_mace_h16_frozen_rf512_scale1000
+    architecture: mace_frozen_invariant_random_readout_scalar
+    seed: 20260804
+    hidden_channels: 16
+    mlp_channels: 16
+    max_ell: 2
+    correlation: 3
+    num_interactions: 2
+    num_bessel: 8
+    cutoff_polynomial_order: 5
+    cutoff_bohr: 20.0
+    avg_num_neighbors: 16.0
+    random_feature_width: 512
+    output_scale: 1000.0
+    learning_rate: 1.0e-4
+    backbone_checkpoint: /scratch/xzh/models/complete_total_capacity/20260717/stage5_mace_h16_scaled_v6d/one_parent_lbfgs_v1/adam_best_snapshot.ckpt
+    backbone_checkpoint_sha256: 33f5842f150d3a822fe31177f59fb7262cec781bbf217fbe2a416d79f0893229
+    backbone_arm_id: E10d_mace_h16_l2_corr3_cut20_scale1000
+    backbone_parent_ids: ["0028399", "0031108", "0132419", "0031012", "0121249"]
+
+capacity_gate:
+  training_median_relative_frobenius_max: 0.05
+  training_all_parent_relative_frobenius_max: 0.05
+  energy_median_ratio_to_source_max: 1.05
+  force_median_ratio_to_source_max: 1.05
+  antisymmetric_over_symmetric_frobenius_max: 0.005
+  rule: all stable5 full-Hessian, E/F, and symmetry checks must pass
+
+next_stage_if_passed:
+  action: freeze a separate train20 unseen-direction protocol; no automatic submission
+  validation_access_allowed: false
+  train100_expansion_allowed: false
+  test100_access_allowed: false

@@ -1,0 +1,60 @@
+# @package _global_
+
+defaults:
+  - str25/default
+  - override /data: qm9_pbe_force_full
+  - override /model/loss_function: l1_force
+  - override /trainer: ddp_8xa100
+  - override /callbacks: qm9_full_scale
+  - override /logger: tensorboard
+
+tags:
+  ["qm9_pbe_force_full", "egf", "lambda1", "fixed_density", "kin_plus_xc", "graphformer", "force"]
+
+model:
+  force_supervision: true
+  profile_timing: true
+  logging_mixin_interval: null
+  metric_interval: 0
+  validation_loss_function:
+    _target_: mldft.ml.models.components.loss_function.WeightedLoss
+    energy_loss:
+      weight: 0.1
+      loss:
+        _target_: mldft.ml.models.components.loss_function.EnergyLoss
+        loss_function:
+          _target_: torch.nn.L1Loss
+          reduction: none
+        sample_weigher:
+          _target_: mldft.ml.models.components.sample_weighers.HasEnergyLabelSampleWeigher
+    force_loss:
+      weight: 0.1
+      loss:
+        _target_: mldft.ml.models.components.loss_function.ForceLoss
+        loss_function:
+          _target_: torch.nn.L1Loss
+          reduction: none
+        sample_weigher:
+          _target_: mldft.ml.models.components.sample_weighers.HasEnergyLabelSampleWeigher
+
+callbacks:
+  model_checkpoint:
+    save_last: True
+    save_top_k: 2
+
+trainer:
+  max_epochs: 10
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  accumulate_grad_batches: 1
+
+data:
+  datamodule:
+    # Per-GPU/process batch size under DDP. Start with 4; test 8 explicitly if memory allows.
+    batch_size: 4
+    num_workers: 8
+    pin_memory: true
+    shuffle_train: true
+    shuffle_val: false
+    dataset_kwargs:
+      load_force_label: true

@@ -1,6 +1,8 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from torch.utils.data.distributed import DistributedSampler
 
 from mldft.ml.data.datamodule import OFDataModule
 
@@ -38,3 +40,51 @@ def test_datamodule(batch_size, dummy_basis_info, dummy_dataset_path, master_tra
         else:
             assert len(sample) <= batch_size
         assert all(pos.shape[-1] == 3 for pos in sample.pos)
+
+
+def test_pair_grouped_datamodule_shards_validation_explicitly(
+    dummy_basis_info, dummy_dataset_path, master_transform_to_torch
+):
+    label_path = Path(dummy_dataset_path)
+    datamodule = OFDataModule(
+        label_path.parent / "train_val_test_split.pkl",
+        label_path.parent.parent,
+        transforms=master_transform_to_torch,
+        basis_info=dummy_basis_info,
+        batch_size=4,
+        pair_grouped_train_batches=True,
+    )
+    datamodule.setup("fit")
+    datamodule.trainer = SimpleNamespace(world_size=2, global_rank=1)
+
+    loader = datamodule.val_dataloader()
+
+    assert isinstance(loader.sampler, DistributedSampler)
+    assert loader.sampler.num_replicas == 2
+    assert loader.sampler.rank == 1
+
+
+def test_train_only_datamodule_never_constructs_held_out_splits(
+    dummy_basis_info, dummy_dataset_path, master_transform_to_torch
+):
+    label_path = Path(dummy_dataset_path)
+    datamodule = OFDataModule(
+        label_path.parent / "train_val_test_split.pkl",
+        label_path.parent.parent,
+        transforms=master_transform_to_torch,
+        basis_info=dummy_basis_info,
+        batch_size=4,
+        train_only=True,
+    )
+
+    datamodule.setup("fit")
+
+    assert datamodule.train_set is not None
+    assert datamodule.val_set is None
+    assert datamodule.test_set is None
+    with pytest.raises(RuntimeError, match="Validation access is disabled"):
+        datamodule.val_dataloader()
+    with pytest.raises(RuntimeError, match="Validation access is disabled"):
+        datamodule.setup("validate")
+    with pytest.raises(RuntimeError, match="Test access is disabled"):
+        datamodule.setup("test")

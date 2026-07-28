@@ -1,0 +1,44 @@
+protocol_id: qm9_complete_total_relaxed_q_replacement_pool_v1
+frozen_at: 2026-07-23
+stage: train800_only_replacement_candidate_pool_prelabel
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+purpose: >-
+  Freeze two train700 replacement candidates for each of the 26 frozen
+  train100 parents that failed the density/electronic-branch/KKT parent gate.
+  This is metadata-only preselection before any replacement PBE Hessian or q
+  label is computed and before Stage-2.5 candidate metrics are available.
+
+inputs:
+  difficulty_csv: /scratch/xzh/models/hvp100/20260716/difficulty/parent_difficulty.csv
+  difficulty_csv_sha256: 82d458e184e69c9c247aad8c46b657687b8826f019dfd0a593d2a5308abacad3
+  original_selection: /scratch/xzh/models/hvp100/20260716/selection/train_parent_selection.json
+  original_selection_sha256: 8982fc6349b520b9b98f52fa684e81558b6afab16d14a100f3c3843608503f0b
+  original_selection_manifest: /scratch/xzh/models/hvp100/20260716/selection/manifest.json
+  original_selection_manifest_sha256: f5cb984daeb7d4b02490600aedfb5c0b2b39bcc92fb737d9f292e3c3b6edc5d5
+  parent_stability_csv: /scratch/xzh/models/hvp_branch_stability/20260716/formal_train100_v2/analysis/parent_stability.csv
+  parent_stability_csv_sha256: 68a7e2d9f06ea72390fe9da09efd7397c08415906bd11e8c0699563ba96de61a
+
+selection:
+  seed: 20260723
+  failed_slot_count: 26
+  candidates_per_slot: 2
+  expected_candidate_count: 52
+  ranking: >-
+    Process failed parent IDs lexicographically. Exclude all original train100
+    parents and every candidate already assigned to an earlier slot. Rank by
+    composition-class mismatch, absolute natoms-bin distance, absolute
+    difficulty-bin distance, absolute atom-count distance, then SHA256 of
+    seed:failed_parent:candidate_parent. Exact-stratum candidates therefore
+    win whenever available; the deterministic nearest train700 fallback is
+    used only for exhausted rare strata.
+
+decision:
+  labels_authorized: false
+  formal_stage3_authorized: false
+  test100_authorized: false
+  rule: >-
+    The pool may be labelled only if the independent Stage-2.5 q diagnostic
+    justifies replacement screening. Candidate membership cannot be changed
+    after q or model metrics are observed.

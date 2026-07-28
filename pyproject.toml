@@ -51,7 +51,10 @@ dependencies = [
     "torch-geometric==2.6.1",
     "e3nn",
     "torchmetrics>=0.0.0,<1.0.0",
+    # torchmetrics 0.x and test helpers still import the removed pkg_resources API.
+    "setuptools<81",
     "huggingface_hub==0.*",
+    "datasets>=2,<4",
 ]
 
 [dependency-groups]

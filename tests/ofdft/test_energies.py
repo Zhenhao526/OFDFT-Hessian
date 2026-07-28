@@ -1,8 +1,9 @@
 import numpy as np
 import pytest
+import torch
 from pyscf import gto
 
-from mldft.ofdft.energies import Energies
+from mldft.ofdft.energies import Energies, TensorEnergies
 
 
 @pytest.mark.parametrize(
@@ -103,3 +104,32 @@ def test_Energies__str__():
         "└────────────────────┴─────────────┘\n"
     )
     assert str(test_energies) == expected_str
+
+
+def test_tensor_energies_preserves_autograd_and_detaches_for_reporting():
+    coefficient = torch.tensor(2.0, dtype=torch.float64, requires_grad=True)
+    energies = TensorEnergies(
+        learned=coefficient.square(),
+        hartree=2.0 * coefficient,
+        nuclear_repulsion=torch.tensor(3.0, dtype=torch.float64),
+    )
+
+    assert torch.isclose(energies.electronic_energy, torch.tensor(8.0, dtype=torch.float64))
+    assert torch.isclose(energies.total_energy, torch.tensor(11.0, dtype=torch.float64))
+    assert torch.autograd.grad(energies.total_energy, coefficient)[0] == 6.0
+
+    detached = energies.detached()
+    assert isinstance(detached, Energies)
+    assert detached.total_energy == 11.0
+
+
+def test_tensor_total_target_is_not_double_counted():
+    total = torch.tensor(-5.0, dtype=torch.float64, requires_grad=True)
+    energies = TensorEnergies(
+        tot=total,
+        nuclear_repulsion=torch.tensor(2.0, dtype=torch.float64),
+    )
+
+    assert torch.equal(energies.total_energy, total)
+    assert energies.electronic_energy == -7.0
+    assert torch.autograd.grad(energies.total_energy, total)[0] == 1.0

@@ -1,0 +1,75 @@
+protocol_id: qm9_random1000_hvp_curvature_validation_v1
+frozen_at: 2026-07-16
+test100_access_allowed: false
+
+fixed_density_screen:
+  parent_split: validation
+  parent_count: 20
+  parent_count_role: candidate_pool_before_stability_filter
+  eligibility_protocol: qm9_random1000_hvp_branch_stability_v3
+  stable_parents_and_directions_only: true
+  minimum_stable_parent_count: 5
+  unstable_samples_used_in_average_selection: false
+  directions_per_parent: 4
+  target: pbe_analytic_complete_total_hvp
+  role: cheap_surrogate_only
+
+strict_complete_total_hvp:
+  eligibility_protocol: qm9_random1000_hvp_branch_stability_v3
+  sensitivity_protocol: qm9_random1000_hvp_branch_stability_v2
+  minimum_stable_directions_per_parent: 3
+  minimum_stable_parent_count: 5
+  base_initialization: label_reference
+  displaced_initialization: base_continuation
+  hvp_step_bohr: 1.0e-5
+  mixed_derivative_step_bohr: 1.0e-4
+  integral_derivative_step_bohr: 1.0e-4
+  model_geometry_derivative: autograd
+  first_stage:
+    optimizer: adam
+    learning_rate: 1.0e-3
+    max_cycles: 1000
+    projected_gradient_threshold: 1.0e-2
+  fallback:
+    always: true
+    optimizer: adam
+    learning_rate: 3.0e-4
+    max_cycles: 10000
+    projected_gradient_threshold: 1.0e-5
+  refinements:
+    lbfgs: true
+    lbfgs_threshold: 1.0e-8
+    newton: true
+    newton_threshold: 1.0e-8
+  response:
+    solver: auto
+    relative_residual_threshold: 1.0e-8
+    max_iterations: 1200
+    dense_fallback_max_coefficients: 4096
+
+promotion:
+  energy_mae_relative_degradation_max: 0.05
+  energy_gate_required_seeds: 3
+  force_improved_seeds_min: 2
+  strict_hvp_improved_seeds_min: 2
+  majority_direction_wins_required: true
+  majority_parent_wins_required: true
+  small_reference_hvp_rms: 2.0e-2
+  full_hessian_candidates_max: 2
+
+full_hessian:
+  validation_parent_count_initial: 5
+  validation_parent_count_max: 10
+  displacement_bohr: 1.0e-5
+  base_initialization: label_reference
+  displaced_initialization: base_continuation
+  density_protocol: same_as_strict_complete_total_hvp
+  require_frequency_non_regression: true
+  require_imaginary_mode_non_regression: true
+  require_mode_overlap_non_regression: true
+  require_all_displaced_points_strict: true
+  force_energy_diagonal_relative_degradation_max: 0.05
+
+test100:
+  access_before_candidate_freeze: 0
+  access_after_all_validation_gates_max: 1

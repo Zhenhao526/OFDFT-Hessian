@@ -1,0 +1,33 @@
+rescue_id: qm9_graphformer_0028399_density_solver_rescue_v1
+registered_at: 2026-07-27
+applies_to_protocol_id: qm9_graphformer_0028399_full39_capacity_only_v2
+applies_to_protocol_sha256: 7359095fc16e5378f1c7700747ac50ba1dbd84ce7f4e89e1c182123edb26f785
+scope:
+  molecule_ids: ["0028399"]
+  sample_ids: [0]
+  density_solver_only: true
+  model_or_loss_change: false
+evidence:
+  pre_lbfgs_projected_gradient_norm: 1.910055143525824e-4
+  post_lbfgs_projected_gradient_norm: 1.4459481462836266e-2
+  post_newton6_projected_gradient_norm: 1.4276492038334254e-5
+  post_newton20_projected_gradient_norm: 1.4131487660051789e-5
+decision:
+  lbfgs_refine: false
+  newton_refine: true
+  newton_max_iterations: 20
+  strict_projected_gradient_threshold: 1.0e-8
+  reason: >-
+    The registered L-BFGS stage worsened the projected gradient by 75.7x.
+    Run the same constrained Newton-PCG corrector directly from the lower
+    Adam endpoint. Do not relax the strict threshold.
+forbidden_changes:
+  - checkpoint
+  - molecule_or_sample
+  - direction_manifest
+  - hessian_loss
+  - parameter_scope
+  - validation_or_test_access
+validation_accessed: false
+test100_accessed: false
+

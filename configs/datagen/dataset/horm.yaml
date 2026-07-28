@@ -1,0 +1,20 @@
+_target_: mldft.datagen.datasets.horm.HORM
+name: HORM_TS1xVal
+filename: horm
+
+raw_data_dir: /mnt/afs/home/xiazhenhao/dft/archive
+archive_file: ts1x-val.lmdb
+dataset_name: ts1x_val
+source_dft_level: "omegaB97x/6-31G(d)"
+positions_unit: Angstrom
+
+# HORM archive samples used here do not carry molecular charge/spin.
+# STRUCTURES25 label generation defaults them to neutral closed-shell.
+charge: 0
+spin: 0
+
+# Keep this null for full archive traversal. Presets can set a small explicit pilot list.
+sample_ids: null
+
+kohn_sham_data_dir: /mnt/afs/home/xiazhenhao/dft/structures25/_runtime/horm_pbe_labels/${dataset.name}/kohn_sham
+label_dir: /mnt/afs/home/xiazhenhao/dft/structures25/_runtime/horm_pbe_labels/${dataset.name}/labels

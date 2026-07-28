@@ -1,0 +1,88 @@
+protocol_id: qm9_complete_total_hessian_local_angular_four_body_capacity_v6b_solver
+frozen_at: 2026-07-22
+stage: stable5_fit_only_angular_scalar_capacity
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_local(R) = E_A - F_A dot dR + 0.5 dR^T sym(H_A) dR
+    + c^T [phi_local_angular(R), phi_bonded_even_torsion(R)].
+  source: strict complete-total relaxed original-A at sample_id=0
+  force: F = -d E_local / dR
+  hessian: H = d2 E_local / dR2
+  independent_force_head_allowed: false
+  scope: stable5 fit-only feature-span solver-convergence audit
+  changed_factor: >-
+    Preserve every v6 scientific setting. Increase the exact-autograd feature chunk from 16 to
+    64 only to remove repeated evaluation overhead, and continue the same ridge-CGLS problem from
+    a 2000-iteration truncation to at most 20000 iterations.
+
+inputs:
+  angular_linear_ceiling_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_angular_capacity_v5/linear_ceiling_v2_chunked/summary.json
+  angular_linear_ceiling_summary_sha256: 95ca2087ac57cce357d0d2ca6848a68329d9e063a6373be11ddd07d5c7d65f24
+  four_body_initial_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_angular_four_body_capacity_v6/linear_ceiling_v1/summary.json
+  four_body_initial_summary_sha256: 8e32db5469b6e068dc652cf854d14ad59293901655697b6f6ca4d8a5d39f7b43
+  post_v4_diagnostic_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/local_scalar_three_task_pcgrad_v4/post_v4_diagnostics_no_formal_v1/analysis_v1/summary.json
+  post_v4_diagnostic_summary_sha256: 152c3ed97a47a27c365f3579677a8c8af2b52673e8b3d9cf1ee7e078df6e2ad4
+  required_post_v4_diagnosis: no_five_percent_capacity_evidence_with_preregistered_local_diagnostics
+  baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/selection_uniform_A_v1/selected_baseline_manifest.json
+  baseline_manifest_sha256: e81e00ecbf99e7d14751c079aeb081d06455ca720bbb3ca5c758e39de359f127
+  stable5_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_capacity_v1_stable5_v2.yaml
+  stable5_protocol_sha256: 05c7ace0fbcd85195cec81255f64f75ba140c5b135bf7c1dc3fc1ccd1a3dc23c
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  sample_id: 0
+  pbe_reference: analytic_PBE_energy_force_hessian
+  parents: ["0028399", "0031108", "0132419", "0031012", "0121249"]
+
+training:
+  dtype: float64
+  absolute_hessian_scale: 0.1
+  relative_loss_fraction: 0.5
+  hessian_reference_floor: 0.1
+  energy_scale: 0.1
+  force_scale: 0.05
+
+arms:
+  - id: M1_local_angular_tanh
+    architecture: local_angular_symmetry_network
+    activation: tanh
+    seed: 20260727
+    hidden_size: 128
+    radial_size: 6
+    angular_order: 3
+    cutoff_bohr: 8.0
+    radial_feature_scale: 4.0
+    angular_feature_scale: 16.0
+    learning_rate: 1.0e-5
+
+four_body_ceiling:
+  definition: parity_even_bonded_chain_rbf_times_cosine_multiples
+  center_min_bohr: 1.0
+  center_max_bohr: 4.0
+  center_count: 4
+  sigma_bohr: 0.75
+  torsion_order: 5
+  bond_scale: 1.35
+  feature_chunk_size: 64
+  column_floor: 1.0e-10
+  ridge: 1.0e-8
+  cgls_max_iterations: 20000
+  cgls_tolerance: 1.0e-10
+  cgls_log_interval: 500
+
+capacity_gate:
+  training_median_relative_frobenius_max: 0.05
+  training_all_parent_relative_frobenius_max: 0.05
+  energy_median_ratio_to_source_max: 1.05
+  force_median_ratio_to_source_max: 1.05
+  antisymmetric_over_symmetric_frobenius_max: 0.005
+  rule: >-
+    No nonlinear model or direction/parent expansion until a numerically converged solve passes
+    every stable5 matrix, E/F, and symmetry gate, followed by vibration closure.
+
+next_stage_if_passed:
+  action: initialize a transferable angular-plus-torsion scalar and close stable5 vibration gates
+  validation_access_allowed: false
+  train100_expansion_allowed: false
+  test100_access_allowed: false

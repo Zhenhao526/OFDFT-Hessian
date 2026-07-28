@@ -53,5 +53,9 @@ ckpt_path: null
 use_original_settings: null
 weight_ckpt_path: null
 
+# DataLoader tensor sharing. Use file_descriptor on systems where file_system
+# shared-memory cleanup reports /torch_* unlink failures.
+multiprocessing_sharing_strategy: file_system
+
 # seed for random number generators in pytorch, numpy and python.random
 seed: null

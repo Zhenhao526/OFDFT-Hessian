@@ -1,0 +1,36 @@
+{
+  "protocol_id": "qm9_complete_total_bounded_equivariant_lbfgs_v1",
+  "frozen_at": "2026-07-23",
+  "purpose": "Separate single-parent representation diagnosis for the half-width l=2 tensor model within stable5.",
+  "parent_scope": "stable5_one_parent_diagnostic",
+  "diagnostic_parent_ids": [
+    "0028399",
+    "0031108",
+    "0132419",
+    "0031012",
+    "0121249"
+  ],
+  "source_protocol": "/scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_tensor_equivariant_half_width_v4c.yaml",
+  "source_protocol_sha256": "52a750c5ea74b709ae6d1234e7e3a9b27c677e3d05d9bc6311c8fe75267cbc0b",
+  "source_arm_id": "E7_tensor_equivariant_half_width",
+  "source_checkpoint": "/scratch/xzh/models/complete_total_capacity/20260717/stage5_tensor_equivariant_v4c_half_width/lbfgs_v1/adam_best_through_s25.ckpt",
+  "source_checkpoint_sha256": "5b66559570d6261c6de41c1f2ff4f2e2e67edf9b2c8bec28677612c5b26370ca",
+  "source_checkpoint_step": 25,
+  "scalar_owner": "The l=2 tensor-product atomic scalar energy; force and Hessian are its first and second geometry derivatives.",
+  "independent_force_head_allowed": false,
+  "lbfgs": {
+    "joint": {
+      "iterations": 20,
+      "learning_rate": 0.5,
+      "history_size": 20,
+      "max_evaluations_per_iteration": 3,
+      "tolerance_grad": 1e-09,
+      "tolerance_change": 1e-12,
+      "log_interval": 5,
+      "parent_cv_authorization_allowed": false
+    }
+  },
+  "validation_accessed": false,
+  "test100_accessed": false,
+  "test100_evaluations_used": 0
+}

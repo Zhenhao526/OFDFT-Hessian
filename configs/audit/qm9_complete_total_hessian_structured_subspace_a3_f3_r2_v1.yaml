@@ -1,0 +1,13 @@
+arm_id: a3_f3_r2
+scope: train20_chemistry_aware_structured_scalar_subspace_diagnostic
+promotion_allowed: false
+test100_access_allowed: false
+test100_evaluations_used: 0
+source:
+  stage2_protocol_sha256: f2809b41ce3e5d37b9d34bd5a7a297001132db0dfdd5a32497c3dfb0d8b833dd
+structured_subspace:
+  angular_radial_modes: 3
+  four_body_radial_modes: 3
+  random_environment_radial_modes: 2
+  random_bias_order: 3
+  projection_row_chunk_size: 128

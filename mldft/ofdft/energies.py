@@ -6,6 +6,7 @@ of all 'initialized' energies. Also contains a __str__ method for printing the e
 format.
 """
 import numpy as np
+import torch
 from pyscf import gto
 from rich.table import Table
 
@@ -140,4 +141,68 @@ class Energies:
             ("Difference", _format_energies(energy_diffs), _format_energies(extra_energy_diffs)),
             col_kwargs=[{}] + [{"justify": "right"}] * 3,
             as_string=as_string,
+        )
+
+
+class TensorEnergies:
+    """Differentiable energy contributions without scalar or NumPy conversion.
+
+    ``Energies`` remains the reporting/optimizer compatibility container. This class is the
+    authoritative container for force, response, and Hessian code where autograd connectivity
+    must be preserved.
+    """
+
+    def __init__(self, **energies_dict: torch.Tensor) -> None:
+        self.energies_dict: dict[str, torch.Tensor] = {}
+        for name, value in energies_dict.items():
+            self[name] = value
+
+    def __getitem__(self, key: str) -> torch.Tensor:
+        return self.energies_dict[key]
+
+    def __setitem__(self, key: str, value: torch.Tensor) -> None:
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"TensorEnergies[{key!r}] must be a torch.Tensor, got {type(value)}")
+        if value.numel() != 1:
+            raise ValueError(
+                f"TensorEnergies[{key!r}] must contain one scalar value, got shape {value.shape}"
+            )
+        self.energies_dict[key] = value.reshape(())
+
+    @property
+    def electronic_energy(self) -> torch.Tensor:
+        if "tot" in self.energies_dict:
+            if "nuclear_repulsion" not in self.energies_dict:
+                raise KeyError("tot energy requires nuclear_repulsion to obtain electronic energy")
+            return self.energies_dict["tot"] - self.energies_dict["nuclear_repulsion"]
+        electronic = [
+            value
+            for name, value in self.energies_dict.items()
+            if name != "nuclear_repulsion"
+        ]
+        if not electronic:
+            raise ValueError("TensorEnergies has no electronic energy contributions")
+        return torch.stack(electronic).sum()
+
+    @property
+    def total_energy(self) -> torch.Tensor:
+        if "tot" in self.energies_dict:
+            return self.energies_dict["tot"]
+        if "nuclear_repulsion" not in self.energies_dict:
+            raise KeyError("nuclear_repulsion is required for total energy")
+        return self.electronic_energy + self.energies_dict["nuclear_repulsion"]
+
+    @property
+    def sum(self) -> torch.Tensor:
+        if not self.energies_dict:
+            raise ValueError("TensorEnergies is empty")
+        return torch.stack(list(self.energies_dict.values())).sum()
+
+    def detached(self) -> Energies:
+        """Return the legacy scalar container for logging and existing optimizers."""
+        return Energies(
+            **{
+                name: float(value.detach().cpu())
+                for name, value in self.energies_dict.items()
+            }
         )

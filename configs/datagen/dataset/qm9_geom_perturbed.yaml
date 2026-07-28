@@ -1,0 +1,15 @@
+_target_: mldft.datagen.datasets.qm9.QM9GeometryPerturbed
+name: QM9GeometryPerturbed
+filename: qm9_geom
+
+raw_data_dir: ${oc.env:DFT_DATA}/QM9/raw/
+kohn_sham_data_dir: ${oc.env:DFT_DATA}/${dataset.name}/kohn_sham/
+label_dir: ${oc.env:DFT_DATA}/${dataset.name}/labels/
+
+num_perturbations: 1
+perturbation_std: 0.01
+max_displacement: 0.05
+random_seed: 20260701
+include_reference: true
+remove_translation: true
+paired_perturbations: false

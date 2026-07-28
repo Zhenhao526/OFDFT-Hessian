@@ -1,0 +1,23 @@
+protocol_id: qm9_complete_total_hessian_structured_subspace_path_v1
+frozen_at: 2026-07-23
+scope: train20_chemistry_aware_structured_scalar_subspace_diagnostic
+promotion_allowed: false
+test100_access_allowed: false
+test100_evaluations_used: 0
+source:
+  stage2_protocol: configs/audit/qm9_complete_total_hessian_local_random_feature_stage2_v10.yaml
+  stage2_protocol_sha256: f2809b41ce3e5d37b9d34bd5a7a297001132db0dfdd5a32497c3dfb0d8b833dd
+  baseline_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/direction_fit_v1/summary.json
+  baseline_summary_sha256: 385936bc64dee020656e3f85625bc7a0347bf5831cc3250b97e3123b424fe073
+  full20_capacity_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/full_hessian_capacity_v1/summary.json
+  full20_capacity_summary_sha256: aa5fb1e462e20bf278ee01c0625011461e8a3acbd587c06bba1a5bdb13957cf0
+arms:
+  - a1_f1_r1
+  - a2_f2_r1
+  - a2_f2_r2
+  - a3_f2_r2
+  - a3_f3_r2
+interpretation: >-
+  All coefficient mappings are fixed from feature metadata and frozen random-kernel tensors before
+  target labels are read. The existing held directions have already been used by prior diagnostics,
+  so this path can reject representations but cannot promote one without a new direction split.

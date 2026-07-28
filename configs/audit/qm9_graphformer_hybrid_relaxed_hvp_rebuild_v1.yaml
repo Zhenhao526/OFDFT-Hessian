@@ -1,0 +1,305 @@
+protocol_id: qm9_graphformer_hybrid_relaxed_hvp_rebuild_v1
+branch_id: graphformer_hybrid_relaxed_hvp_rebuild_20260724
+frozen_at: 2026-07-24
+stage: rebuild_train_only_baseline_then_fail_closed_capacity
+method_name: "解析密度/KKT响应的hybrid relaxed-HVP"
+fully_analytic_libcint_second_integrals: false
+validation_access_allowed: false
+test100_access_allowed: false
+validation_evaluations_used: 0
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_total(R,c;theta)=E_Graphformer_kin_plus_xc(R,c;theta)+E_H(R,c)
+    +E_ext(R,c)+E_nn(R).
+  total_relaxed_force: >-
+    F_theta(R)=-d E_total(R,c_star(R;theta);theta)/dR from the constrained
+    scalar Lagrangian at a density with projected gradient below 1e-8.
+  complete_total_relaxed_hvp: >-
+    H_theta v=L_RR v+L_Ry y_v, where G_y y_v=-G_R v is solved at the
+    strictly converged center density. PySCF integral second-directional
+    terms are central differences of complete first-derivative bundles.
+  parameter_backward: >-
+    Density/KKT response and parameter backward use implicit tangent and
+    adjoint solves; fixed-density, stale-density and detached fallbacks are forbidden.
+  stochastic_training_loss: >-
+    One fresh Rademacher probe in the complete orthonormal 3N-6 internal
+    basis gives an unbiased internal Hessian Frobenius-squared estimator.
+
+identity:
+  old_original_a_identity_allowed: false
+  old_checkpoint_or_manifest_hash_reuse_allowed: false
+  baseline_name: qm9_train800_egf_force1_s12330_rebuild_v1
+  initialization: seeded_random_graphformer
+  initialization_checkpoint: null
+
+train_only_source:
+  historical_source_csv_identity_only: /scratch/xzh/models/complete_total_capacity/20260717/stage3_unseen_parent_v1/assets_v3_uniform_A/train800_replay_labels.csv
+  active_source_csv: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/data/train800_replay_labels.source.csv
+  source_csv_sha256: 882a0f1da1ee74575396731156cb4b6c191b456fcddca8681db48910677f90e9
+  expected_parent_count: 800
+  expected_geometry_count: 3200
+  expected_sample_ids: [0, 1, 2, 3]
+  isolated_dataset_name: QM9PBEForceRandom1000Train800RebuildV1
+  node02_dataset_root: /home/shenwei01/xzh_node02_20260724/data/QM9PBEForceRandom1000Train800RebuildV1
+  split_policy: train_entries_only_with_empty_val_and_test
+  available_scf_expanded_samples: 39470
+  registered_training_samples: 39456
+  sample_budget:
+    policy: hash_ranked_terminal_scf_iteration_trim
+    seed: qm9_graphformer_hybrid_relaxed_hvp_rebuild_v1_scf_budget_v1
+    trim_count: 14
+    reason: align_the_frozen_10_epoch_12330_step_schedule_to_effective_batch_32
+    validation_or_test_information_used: false
+  old_label_hash_policy: identity_record_only_not_adopted
+  regeneration:
+    required_because_beegfs_label_payloads_are_unreadable: true
+    raw_geometry_source: local_AFS_QM9_133885_xyz_snapshot
+    geometry_protocol:
+      reference_plus_perturbations: 3
+      perturbation_std_angstrom: 0.01
+      max_displacement_angstrom: 0.05
+      remove_translation: true
+      random_seed: 20260701
+    electronic_structure:
+      method: PBE
+      basis: "6-31G(2df,p)"
+      initialization: minao
+      grid_level: 3
+      prune_method: nwchem_prune
+      density_fit_basis: def2-universal-jfit
+      density_fit_threshold: 30
+      convergence_tolerance: 1.0e-9
+      compute_forces: true
+    new_label_hashes_required: true
+
+baseline:
+  experiment_config: configs/ml/experiment/str25/qm9_pbe_force_train800_egf_rebuild_v1.yaml
+  model_class: Graphformer
+  scalar_target: e_kin_plus_xc
+  force_definition: F_pred=-dE_pred/dR
+  independent_force_or_hessian_head_allowed: false
+  seed: 676368232
+  max_steps: 12330
+  checkpoint_selection: exact_final_step_without_validation
+  max_epochs_safety_cap: 10
+  optimizer:
+    name: AdamW
+    learning_rate: 7.0e-5
+    betas: [0.95, 0.99]
+    weight_decay: 1.0e-10
+  scheduler:
+    name: CosineAnnealingLR
+    T_max_epochs: 10
+    eta_min: 0.0
+  loss_weights:
+    energy: 0.1
+    density_gradient: 0.8
+    force: 1.0
+    coefficient: 0.0
+  batch:
+    per_gpu: 4
+    effective_global: 32
+    node02_initial_devices: [6]
+    gradient_accumulation: 8
+    equivalent_reference_devices: 8
+  precision: float32
+  validation_enabled: false
+  test_enabled: false
+
+parent_sets:
+  stable5:
+    molecule_ids: ["0028399", "0031108", "0132419", "0031012", "0121249"]
+    manifest_sha256: external_branch_registration_required
+  train20:
+    molecule_ids:
+      - "0016298"
+      - "0028399"
+      - "0064547"
+      - "0124009"
+      - "0132608"
+      - "0016142"
+      - "0031108"
+      - "0096630"
+      - "0132419"
+      - "0049017"
+      - "0082761"
+      - "0015047"
+      - "0031012"
+      - "0038511"
+      - "0057270"
+      - "0091176"
+      - "0123863"
+      - "0091752"
+      - "0036972"
+      - "0121249"
+    manifest_sha256: external_branch_registration_required
+  membership_rule: every_parent_must_exist_in_the_frozen_train800_csv
+
+directions:
+  seed: 20260724
+  parent_seed_stride: 1009
+  partial_heldout_fraction: 0.2
+  structured_per_kind: 12
+  bond_scale: 1.25
+  full_internal_dimension: 3N-6_for_nonlinear_molecules
+  complete_basis_required: true
+  kinds: [bond, angle, torsion, random_internal]
+  remove_translation_rotation: true
+  orthonormality_max_abs: 1.0e-10
+  external_overlap_max_abs: 1.0e-10
+  training_direction:
+    count_per_step: 1
+    distribution: internal_space_rademacher
+    resample_each_step: true
+    normalization: unnormalized_pm1_in_orthonormal_internal_coordinates
+    estimator: unbiased_internal_hessian_frobenius_squared
+  full_basis_use: periodic_evaluation_only
+  stable5_manifest_sha256: external_branch_registration_required
+  train20_manifest_sha256: external_branch_registration_required
+
+analytic_response:
+  definition: >-
+    Optimize the center density strictly, solve G_y y_v=-G_R v for the
+    constrained KKT tangent, and evaluate H_relaxed v=L_RR v+L_Ry y_v.
+    Parameter gradients use an implicit adjoint solve.
+  forbidden_fallbacks: [fixed_density, stale_density, detached_hvp]
+  density_projected_gradient_threshold: 1.0e-8
+  integral_directional_second_step_bohr: 1.0e-4
+  response_tolerance: 1.0e-10
+  response_max_iterations: 2500
+  response_damping: 1.0e-8
+  solvers_to_compare: [direct, pcg, minres, deflated_pcg]
+  solver_selection: fastest_method_meeting_strict_residual_and_hvp_accuracy
+  density_response_prediction_correction: true
+
+numerics:
+  dtype: float64
+  displacement_bohr: 1.0e-3
+  integral_derivative_step_bohr: 1.0e-4
+  integral_directional_second_step_bohr: 1.0e-4
+  density:
+    initialization: label_reference
+    stage1_adam_lr: 1.0e-3
+    stage1_max_cycles: 1000
+    stage1_threshold: 1.0e-2
+    fallback_adam_lr: 3.0e-4
+    fallback_max_cycles: 10000
+    fallback_threshold: 1.0e-5
+    lbfgs_refine: true
+    newton_refine: true
+    strict_projected_gradient_threshold: 1.0e-8
+  analytic_geometry_response:
+    required: true
+    solver: select_fastest_strict_from_registered_benchmark
+    damping: 0.0
+    residual_tolerance: 1.0e-10
+    displaced_density_optimization_allowed_for_audit_only: true
+    displaced_density_response_initialization: c0_plus_or_minus_h_cv
+  implicit_parameter_response:
+    required: true
+    tolerance: 3.0e-5
+    max_iterations: 2500
+    damping: 1.0e-8
+    diagonal_probes: 0
+    warm_start: true
+    failure_action: raise_without_fallback
+
+loss:
+  formula: >-
+    lambda_E*L_total_energy + lambda_F*L_total_relaxed_force
+    +lambda_rho*L_Euler + lambda_H*L_internal_Hutchinson_Frobenius
+  energy:
+    absolute_scale_hartree: 0.1
+  force:
+    absolute_relative_mix: 0.5
+    absolute_scale_hartree_per_bohr: 0.01
+    relative_rms_floor_hartree_per_bohr: 1.0e-3
+  density:
+    scale_hartree_per_density_coefficient: 1.0e-2
+  hvp:
+    absolute_relative_mix: 0.0
+    absolute_scale_hartree_per_bohr2: 0.1
+    relative_rms_floor_hartree_per_bohr2: 1.0e-2
+    norm: unbiased_internal_frobenius_squared
+  low_mode:
+    mode_count: 0
+    wrong_curvature_multiplier: 2.0
+  initial_weights:
+    lambda_E: 1.0
+    lambda_F: 1.0
+    lambda_rho: 0.1
+    lambda_H: 1.0
+    lambda_Q: 0.0
+    lambda_spec: 0.0
+
+audit_0028399:
+  molecule_id: "0028399"
+  analytic_vs_strict_reoptimized_fd_relative_l2_max: 1.0e-5
+  parameter_gradient_fd_relative_error_max: 0.05
+  density_projected_gradient_norm_max: 1.0e-8
+  require_full_internal_basis: true
+  expected_internal_dimension: 39
+  require_full39_nonregression: true
+  same_hardware_speedup_min: 10.0
+  analytic_training_step_wall_seconds_max: 60.0
+
+verification:
+  molecule_id: "0028399"
+  direction_index: 0
+  analytic_vs_fresh_strict_fd_relative_l2_max: 1.0e-5
+  parameter_fd_steps: [1.0e-4, 3.0e-5, 1.0e-5]
+  parameter_gradient_best_relative_error_max: 0.05
+  full_basis_direction_count: 39
+  full_basis_asym_over_sym_max: 0.005
+  strict_density_projected_gradient_norm_max: 1.0e-8
+  require_nonzero_parameter_gradient: true
+  require_all_finite: true
+  target_training_step_speedup_min: 10.0
+  maximum_training_step_seconds: 60.0
+
+capacity_gate:
+  one_parent_hessian_relative_frobenius_max: 0.05
+  energy_relative_regression_max: 1.05
+  force_relative_regression_max: 1.05
+  order: [0028399, stable5, train20]
+  failure_action: stop_without_opening_next_parent_set
+
+capacity_training:
+  one_parent:
+    molecule_ids: ["0028399"]
+    seed: 20260724
+    max_steps: 2000
+    learning_rate: 1.0e-5
+    weight_decay: 0.0
+    directions_per_step: 1
+    eval_interval: 50
+    checkpoint_interval: 50
+    early_stop_relative_frobenius: 0.05
+    gradient_clip_norm: 1.0
+    strict_active_density_refresh: true
+    density_parameter_response_predictor: true
+    implicit_density_parameter_response: true
+    connect_lagrange_multiplier_response: true
+    source_checkpoint: fixed_step_rebuild_baseline
+    checkpoint_selection: first_preregistered_training_gate_pass_or_final_step
+  next_stage_policy: >-
+    stable5 remains locked unless the one-parent summary reports stage1_gate_passed.
+    train20 remains locked unless a separately registered stable5 gate passes.
+
+# The capacity trainer consumes this gate directly. It is deliberately
+# equivalent to capacity_gate and applies first to the single 0028399 parent.
+stage1:
+  gate:
+    training_all_parent_relative_frobenius_max: 0.05
+    antisymmetric_over_symmetric_fro_max: 0.005
+    energy_force_relative_regression_max: 1.05
+    energy_error_floor_hartree: 1.0e-8
+    force_error_floor_hartree_per_bohr: 1.0e-8
+
+node:
+  execution_host: node02
+  local_root: /home/shenwei01/xzh_node02_20260724
+  scratch_as_active_storage_allowed: false
+  maximum_concurrent_tasks: 8

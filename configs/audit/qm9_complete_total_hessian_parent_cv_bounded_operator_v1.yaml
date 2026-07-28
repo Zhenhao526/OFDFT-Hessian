@@ -1,0 +1,97 @@
+protocol_id: qm9_complete_total_hessian_parent_cv_bounded_operator_v1
+frozen_at: "2026-07-22T00:40:12+08:00"
+
+scope:
+  source: QM9PBEForceRandom1000 train20 only
+  parent_count: 20
+  fold_count: 5
+  parents_per_held_fold: 4
+  validation_parent_access_allowed: false
+  test100_accessed: false
+  test100_evaluations_used: 0
+
+frozen_inputs:
+  source_definition: strict complete-total original-A baseline at sample_id=0
+  baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/selection_uniform_A_v1/selected_baseline_manifest.json
+  baseline_manifest_sha256: e81e00ecbf99e7d14751c079aeb081d06455ca720bbb3ca5c758e39de359f127
+  direction_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v5_symmetric_completion/candidate_direction_manifest.json
+  direction_manifest_sha256: 08fca6c89754ed33015f76975e5ff46c47a3fc41d83a99bc6a42edb7d22cf32b
+  source_split: /scratch/xzh/data/QM9PBEForceRandom1000/split.pkl
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+
+cross_validation:
+  fold_assignment: deterministic natoms/composition serpentine allocation
+  feature_normalization: refit on the 16 training parents in every fold
+  fit_labels: train-role HVP directions from the 16 training parents only
+  held_parent_hvp_completion_allowed: false
+  held_parent_fit_allowed: false
+  held_metric: complete full PBE analytic Hessian
+  ridge_grid: [1.0e-6, 1.0e-4, 1.0e-2, 1.0, 100.0]
+  ridge_selection: >-
+    Maximize held-parent fraction with relative Frobenius <=0.15, then minimize
+    held-parent P90, then median, then prefer the larger ridge on an exact tie.
+
+operator:
+  source_hessian_spectral_polynomial_degree: 5
+  source_hessian_spectral_rbf_centers: [-0.25, 0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 4.5]
+  source_hessian_spectral_rbf_width: 0.5
+  equivariant_atom_block_basis: true
+  scalar_definition: reference-anchored Cartesian quadratic
+  energy_force_anchor_at_R0: exact
+  force_head_allowed: false
+
+preregistered_variants:
+  - id: A_standard_conditioned_unbounded
+    parent_feature_transform: standard
+    parent_feature_transform_scale: 2.0
+    block_parent_conditioning: true
+    max_correction_to_source: .inf
+  - id: B_tanh2_conditioned_unbounded
+    parent_feature_transform: tanh
+    parent_feature_transform_scale: 2.0
+    block_parent_conditioning: true
+    max_correction_to_source: .inf
+  - id: C_tanh2_conditioned_cap1
+    parent_feature_transform: tanh
+    parent_feature_transform_scale: 2.0
+    block_parent_conditioning: true
+    max_correction_to_source: 1.0
+  - id: D_clip3_conditioned_cap1
+    parent_feature_transform: clip
+    parent_feature_transform_scale: 3.0
+    block_parent_conditioning: true
+    max_correction_to_source: 1.0
+  - id: E_tanh2_unconditioned_cap1
+    parent_feature_transform: tanh
+    parent_feature_transform_scale: 2.0
+    block_parent_conditioning: false
+    max_correction_to_source: 1.0
+  - id: F_constant_unconditioned_cap1
+    parent_feature_transform: constant
+    parent_feature_transform_scale: 2.0
+    block_parent_conditioning: false
+    max_correction_to_source: 1.0
+  - id: G_tanh2_conditioned_cap0p5
+    parent_feature_transform: tanh
+    parent_feature_transform_scale: 2.0
+    block_parent_conditioning: true
+    max_correction_to_source: 0.5
+
+advancement_gates:
+  hessian_median_relative_frobenius_max: 0.10
+  hessian_fraction_at_or_below_0_15_min: 0.80
+  hessian_p90_relative_frobenius_max: 0.20
+  asym_over_sym_frobenius_max: 0.005
+  energy_force_change_from_source: exactly_zero_by_anchor
+  frequency_mae_target_cm1: [100.0, 200.0]
+  wrong_imaginary_modes: no_material_regression
+  mode_overlap: improve_over_source
+
+decision:
+  passing_variant_required_before_external_validation: true
+  if_none_pass: >-
+    Do not read validation again and do not expand to train100. Replace the
+    transferable scalar response representation rather than tuning the same folds.
+  if_one_or_more_pass: >-
+    Rank passing variants by P90, frequency MAE, imaginary-mode error, and mode
+    overlap; freeze exactly one full-train coefficient set before external validation.

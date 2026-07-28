@@ -1,0 +1,154 @@
+protocol_id: qm9_graphformer_0028399_full39_capacity_only_v1
+branch_id: graphformer_0028399_full39_capacity_only_20260727
+frozen_at: 2026-07-27
+stage: single_molecule_hessian_capacity_only
+method_name: "解析密度/KKT响应的hybrid relaxed-HVP"
+fully_analytic_libcint_second_integrals: false
+
+access_boundary:
+  molecule_ids: ["0028399"]
+  sample_ids: [0]
+  stable5_access_allowed: false
+  train20_access_allowed: false
+  held_direction_access_allowed: false
+  validation_access_allowed: false
+  test100_access_allowed: false
+  validation_evaluations_used: 0
+  test100_evaluations_used: 0
+
+source:
+  checkpoint: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_train800_egf_force1_s12330_rebuild_v1/checkpoints/last.ckpt
+  checkpoint_sha256: ca45fda1eedb9815e9cac26c23f95f0a60666f73c89d4a0e967803ddc4690a45
+  checkpoint_registration: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_train800_egf_force1_s12330_rebuild_v1/checkpoint_registration.json
+  checkpoint_registration_sha256: c671cd5fd32fc9ee613d29dbaa5fe9e016fa3f837428694db464c392d7dfae29
+  run_dir: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_train800_egf_force1_s12330_rebuild_v1
+  selection: fixed_final_step_without_validation
+  dataset_root: /home/shenwei01/xzh_node02_20260724/data/QM9PBEForceRandom1000Train800RebuildV1
+  train_only_dataset_manifest: /home/shenwei01/xzh_node02_20260724/data/QM9PBEForceRandom1000Train800RebuildV1/provenance/train_only_dataset_manifest.json
+  train_only_dataset_manifest_sha256: 9506bf6573ecdea705555d204c389ce7508735baccc3c13533a7b23c623370ed
+  split_sha256: 5b58f73136bbda780340002cb3a356488a6c4cc6b6df1d94b054a352c4d5fb1c
+  label_sha256: ef36ee18127724e3b1a04843fcd016ec4d4191ad0177efda10c16b43da3199fc
+  pbe_hessian: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/pbe_hessian_train20/cache/pbe_hessian_0028399_0000000.npz
+  pbe_hessian_sha256: 9f2ecbb2d92e94911a372829cb4f890812b697be13f0b4b60496405fb1aecad2
+
+definitions:
+  scalar_owner: >-
+    E_total(R,c;theta)=E_Graphformer_kin_plus_xc(R,c;theta)+E_H(R,c)
+    +E_ext(R,c)+E_nn(R).
+  relaxed_hvp: >-
+    H_theta v=L_RR v+L_Ry y_v with G_y y_v=-G_R v at a strictly
+    converged center density. PySCF first-integral derivatives are
+    differentiated by registered directional center differences.
+  parameter_backward: >-
+    Dense direct constrained KKT response and the registered implicit
+    parameter adjoint connect every complete-total relaxed HVP to Graphformer.
+  classical_energy_basis: physical
+  symmetric_matrix_power_mode: eigh_second_order_audit
+  forbidden_fallbacks: [fixed_density, stale_density, detached_hvp, force_head, hessian_head]
+
+directions:
+  seed: 20260727
+  structured_per_kind: 12
+  bond_scale: 1.25
+  complete_basis_required: true
+  expected_internal_dimension: 39
+  roles_allowed: [capacity_train]
+  remove_translation_rotation: true
+  orthonormality_max_abs: 1.0e-10
+  external_overlap_max_abs: 1.0e-10
+  update_rule: >-
+    Evaluate and accumulate parameter gradients for all 39 orthonormal
+    internal directions while parameters remain unchanged; update once only
+    after the complete basis.
+
+loss:
+  lambda_energy: 0.0
+  lambda_force: 0.0
+  lambda_density: 0.0
+  lambda_hessian: 1.0
+  objective: complete_internal_hessian_relative_frobenius_squared
+
+parameter_scopes:
+  order: [energy_readout, readout_last1, readout_last2, full_graphformer]
+  energy_readout:
+    include: [energy_mlp]
+  readout_last1:
+    include: [energy_mlp, g3d_layers:last1]
+  readout_last2:
+    include: [energy_mlp, g3d_layers:last2]
+  full_graphformer:
+    include: [all]
+
+optimizers:
+  order: [adamw, lbfgs, levenberg_marquardt]
+  adamw:
+    learning_rate: 1.0e-4
+    weight_decay: 0.0
+    max_updates: 40
+    gradient_clip_norm: 100.0
+    convergence_patience: 8
+    relative_change_tolerance: 1.0e-5
+  lbfgs:
+    learning_rate: 0.5
+    history_size: 20
+    max_updates: 20
+    max_evaluations_per_update: 5
+    tolerance_grad: 1.0e-9
+    tolerance_change: 1.0e-12
+    convergence_patience: 5
+  levenberg_marquardt:
+    initial_damping: 1.0e-2
+    minimum_damping: 1.0e-8
+    maximum_damping: 1.0e8
+    max_updates: 12
+    cgls_max_iterations: 12
+    cgls_relative_tolerance: 1.0e-3
+    parameter_fd_relative_step: 1.0e-5
+    trial_scales: [1.0, 0.5, 0.25, 0.1]
+    convergence_patience: 4
+
+linearized_capacity:
+  method: matrix_free_damped_cgls
+  run_once_per_parameter_scope_at_fresh_checkpoint: true
+  report: [residual_upper_bound, normal_residual, converged]
+  minimum_claim_requires_convergence: true
+
+numerics:
+  dtype: float64
+  displacement_bohr: 1.0e-3
+  integral_derivative_step_bohr: 1.0e-4
+  integral_directional_second_step_bohr: 1.0e-4
+  integral_derivative_workers: 8
+  integral_cache_entries: 48
+  density:
+    initialization: label_reference
+    stage1_adam_lr: 1.0e-3
+    stage1_max_cycles: 1000
+    stage1_threshold: 1.0e-2
+    fallback_adam_lr: 3.0e-4
+    fallback_max_cycles: 10000
+    fallback_threshold: 1.0e-5
+    strict_projected_gradient_threshold: 1.0e-8
+    lbfgs_max_iterations: 500
+    newton_max_iterations: 6
+  analytic_geometry_response:
+    solver: dense_direct
+    damping: 0.0
+    residual_tolerance: 1.0e-10
+  implicit_parameter_response:
+    solver: direct
+    tolerance: 3.0e-5
+    max_iterations: 2500
+    damping: 1.0e-8
+    diagonal_probes: 0
+    warm_start: true
+
+capacity_gate:
+  full39_relative_frobenius_max: 0.05
+  energy_force_gate_enabled: false
+  action_on_pass: freeze_and_stop_all_remaining_arms
+  inadequate_capacity_claim_requires:
+    - full_graphformer_scope
+    - all_three_optimizers_sufficiently_converged
+    - converged_linearized_minimum_above_gate
+

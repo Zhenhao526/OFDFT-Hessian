@@ -115,6 +115,21 @@ def split_grouped(
     return indices_train, indices_val, indices_test
 
 
+def get_molecule_id_from_label_path(path: Path) -> int:
+    """Extract the molecule id from a label filename.
+
+    Plain labels use ``0000001.zarr.zip`` while geometry-sampled labels use
+    ``0000001.0000000.zarr.zip``. In both cases the molecule id is the first numeric token.
+    """
+    name = path.name
+    for suffix in (".zarr.zip", ".zarr"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    molecule_id = name.split(".", 1)[0]
+    return int(molecule_id)
+
+
 def get_path_list_for_split_file(paths: list[Path], iterations: np.ndarray) -> list[list]:
     """Turn list of paths and iterations into required format of dataset, name, iterations."""
     return [
@@ -255,6 +270,7 @@ def create_split_file(
     split_percentages: tuple[float, float, float],
     processes: int,
     all_test: bool = False,
+    group_by_molecule: bool = False,
 ):
     """Create a split file for any dataset by reading the zarr files inside the labels
     directory."""
@@ -268,8 +284,12 @@ def create_split_file(
             raise FileNotFoundError(
                 f"There are no .zarr files in {label_dir} and an ambiguous amount of subfolders."
             )
+    group_ids = None
+    if group_by_molecule:
+        group_ids = np.array([get_molecule_id_from_label_path(path) for path in paths])
     yaml_dict = _create_train_val_test_split_dict(
         paths,
+        group_ids=group_ids,
         split_percentages=split_percentages,
         processes=processes,
         all_test=all_test,
@@ -302,6 +322,14 @@ if __name__ == "__main__":
         help="Use all data for test. split_percentages will be ignored.",
     )
     parser.add_argument(
+        "--group-by-molecule",
+        action="store_true",
+        help=(
+            "Keep all label samples with the same molecule id in the same split. "
+            "This is required for perturbed QM9 labels named like 0000001.0000000.zarr.zip."
+        ),
+    )
+    parser.add_argument(
         "-p",
         "--processes",
         type=int,
@@ -317,4 +345,5 @@ if __name__ == "__main__":
         args.split_percentages,
         args.processes,
         args.all_test,
+        args.group_by_molecule,
     )

@@ -1,0 +1,38 @@
+protocol_id: qm9_complete_total_hessian_local_random_feature_stage2_ridge_diagnostic_v1
+frozen_at: 2026-07-22
+scope: train20_regularization_diagnostic_only
+promotion_allowed: false
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+source:
+  stage2_protocol: configs/audit/qm9_complete_total_hessian_local_random_feature_stage2_v10.yaml
+  stage2_protocol_sha256: f2809b41ce3e5d37b9d34bd5a7a297001132db0dfdd5a32497c3dfb0d8b833dd
+  baseline_ridge: 1.0e-8
+  baseline_summary: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/direction_fit_v1/summary.json
+  baseline_summary_sha256: 385936bc64dee020656e3f85625bc7a0347bf5831cc3250b97e3123b424fe073
+  feature_jet_dir: /scratch/xzh/models/complete_total_capacity/20260717/stage4_train20_direction_v10/feature_jets_v1
+
+ridge_grid:
+  - 1.0e-7
+  - 1.0e-6
+  - 1.0e-5
+  - 1.0e-4
+  - 1.0e-3
+  - 1.0e-2
+  - 1.0e-1
+  - 1.0
+
+interpretation:
+  selection_metric: heldout_hvp_relative_frobenius.median
+  supporting_metrics:
+    - heldout_hvp_relative_frobenius.p90
+    - hessian_relative_frobenius.median
+    - hessian_relative_frobenius.p90
+    - energy_median_ratio_to_source
+    - force_median_ratio_to_source
+  rule: >-
+    This one-shot path diagnoses whether the v9 Stage-2 failure is primarily caused by the
+    near-interpolating linear solve. No override run may be promoted. Any apparent passing setting
+    requires a newly frozen direction confirmation before unseen-parent evaluation.
+

@@ -1,0 +1,36 @@
+{
+  "protocol_id": "qm9_complete_total_bounded_equivariant_lbfgs_v1",
+  "frozen_at": "2026-07-23",
+  "purpose": "Full-stable5 LBFGS optimizer ceiling from an immutable E2 Adam step-100 checkpoint.",
+  "parent_scope": "stable5_fit_only",
+  "parents": [
+    "0028399",
+    "0031108",
+    "0132419",
+    "0031012",
+    "0121249"
+  ],
+  "source_protocol": "/scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_bounded_equivariant_width_depth_v2.yaml",
+  "source_protocol_sha256": "5c0d57f09c65ad0aabd5cc79f2d885b6b69d6d342abc81a7cd240220bc727df0",
+  "source_arm_id": "E2_bounded_equivariant_h64_l2",
+  "source_checkpoint": "/scratch/xzh/models/complete_total_capacity/20260717/stage5_bounded_equivariant_v2/lbfgs_v1/adam_best_through_s100.ckpt",
+  "source_checkpoint_sha256": "3422fb7f891e31e016e31a8013d14975612e6dc924252cf89bcc59e15746a12a",
+  "source_checkpoint_step": 100,
+  "scalar_owner": "The bounded equivariant atomic scalar energy; force and Hessian are its first and second geometry derivatives.",
+  "independent_force_head_allowed": false,
+  "lbfgs": {
+    "joint": {
+      "iterations": 30,
+      "learning_rate": 0.5,
+      "history_size": 20,
+      "max_evaluations_per_iteration": 3,
+      "tolerance_grad": 1e-09,
+      "tolerance_change": 1e-12,
+      "log_interval": 5,
+      "parent_cv_authorization_allowed": true
+    }
+  },
+  "validation_accessed": false,
+  "test100_accessed": false,
+  "test100_evaluations_used": 0
+}

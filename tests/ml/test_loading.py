@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import torch
+import zarr
 from e3nn.o3 import Irreps
 from torch_geometric.data import Batch, Data
 
@@ -92,6 +93,139 @@ def test_load_sample(dummy_sample_path, dummy_basis_info):
     """
     sample = OFData.from_file(dummy_sample_path, 0, dummy_basis_info, add_irreps=True)
     check_sample_or_batch(sample, n_atom=30)
+
+
+def test_load_force_label(dummy_sample_path, dummy_basis_info):
+    root = zarr.open(dummy_sample_path, mode="a")
+    n_atom = root["geometry"]["atomic_numbers"].shape[0]
+    forces = np.arange(n_atom * 3, dtype=np.float64).reshape(n_atom, 3)
+    derivatives = root.require_group("metadata").require_group("pbe_derivatives")
+    if "forces" in derivatives:
+        del derivatives["forces"]
+    derivatives.create_dataset("forces", data=forces, compressor=None)
+
+    sample = OFData.from_file(
+        dummy_sample_path,
+        0,
+        dummy_basis_info,
+        add_irreps=True,
+        load_force_label=True,
+    )
+    np.testing.assert_allclose(sample.force_label, forces)
+
+    sample = to_torch(sample)
+    assert isinstance(sample.force_label, torch.Tensor)
+    assert sample.force_label.shape == (n_atom, 3)
+
+
+def test_load_multi_direction_hvp_sidecar_resamples_by_epoch(
+    dummy_sample_path, dummy_basis_info, tmp_path
+):
+    root = zarr.open(dummy_sample_path, mode="a")
+    reference = root.require_group("metadata").require_group("reference")
+    for key, value in {"source_molecule_id": 42, "sample_id": 0}.items():
+        if key in reference:
+            del reference[key]
+        reference.create_dataset(key, data=np.asarray(value), compressor=None)
+    n_atom = root["geometry/atomic_numbers"].shape[0]
+    directions = np.zeros((4, n_atom, 3), dtype=np.float64)
+    labels = np.zeros_like(directions)
+    for index in range(4):
+        directions[index, index, 0] = 1.0
+        labels[index] = index + 1.0
+    np.savez_compressed(
+        tmp_path / "0000042.0000000.npz",
+        direction=directions,
+        model_hvp_target=labels,
+        complete_total_reference_hvp=labels,
+        fixed_density_correction_hvp=np.zeros_like(labels),
+        direction_kind_code=np.arange(4),
+        stability_mask=np.asarray([True, False, True, True]),
+    )
+
+    selected = []
+    for epoch in range(12):
+        sample = OFData.from_file(
+            dummy_sample_path,
+            0,
+            dummy_basis_info,
+            load_hvp_label=True,
+            hvp_label_dir=tmp_path,
+            hvp_direction_seed=17,
+            hvp_direction_epoch=epoch,
+        )
+        index = int(sample.hvp_selected_direction_index[0])
+        assert index in {0, 2, 3}
+        np.testing.assert_allclose(sample.hvp_label, labels[index])
+        selected.append(index)
+    assert len(set(selected)) >= 2
+
+
+def test_load_multi_direction_hvp_sidecar_rejects_unstable_fixed_index(
+    dummy_sample_path, dummy_basis_info, tmp_path
+):
+    root = zarr.open(dummy_sample_path, mode="a")
+    reference = root.require_group("metadata").require_group("reference")
+    for key, value in {"source_molecule_id": 43, "sample_id": 0}.items():
+        if key in reference:
+            del reference[key]
+        reference.create_dataset(key, data=np.asarray(value), compressor=None)
+    n_atom = root["geometry/atomic_numbers"].shape[0]
+    values = np.ones((2, n_atom, 3), dtype=np.float64)
+    np.savez_compressed(
+        tmp_path / "0000043.0000000.npz",
+        direction=values,
+        model_hvp_target=values,
+        complete_total_reference_hvp=values,
+        fixed_density_correction_hvp=np.zeros_like(values),
+        stability_mask=np.asarray([True, False]),
+    )
+
+    with pytest.raises(ValueError, match="unstable direction"):
+        OFData.from_file(
+            dummy_sample_path,
+            0,
+            dummy_basis_info,
+            load_hvp_label=True,
+            hvp_label_dir=tmp_path,
+            hvp_direction_index=1,
+        )
+
+
+def test_load_multi_direction_hvp_sidecar_supports_explicit_target_key(
+    dummy_sample_path, dummy_basis_info, tmp_path
+):
+    root = zarr.open(dummy_sample_path, mode="a")
+    reference = root.require_group("metadata").require_group("reference")
+    for key, value in {"source_molecule_id": 44, "sample_id": 0}.items():
+        if key in reference:
+            del reference[key]
+        reference.create_dataset(key, data=np.asarray(value), compressor=None)
+    n_atom = int(root["geometry/atomic_numbers"].shape[0])
+    directions = np.ones((2, n_atom, 3), dtype=np.float64)
+    pbe_targets = np.full_like(directions, 2.0)
+    implicit_targets = np.full_like(directions, 7.0)
+    np.savez_compressed(
+        tmp_path / "0000044.0000000.npz",
+        direction=directions,
+        model_hvp_target=pbe_targets,
+        implicit_complete_total_hvp_target=implicit_targets,
+        complete_total_reference_hvp=pbe_targets,
+        fixed_density_correction_hvp=np.zeros_like(directions),
+        stability_mask=np.asarray([True, True]),
+    )
+
+    sample = OFData.from_file(
+        dummy_sample_path,
+        0,
+        dummy_basis_info,
+        load_hvp_label=True,
+        hvp_label_dir=tmp_path,
+        hvp_direction_index=1,
+        hvp_target_key="implicit_complete_total_hvp_target",
+    )
+
+    np.testing.assert_allclose(sample.hvp_label, implicit_targets[1])
 
 
 def test_to_torch(dummy_sample):

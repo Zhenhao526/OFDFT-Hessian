@@ -1,0 +1,52 @@
+protocol_id: qm9_complete_total_hessian_unseen_parent_v1
+frozen_at: "2026-07-21T03:50:00+08:00"
+
+scope:
+  source: QM9PBEForceRandom1000
+  train_parent_count: 800
+  train_geometries_per_parent: 4
+  selected_hvp_inventory_parent_count: 100
+  validation_inventory_parent_count: 20
+  test100_accessed: false
+  test100_evaluations_used: 0
+
+definitions:
+  prediction: >-
+    E_total(R) = E_EGF,complete-total-relaxed(R) + E_geometry-residual(R).
+    The residual is density independent, so it does not move the stationary density.
+    Force and Hessian corrections are exact first and second derivatives of this scalar residual.
+  hvp_target: >-
+    (H_PBE,analytic - H_EGF,complete-total-density-relaxed) v. Parents failing the
+    preregistered density or PBE-normalized curl gates are excluded from ordinary HVP loss.
+  replay_target: >-
+    PBE analytic total energy/force minus strict complete-total density-relaxed EGF
+    energy/force, on all four original geometries of every train800 parent.
+
+stability:
+  minimum_stable_directions: 3
+  strict_density_gradient_max: 1.0e-8
+  baseline_asym_over_pbe_frobenius_max: 5.0e-3
+  unstable_parent_policy: report_and_mask
+  unstable_direction_policy: report_and_mask
+
+training:
+  seeds: [676368232, 20260716, 314159]
+  initialize_from_stage2_v3: true
+  train800_energy_force_replay: true
+  dynamic_hvp_directions_per_parent: 4
+  hvp_warmup_steps: 2000
+  absolute_relative_hvp_mix: 0.5
+  hvp_reference_floor_hartree_per_bohr2: 5.0e-2
+  gradient_clip_norm: 10.0
+  gradient_balance: pcgrad
+
+validation:
+  test100_frozen: true
+  rank_only_on_independent_validation_parents: true
+  hessian_median_relative_frobenius_max: 0.10
+  hessian_fraction_at_or_below_0_15_min: 0.80
+  hessian_p90_relative_frobenius_max: 0.20
+  energy_force_regression_max_fraction: 0.05
+  asym_over_sym_frobenius_max: 5.0e-3
+  frequency_mae_target_cm1: [100.0, 200.0]
+

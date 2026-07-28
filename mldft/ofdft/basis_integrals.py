@@ -398,6 +398,32 @@ def get_overlap_matrix(mol: gto.Mole) -> np.ndarray:
     return gto.moleintor.getints(intor_name, mol._atm, mol._bas, mol._env)
 
 
+def get_overlap_coordinate_derivatives(mol: gto.Mole) -> np.ndarray:
+    r"""Return complete moving-centre derivatives of the auxiliary-basis overlap.
+
+    ``int1e_ipovlp`` differentiates the bra AO with respect to its electronic coordinate. A
+    derivative of an atom-centred AO with respect to its nuclear centre has the opposite sign.
+    Adding the corresponding bra and ket AO slices supplies all Pulay overlap terms.
+
+    Returns:
+        Array with shape ``(3 * natom, nao, nao)`` in flattened atom/Cartesian order.
+    """
+    bra_electronic_derivative = mol.intor("int1e_ipovlp", comp=3)
+    derivatives = np.zeros((3 * mol.natm, mol.nao, mol.nao), dtype=np.float64)
+    for atom_index, (_, _, ao_start, ao_stop) in enumerate(mol.aoslice_by_atom()):
+        for cartesian in range(3):
+            bra_centre_derivative = -bra_electronic_derivative[
+                cartesian, ao_start:ao_stop, :
+            ]
+            derivatives[
+                3 * atom_index + cartesian, ao_start:ao_stop, :
+            ] += bra_centre_derivative
+            derivatives[
+                3 * atom_index + cartesian, :, ao_start:ao_stop
+            ] += bra_centre_derivative.T
+    return derivatives
+
+
 def get_overlap_tensor(mol_rho: gto.Mole, mol_orbital: gto.Mole) -> np.ndarray:
     r"""Compute the 3-center overlap integral tensor between different bases.
 

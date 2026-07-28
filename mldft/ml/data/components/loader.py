@@ -36,10 +36,14 @@ class OFLoader(DataLoader):
         # Save for PyTorch Lightning < 1.6:
         self.follow_batch = follow_batch
         self.exclude_keys = exclude_keys
-        super().__init__(
-            dataset,
-            batch_size,
-            shuffle,
-            collate_fn=OFCollater(dataset, follow_batch, exclude_keys, list_keys),
-            **kwargs,
-        )
+        collate_fn = OFCollater(dataset, follow_batch, exclude_keys, list_keys)
+        if "batch_sampler" in kwargs:
+            super().__init__(dataset, collate_fn=collate_fn, **kwargs)
+        else:
+            super().__init__(
+                dataset,
+                batch_size,
+                shuffle,
+                collate_fn=collate_fn,
+                **kwargs,
+            )

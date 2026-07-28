@@ -1,0 +1,144 @@
+protocol_id: qm9_complete_total_hessian_capacity_v1
+frozen_at: 2026-07-17
+supersedes: qm9_random1000_hvp_curvature_training_v2
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+objective:
+  primary: reduce_complete_total_density_relaxed_hessian_relative_frobenius
+  baseline_relative_frobenius: 2.7
+  target_relative_frobenius: 0.1
+  strategy:
+    - small_sample_capacity
+    - unseen_direction_generalization
+    - unseen_parent_generalization
+
+definitions:
+  scalar_owner: >-
+    E_total(R,c;theta) = E_model_kin_plus_xc(R,c;theta) + E_H(R,c)
+    + E_ext(R,c) + E_nn(R)
+  total_relaxed_force: F = -d E_total(R,c_star(R;theta);theta) / dR
+  complete_total_relaxed_hvp: >-
+    H v = -(F(R+h v,c_star(R+h v))-F(R-h v,c_star(R-h v)))/(2 h)
+  independent_force_head_allowed: false
+  density_refresh_training_approximation: >-
+    Block-coordinate optimization. Densities at the base and displaced geometries are strictly
+    relaxed with the current model and detached. Parameter updates use complete-total scalar
+    energy, complete scalar-derived forces, force-secant HVP, and an Euler residual penalty.
+    Densities are refreshed periodically or when the projected gradient drift exceeds its gate.
+  formal_acceptance_definition: >-
+    Independent strict density-relaxed complete-total finite-difference full Hessian. The detached
+    block-coordinate training approximation is never used as its own acceptance oracle.
+
+data:
+  source_dataset: QM9PBEForceRandom1000
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  sample_id: 0
+  pbe_reference: analytic_PBE_energy_force_hessian
+  parent_grouping_required: true
+  stage1_parents:
+    - {molecule_id: "0028399", natoms: 15, reason: smallest_train100_all4_stable}
+    - {molecule_id: "0050129", natoms: 15, reason: smallest_train100_all4_stable}
+    - {molecule_id: "0031108", natoms: 16, reason: smallest_train100_all4_stable}
+    - {molecule_id: "0132419", natoms: 16, reason: smallest_train100_all4_stable}
+    - {molecule_id: "0031012", natoms: 18, reason: smallest_train100_all4_stable}
+  stage1_role: capacity_only_not_validation
+  validation_parents_consumed_by_stage1: 0
+
+numerics:
+  dtype: float64
+  force_secant_displacement_bohr: 1.0e-3
+  integral_derivative_step_bohr: 1.0e-4
+  density:
+    base_initialization: label_reference
+    displaced_initialization: base_density_warm_start
+    stage1_optimizer: adam
+    stage1_lr: 1.0e-3
+    stage1_max_cycles: 1000
+    stage1_threshold: 1.0e-2
+    fallback_optimizer: adam
+    fallback_lr: 3.0e-4
+    fallback_max_cycles: 10000
+    fallback_threshold: 1.0e-5
+    lbfgs_refine: true
+    newton_refine: true
+    strict_projected_gradient_threshold: 1.0e-8
+  density_refresh:
+    interval_steps: 25
+    drift_trigger: 1.0e-4
+
+loss:
+  formula: lambda_E*L_total_energy + lambda_F*L_total_relaxed_force + lambda_rho*L_Euler + lambda_H*L_complete_total_relaxed_HVP + lambda_spec*L_low_mode
+  hvp:
+    absolute_relative_mix: 0.5
+    absolute_scale_hartree_per_bohr2: 0.1
+    relative_rms_floor_hartree_per_bohr2: 1.0e-2
+  force:
+    absolute_relative_mix: 0.5
+    absolute_scale_hartree_per_bohr: 0.01
+    relative_rms_floor_hartree_per_bohr: 1.0e-3
+  energy:
+    absolute_scale_hartree: 0.1
+  density:
+    form: squared_projected_gradient_norm
+    scale_hartree_per_density_coefficient: 1.0e-2
+  low_mode:
+    mode_count: 6
+    wrong_curvature_multiplier: 2.0
+  initial_weights:
+    lambda_E: 1.0
+    lambda_F: 1.0
+    lambda_rho: 0.1
+    lambda_H: 1.0
+    lambda_spec: 0.1
+  record_parameter_gradient_norms: true
+  record_pairwise_gradient_cosines: true
+  gradient_clip_norm: 1.0
+
+stage1:
+  order:
+    - one_parent_gradient_and_execution_smoke
+    - one_parent_capacity_fit
+    - five_parent_capacity_fit
+  initialization_checkpoint: random1000_force_weight_1_A_control
+  full_cartesian_hessian_columns: true
+  low_mode_directions: 6
+  directions_per_parameter_step: 2
+  learning_rates: [1.0e-5, 3.0e-5, 1.0e-4]
+  max_steps: [200, 1000, 3000]
+  gate:
+    training_median_relative_frobenius_max: 0.05
+    training_all_parent_relative_frobenius_max: 0.05
+    preferred_relative_frobenius_max: 0.01
+    strict_density_convergence_rate_min: 1.0
+    antisymmetric_over_symmetric_fro_max: 0.005
+  failure_action: >-
+    Do not increase parent count. Audit model capacity, functional kernel, complete-total force and
+    response definitions, density stationarity, loss gradients, and finite-difference stability.
+
+stage2:
+  enabled_only_after_stage1_gate: true
+  parent_count: 20
+  train_direction_fraction: 0.5
+  train_direction_relative_frobenius_max: 0.05
+  unseen_direction_relative_frobenius_max: 0.15
+  preferred_unseen_direction_relative_frobenius_max: 0.10
+  train800_energy_force_replay: true
+  multitask_balancing: [pcgrad, gradnorm]
+
+stage3:
+  enabled_only_after_stage1_and_stage2_gates: true
+  hvp_labelled_train_parent_count: 100
+  energy_force_replay_parent_count: 800
+  independent_validation_full_hessian: true
+  test100_access_after_candidate_freeze_max: 1
+
+formal_targets:
+  median_relative_frobenius_max: 0.10
+  molecule_fraction_below_0p15_min: 0.80
+  p90_relative_frobenius_max: 0.20
+  frequency_mae_cm1: [100, 200]
+  wrong_imaginary_modes: approach_PBE
+  mode_overlap: significantly_improved
+  antisymmetric_over_symmetric_fro_max: 0.005
+  energy_force_must_not_significantly_degrade: true

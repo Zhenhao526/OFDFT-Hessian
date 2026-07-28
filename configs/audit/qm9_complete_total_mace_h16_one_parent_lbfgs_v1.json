@@ -1,0 +1,36 @@
+{
+  "protocol_id": "qm9_complete_total_mace_lbfgs_v1",
+  "frozen_at": "2026-07-23",
+  "purpose": "Single-parent h16/correlation-3 MACE response ceilings from an immutable stable5-only Adam step-75 checkpoint; diagnostic only.",
+  "parent_scope": "stable5_one_parent_diagnostic",
+  "diagnostic_parent_ids": [
+    "0028399",
+    "0031108",
+    "0132419",
+    "0031012",
+    "0121249"
+  ],
+  "source_protocol": "/scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_mace_h16_scaled_smoke_v6d.yaml",
+  "source_protocol_sha256": "f66eb24a7a87a908c03a5636d94de971687e80d6a4e06cb6856cbb9fe57900e9",
+  "source_arm_id": "E10d_mace_h16_l2_corr3_cut20_scale1000",
+  "source_checkpoint": "/scratch/xzh/models/complete_total_capacity/20260717/stage5_mace_h16_scaled_v6d/one_parent_lbfgs_v1/adam_best_snapshot.ckpt",
+  "source_checkpoint_sha256": "33f5842f150d3a822fe31177f59fb7262cec781bbf217fbe2a416d79f0893229",
+  "source_checkpoint_step": 75,
+  "scalar_owner": "The reference-anchored MACE h16/correlation-3 scalar energy with fixed output scale 1000; force and Hessian are its first and second geometry derivatives.",
+  "independent_force_head_allowed": false,
+  "lbfgs": {
+    "joint": {
+      "iterations": 50,
+      "learning_rate": 0.5,
+      "history_size": 20,
+      "max_evaluations_per_iteration": 3,
+      "tolerance_grad": 1e-09,
+      "tolerance_change": 1e-12,
+      "log_interval": 10,
+      "parent_cv_authorization_allowed": false
+    }
+  },
+  "validation_accessed": false,
+  "test100_accessed": false,
+  "test100_evaluations_used": 0
+}

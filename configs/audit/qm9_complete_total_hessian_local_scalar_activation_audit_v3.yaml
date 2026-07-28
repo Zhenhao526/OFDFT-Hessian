@@ -1,0 +1,128 @@
+protocol_id: qm9_complete_total_hessian_local_scalar_activation_audit_v3
+frozen_at: 2026-07-22
+stage: stable5_fit_only_joint_scalar_capacity
+contingency: run only if J2 GradNorm formal fails the stable5 joint E/F/H gate
+test100_access_allowed: false
+test100_evaluations_used: 0
+
+definitions:
+  scalar_owner: >-
+    E_local(R) = E_A - F_A dot dR + 0.5 dR^T sym(H_A) dR
+    + C_theta(R) - C_initial(R).
+  source: strict complete-total relaxed original-A at sample_id=0
+  force: F = -d E_local / dR
+  hessian: H = d2 E_local / dR2
+  independent_force_head_allowed: false
+  scope: stable5 fit-only second-order activation/Jacobian audit; not parent generalization
+  reason: >-
+    Default beta-1 Softplus produced Hessian-task parameter-gradient norms four to five orders of
+    magnitude below E/F at initialization. This audit changes only the smooth activation family.
+
+inputs:
+  baseline_manifest: /scratch/xzh/models/complete_total_capacity/20260717/stage2_direction_v1/selection_uniform_A_v1/selected_baseline_manifest.json
+  baseline_manifest_sha256: e81e00ecbf99e7d14751c079aeb081d06455ca720bbb3ca5c758e39de359f127
+  stable5_protocol: /scratch/xzh/code/structures25/configs/audit/qm9_complete_total_hessian_capacity_v1_stable5_v2.yaml
+  stable5_protocol_sha256: 05c7ace0fbcd85195cec81255f64f75ba140c5b135bf7c1dc3fc1ccd1a3dc23c
+  source_split_sha256: 8d5fc057a0ff6af2f7d994db7f6517145c00c745416b015caa3dd9afb57f1c7a
+  sample_id: 0
+  pbe_reference: analytic_PBE_energy_force_hessian
+  parents: ["0028399", "0031108", "0132419", "0031012", "0121249"]
+
+training:
+  dtype: float64
+  smoke_steps: 10
+  formal_steps: 3000
+  log_interval_smoke: 2
+  log_interval_formal: 100
+  parent_batch_size: 2
+  anchor_energy_force: false
+  absolute_hessian_scale: 0.1
+  relative_loss_fraction: 0.5
+  hessian_reference_floor: 0.1
+  lambda_energy: 1.0
+  lambda_force: 1.0
+  lambda_hessian: 1.0
+  lambda_parameter: 1.0e-10
+  energy_scale: 0.1
+  force_scale: 0.05
+  hessian_warmup_steps: 200
+  gradnorm_balance: true
+  gradnorm_target_ratio: 1.0
+  gradnorm_min_scale: 1.0e-3
+  gradnorm_max_scale: 1.0e4
+  pcgrad: true
+  pcgrad_max_hessian_to_energy_force_norm_ratio: 1.0
+  gradient_clip: 5.0
+  checkpoint_selection: median_plus_max_full_hessian_relative_frobenius_plus_EF_gate_penalty
+  source_hessian_policy: symmetrize_before_local_quadratic_scalar
+
+arms:
+  - id: J2b_message_passing_softplus_beta1_control
+    architecture: invariant_distance_message_passing
+    activation: softplus
+    softplus_beta: 1.0
+    seed: 20260726
+    hidden_size: 96
+    radial_size: 16
+    message_layers: 3
+    cutoff_bohr: 8.0
+    learning_rate: 1.0e-5
+  - id: J3_message_passing_softplus_beta5
+    architecture: invariant_distance_message_passing
+    activation: softplus
+    softplus_beta: 5.0
+    seed: 20260726
+    hidden_size: 96
+    radial_size: 16
+    message_layers: 3
+    cutoff_bohr: 8.0
+    learning_rate: 1.0e-5
+  - id: J4_message_passing_silu
+    architecture: invariant_distance_message_passing
+    activation: silu
+    seed: 20260726
+    hidden_size: 96
+    radial_size: 16
+    message_layers: 3
+    cutoff_bohr: 8.0
+    learning_rate: 1.0e-5
+  - id: J5_message_passing_tanh
+    architecture: invariant_distance_message_passing
+    activation: tanh
+    seed: 20260726
+    hidden_size: 96
+    radial_size: 16
+    message_layers: 3
+    cutoff_bohr: 8.0
+    learning_rate: 1.0e-5
+
+capacity_gate:
+  training_median_relative_frobenius_max: 0.05
+  training_all_parent_relative_frobenius_max: 0.05
+  energy_median_ratio_to_source_max: 1.05
+  force_median_ratio_to_source_max: 1.05
+  antisymmetric_over_symmetric_frobenius_max: 0.005
+  rule: >-
+    Activation smoke compares raw Hessian/E-F parameter-gradient ratio, finite second derivatives,
+    and ten-step movement against a same-seed beta-1 Softplus control. At most the best one or two
+    preregistered non-control arms may run formal, and only after J2 has formally failed. Parent-CV
+    remains forbidden until a formal arm passes every gate.
+
+smoke_selection:
+  control_arm: J2b_message_passing_softplus_beta1_control
+  eligible_non_control_rule: >-
+    Every logged scalar and gradient diagnostic must be finite; final selection_score must be lower
+    than the same-seed control; and the median over logged positive steps of
+    raw_hessian_gradient_norm / energy_force_gradient_norm must exceed the control median.
+  rank: ascending final selection_score, then descending median raw Hessian/E-F gradient ratio,
+    then arm id
+  maximum_formal_non_control_arms: 2
+  no_eligible_arm_action: >-
+    Do not run an activation formal. Audit functional kernel/rank or use a separately frozen
+    full-batch optimizer protocol without opening any new parent.
+
+next_stage_if_passed:
+  action: freeze a separate five-fold train20 parent-heldout protocol with train800 E/F replay
+  validation_access_allowed: false
+  train100_expansion_allowed: false
+  test100_access_allowed: false

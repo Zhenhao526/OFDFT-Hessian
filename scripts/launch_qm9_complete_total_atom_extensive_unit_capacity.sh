@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=/scratch/xzh/models/complete_total_capacity/20260717
+BASELINE=${ROOT}/five_parent_baseline_manifest_stable5_v2.json
+DESIGN=${ROOT}/five_parent_shared_geometry_capacity_stable5_v2
+OUTPUT=${ROOT}/stage1_atom_extensive_unit_stable5_v2
+WARM=${OUTPUT}/mlp_h128_h1_warm
+FINAL=${OUTPUT}/mlp_h128_h10_s30000
+
+cd /scratch/xzh/code/structures25
+source /scratch/xzh/env.sh
+
+WARM_JOB=$(sbatch --parsable \
+  --export="ALL,STAGE2_MLP_OUTPUT_DIR=${WARM},STAGE2_MLP_BASELINE_MANIFEST=${BASELINE},STAGE2_MLP_DESIGN_ROOT=${DESIGN},STAGE2_MLP_FULL_HESSIAN_CAPACITY=1,STAGE2_MLP_ATOM_COUNT_EXTENSIVE=1,STAGE2_MLP_FEATURE_SCALE_MODE=unit,STAGE2_MLP_HIDDEN_SIZE=128,STAGE2_MLP_SEED=20260720,STAGE2_MLP_STEPS=5000,STAGE2_MLP_LR=3e-4,STAGE2_MLP_LOG_INTERVAL=100,STAGE2_MLP_LAMBDA_E=1,STAGE2_MLP_LAMBDA_F=1,STAGE2_MLP_LAMBDA_H=1,STAGE2_MLP_LAMBDA_SPEC=0" \
+  scripts/slurm_qm9_complete_total_stage2_direction_mlp.sbatch)
+
+FINAL_JOB=$(sbatch --parsable --dependency="afterok:${WARM_JOB}" \
+  --export="ALL,STAGE2_MLP_OUTPUT_DIR=${FINAL},STAGE2_MLP_BASELINE_MANIFEST=${BASELINE},STAGE2_MLP_DESIGN_ROOT=${DESIGN},STAGE2_MLP_FULL_HESSIAN_CAPACITY=1,STAGE2_MLP_ATOM_COUNT_EXTENSIVE=1,STAGE2_MLP_FEATURE_SCALE_MODE=unit,STAGE2_MLP_CHECKPOINT=${WARM}/best.ckpt,STAGE2_MLP_HIDDEN_SIZE=128,STAGE2_MLP_SEED=20260720,STAGE2_MLP_STEPS=30000,STAGE2_MLP_LR=3e-5,STAGE2_MLP_LOG_INTERVAL=100,STAGE2_MLP_LAMBDA_E=1,STAGE2_MLP_LAMBDA_F=1,STAGE2_MLP_LAMBDA_H=10,STAGE2_MLP_LAMBDA_SPEC=0" \
+  scripts/slurm_qm9_complete_total_stage2_direction_mlp.sbatch)
+
+printf 'warm_job=%s\nfinal_job=%s\n' "${WARM_JOB}" "${FINAL_JOB}"

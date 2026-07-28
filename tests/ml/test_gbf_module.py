@@ -3,7 +3,16 @@ import torch
 from torch import Tensor
 
 from mldft.ml.data.components.of_data import OFData
-from mldft.ml.models.components.gbf_module import GBFModule
+from mldft.ml.models.components.gbf_module import GBFModule, GaussianLayer
+
+
+def _full_hessian_from_scalar(scalar: Tensor, pos: Tensor) -> Tensor:
+    grad_pos = torch.autograd.grad(scalar, pos, create_graph=True, retain_graph=True)[0]
+    rows = []
+    for component in grad_pos.reshape(-1):
+        row = torch.autograd.grad(component, pos, retain_graph=True)[0]
+        rows.append(row.reshape(-1))
+    return torch.stack(rows)
 
 
 @pytest.mark.parametrize(
@@ -147,3 +156,95 @@ def test_gbf_normalisation(num_gaussians: int, integrated_area: Tensor, scale: T
     # test if the integrated area of the gaussians is  equal to the given integrated_area
     for i in range(num_gaussians):
         assert torch.allclose(10 / num_atoms * torch.sum(output[:, i]), integrated_area[i])
+
+
+@pytest.mark.parametrize("module_cls", [GBFModule])
+def test_gbf_module_self_loop_second_order_autograd_is_finite(module_cls) -> None:
+    pos = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.1, 0.2, 0.0], [-0.4, 0.8, 0.3]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    edge_index = torch.stack(
+        torch.meshgrid(torch.arange(pos.shape[0]), torch.arange(pos.shape[0]), indexing="ij")
+    ).reshape(2, -1)
+    module = module_cls(num_gaussians=8, normalized=True).to(torch.float64)
+
+    edge_attr = module(OFData(pos=pos, edge_index=edge_index))
+    hessian = _full_hessian_from_scalar(edge_attr.sum(), pos)
+
+    assert torch.isfinite(hessian).all()
+
+
+def test_gaussian_layer_self_loop_second_order_autograd_is_finite(dummy_basis_info) -> None:
+    pos = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.1, 0.2, 0.0], [-0.4, 0.8, 0.3]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    edge_index = torch.stack(
+        torch.meshgrid(torch.arange(pos.shape[0]), torch.arange(pos.shape[0]), indexing="ij")
+    ).reshape(2, -1)
+    sample = OFData(
+        pos=pos,
+        edge_index=edge_index,
+        atom_ind=torch.tensor([0, 1, 2], dtype=torch.long),
+    )
+    module = GaussianLayer(dummy_basis_info, num_gaussians=8, normalized=True).to(torch.float64)
+
+    edge_attr, length = module(sample)
+    hessian = _full_hessian_from_scalar(edge_attr.sum() + length.sum(), pos)
+
+    assert torch.isfinite(hessian).all()
+
+
+def test_gaussian_layer_non_self_edges_match_filtered_graph(dummy_basis_info) -> None:
+    pos = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.1, 0.2, 0.0], [-0.4, 0.8, 0.3]],
+        dtype=torch.float64,
+    )
+    full_edge_index = torch.stack(
+        torch.meshgrid(torch.arange(pos.shape[0]), torch.arange(pos.shape[0]), indexing="ij")
+    ).reshape(2, -1)
+    non_self = full_edge_index[0] != full_edge_index[1]
+    filtered_edge_index = full_edge_index[:, non_self]
+    atom_ind = torch.tensor([0, 1, 2], dtype=torch.long)
+    module = GaussianLayer(dummy_basis_info, num_gaussians=8, normalized=True).to(torch.float64)
+
+    full_attr, full_length = module(
+        OFData(pos=pos, edge_index=full_edge_index, atom_ind=atom_ind)
+    )
+    filtered_attr, filtered_length = module(
+        OFData(pos=pos, edge_index=filtered_edge_index, atom_ind=atom_ind)
+    )
+
+    assert torch.allclose(full_attr[non_self], filtered_attr)
+    assert torch.allclose(full_length[non_self], filtered_length)
+    assert torch.equal(full_length[~non_self], torch.zeros_like(full_length[~non_self]))
+
+
+def test_gaussian_layer_preserves_float64_distance_resolution(dummy_basis_info) -> None:
+    separation = 1.0e-9
+    pos = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0 + separation, 0.0, 0.0]],
+        dtype=torch.float64,
+    )
+    edge_index = torch.tensor([[0, 0], [1, 2]], dtype=torch.long)
+    sample = OFData(
+        pos=pos,
+        edge_index=edge_index,
+        atom_ind=torch.tensor([0, 1, 1], dtype=torch.long),
+    )
+    module = GaussianLayer(dummy_basis_info, num_gaussians=8, normalized=True).to(
+        torch.float64
+    )
+
+    edge_attr, length = module(sample)
+
+    torch.testing.assert_close(
+        length[1] - length[0],
+        torch.tensor([separation], dtype=torch.float64),
+        rtol=1.0e-7,
+        atol=1.0e-15,
+    )
+    assert torch.max(torch.abs(edge_attr[1] - edge_attr[0])) > 0.0

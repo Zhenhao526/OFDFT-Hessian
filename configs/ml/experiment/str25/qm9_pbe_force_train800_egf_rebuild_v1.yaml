@@ -1,0 +1,76 @@
+# @package _global_
+
+defaults:
+  - str25/default
+  - override /data: qm9_pbe_force_random1000_train800_rebuild_v1
+  - override /model/loss_function: l1_force
+  - override /trainer: ddp_8xa100
+  - override /callbacks: qm9_full_scale
+  - override /logger: tensorboard
+
+name: qm9_train800_egf_force1_s12330_rebuild_v1
+tags:
+  - qm9_train800
+  - graphformer
+  - egf
+  - force_weight_1
+  - rebuild_v1
+  - train_only
+  - fixed_step
+
+seed: 676368232
+train: true
+validate: false
+test: false
+ckpt_path: null
+weight_ckpt_path: null
+
+model:
+  force_supervision: true
+  profile_timing: true
+  logging_mixin_interval: null
+  metric_interval: 0
+  loss_function:
+    energy_loss:
+      weight: 0.1
+    gradient_loss:
+      weight: 0.8
+    force_loss:
+      weight: 1.0
+    coefficient_loss:
+      weight: 0.0
+
+data:
+  datamodule:
+    batch_size: 4
+    num_workers: 8
+    pin_memory: true
+    shuffle_train: true
+    shuffle_val: false
+    train_only: true
+
+trainer:
+  max_epochs: 10
+  max_steps: 12330
+  # Lightning reconstructs OFLoader when injecting a sampler under DDP and can
+  # silently fall back to batch_size=1. The frozen rebuild is single-rank, so
+  # retain the datamodule's registered batch_size=4 loader unchanged.
+  use_distributed_sampler: false
+  limit_val_batches: 0
+  num_sanity_val_steps: 0
+  log_every_n_steps: 50
+
+callbacks:
+  model_checkpoint:
+    dirpath: ${paths.output_dir}/checkpoints
+    filename: "step_{step:06d}"
+    monitor: null
+    save_last: true
+    save_top_k: -1
+    every_n_train_steps: 12330
+    every_n_epochs: null
+    save_on_train_epoch_end: false
+    auto_insert_metric_name: false
+  throughput_monitor:
+    estimate_num_samples: 39456
+    target_num_devices: 1

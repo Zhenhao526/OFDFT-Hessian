@@ -19,6 +19,8 @@ kohn_sham:
   density_fit_basis: "def2-universal-jfit"
   density_fit_threshold: 30
   convergence_tolerance: 1e-9 # pyscf default, other possibility is 1meV 0.0000367493
+  compute_forces: False
+  compute_hessian: False
   use_perturbation: False
   perturbation_cfg:
     start_std: 0.1
