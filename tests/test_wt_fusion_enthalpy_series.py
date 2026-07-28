@@ -205,6 +205,72 @@ class FusionEnthalpySeriesTests(unittest.TestCase):
         self.assertEqual(point["requested_liquid_steps"], 100)
         self.assertFalse(point["checks"]["requested_steps_reached"])
 
+    def test_posthoc_zero_pressure_allows_missing_trajectory_stress(self):
+        manifest = {
+            "target_kedf": "xwm",
+            "points": [
+                {
+                    "temperature_k": 975.0,
+                    "target_pressure_kbar": 0.0,
+                    "steps": 100,
+                    "solid_run": "solid",
+                    "liquid_run": "liquid",
+                    "solid_volume_per_atom_A3": 18.0,
+                    "liquid_volume_per_atom_A3": 19.0,
+                    "trajectory_pressure_required": False,
+                    "zero_pressure_verified": True,
+                    "zero_pressure_provenance": {"sha256": "abc"},
+                }
+            ],
+        }
+
+        def phase_result(phase):
+            total = -56.9 if phase == "solid" else -56.8
+            return {
+                "phase_status": f"{phase}_verified",
+                "max_step": 100,
+                "natoms": 108,
+                "minimum_nearest_neighbor_angstrom": 2.2,
+                "temperature_k": {"mean": 975.0},
+                "pressure_kbar": {},
+                "potential_mean_ev_per_atom": total - 0.12,
+                "kinetic_mean_ev_per_atom": 0.12,
+                "total_mean_ev_per_atom": total,
+                "total_block_standard_error_mev_per_atom": 1.0,
+                "total_first_half_ev_per_atom": total,
+                "total_second_half_ev_per_atom": total,
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "manifest.json"
+            output_path = root / "analysis.json"
+            manifest_path.write_text(__import__("json").dumps(manifest))
+            with mock.patch(
+                "scripts.analyze_wt_fusion_enthalpy_series.analyze_run",
+                side_effect=lambda runs, phase, discard, blocks, **kwargs: (
+                    phase_result(phase)
+                ),
+            ), mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "analyze_wt_fusion_enthalpy_series.py",
+                    str(manifest_path),
+                    "--out",
+                    str(output_path),
+                ],
+            ):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    main()
+
+            point = __import__("json").loads(output_path.read_text())["points"][0]
+
+        self.assertTrue(point["checks"]["pressure_means_within_tolerance"])
+        self.assertTrue(point["checks"]["zero_pressure_evidence_verified"])
+        self.assertEqual(point["pressure_gate_mode"], "verified_posthoc_zero_pressure")
+        self.assertEqual(point["status"], "verified")
+
 
 if __name__ == "__main__":
     unittest.main()

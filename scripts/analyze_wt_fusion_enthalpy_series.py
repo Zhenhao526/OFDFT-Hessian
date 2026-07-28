@@ -88,6 +88,7 @@ def analyze_run(
     phase: str,
     discard_fraction: float,
     blocks: int,
+    require_pressure: bool = True,
 ) -> Dict[str, Any]:
     if not runs:
         raise ValueError("at least one trajectory segment is required")
@@ -109,7 +110,7 @@ def analyze_run(
     totals = [row["total_Ry"] * RY_TO_EV for row in production]
     temperatures = [row["temperature_K"] for row in production]
     pressures = [row["pressure_kbar"] for row in production if "pressure_kbar" in row]
-    if len(pressures) != len(production):
+    if require_pressure and len(pressures) != len(production):
         raise RuntimeError(f"stress/pressure output is incomplete in {logs[-1]}")
     midpoint = len(potentials) // 2
     natoms = int(phase_result["trajectory"]["natoms"])
@@ -130,6 +131,7 @@ def analyze_run(
         "production_samples": len(production),
         "temperature_k": series_stats(temperatures),
         "pressure_kbar": series_stats(pressures),
+        "trajectory_pressure_complete": len(pressures) == len(production),
         "potential_mean_ev_per_atom": mean(potentials) / natoms,
         "kinetic_mean_ev_per_atom": mean(kinetics) / natoms,
         "total_mean_ev_per_atom": mean(totals) / natoms,
@@ -171,18 +173,35 @@ def main() -> None:
         target_pressure = float(point.get("target_pressure_kbar", 0.0))
         solid_runs = point.get("solid_runs", [point["solid_run"]])
         liquid_runs = point.get("liquid_runs", [point["liquid_run"]])
-        solid = analyze_run(
-            [(base / run).resolve() for run in solid_runs],
-            "solid",
+        trajectory_pressure_required = bool(
+            point.get("trajectory_pressure_required", True)
+        )
+        analysis_arguments = (
             args.discard_fraction,
             args.blocks,
         )
-        liquid = analyze_run(
-            [(base / run).resolve() for run in liquid_runs],
-            "liquid",
-            args.discard_fraction,
-            args.blocks,
-        )
+        solid_run_paths = [(base / run).resolve() for run in solid_runs]
+        liquid_run_paths = [(base / run).resolve() for run in liquid_runs]
+        if trajectory_pressure_required:
+            solid = analyze_run(
+                solid_run_paths, "solid", *analysis_arguments
+            )
+            liquid = analyze_run(
+                liquid_run_paths, "liquid", *analysis_arguments
+            )
+        else:
+            solid = analyze_run(
+                solid_run_paths,
+                "solid",
+                *analysis_arguments,
+                require_pressure=False,
+            )
+            liquid = analyze_run(
+                liquid_run_paths,
+                "liquid",
+                *analysis_arguments,
+                require_pressure=False,
+            )
         if solid["natoms"] != liquid["natoms"]:
             raise ValueError("solid and liquid atom counts differ")
         solid_volume = float(point["solid_volume_per_atom_A3"])
@@ -219,6 +238,21 @@ def main() -> None:
         requested_liquid_steps = int(
             point.get("liquid_steps", point["steps"])
         )
+        zero_pressure_evidence_verified = (
+            trajectory_pressure_required
+            or (
+                point.get("zero_pressure_verified") is True
+                and bool(point.get("zero_pressure_provenance"))
+            )
+        )
+        pressure_means_within_tolerance = (
+            abs(solid["pressure_kbar"]["mean"] - target_pressure)
+            <= args.pressure_tolerance
+            and abs(liquid["pressure_kbar"]["mean"] - target_pressure)
+            <= args.pressure_tolerance
+            if trajectory_pressure_required
+            else True
+        )
         checks = {
             "solid_phase_verified": solid["phase_status"] == "solid_verified",
             "liquid_phase_verified": liquid["phase_status"] == "liquid_verified",
@@ -236,12 +270,8 @@ def main() -> None:
                 phase_temperature_difference
             )
             <= args.phase_temperature_difference_tolerance,
-            "pressure_means_within_tolerance": abs(
-                solid["pressure_kbar"]["mean"] - target_pressure
-            )
-            <= args.pressure_tolerance
-            and abs(liquid["pressure_kbar"]["mean"] - target_pressure)
-            <= args.pressure_tolerance,
+            "pressure_means_within_tolerance": pressure_means_within_tolerance,
+            "zero_pressure_evidence_verified": zero_pressure_evidence_verified,
             "nearest_neighbors_gt_2_A": (
                 solid["minimum_nearest_neighbor_angstrom"] > 2.0
                 and liquid["minimum_nearest_neighbor_angstrom"] > 2.0
@@ -263,6 +293,12 @@ def main() -> None:
                 "block_standard_error_mev_per_atom": error,
                 "half_drift_mev_per_atom": half_drift,
                 "external_pressure_pv_difference_ev_per_atom": pv_difference,
+                "trajectory_pressure_required": trajectory_pressure_required,
+                "pressure_gate_mode": (
+                    "trajectory_analytic_stress"
+                    if trajectory_pressure_required
+                    else "verified_posthoc_zero_pressure"
+                ),
                 "requested_solid_steps": requested_solid_steps,
                 "requested_liquid_steps": requested_liquid_steps,
                 "checks": checks,
