@@ -13,10 +13,22 @@ log=$formal_root/formal_pipeline.log
 cpu_ranges=(0-11 12-23 24-35 38-49 50-61 62-73)
 
 [[ -f "$formal_root/formal_manifest.json" ]]
+[[ -f "$formal_root/preflight.json" ]]
+[[ -f "$formal_root/INPUT_SHA256SUMS" ]]
 [[ -f "$pair_dat" ]]
 for phase in solid liquid; do
   [[ -f "$formal_root/$phase/manifest.json" ]]
 done
+
+python3 - "$formal_root/preflight.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1]))
+if report.get("status") != "verified" or report.get("launch_authorized") is not True:
+    raise SystemExit("formal TI preflight has not authorized launch")
+PY
+(cd "$formal_root" && sha256sum -c INPUT_SHA256SUMS)
 
 mapfile -t points < <(
   python3 - "$formal_root" <<'PY'
