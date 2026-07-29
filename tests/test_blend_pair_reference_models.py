@@ -104,6 +104,27 @@ def test_accepts_roundoff_level_center_differences(tmp_path: Path):
     assert result["model"]["centers_angstrom"] == [1.8, 2.0]
 
 
+def test_records_intentional_core_override(tmp_path: Path):
+    base = tmp_path / "base.json"
+    correction = tmp_path / "correction.json"
+    write_model(base, [1.0, 2.0, 3.0])
+    write_model(correction, [3.0, 4.0, 5.0])
+
+    result = blend_models(
+        base,
+        correction,
+        tmp_path / "blend.json",
+        alpha=0.75,
+        target_kedf="lkt",
+        phase="liquid",
+        core_amplitude=7000.0,
+    )
+
+    assert result["core_override"]["amplitude_ev"] == 7000.0
+    assert result["model"]["repulsive_core"]["amplitude_ev"] == 7000.0
+    assert result["model"]["repulsive_core"]["cutoff_angstrom"] == 2.03
+
+
 def test_rejects_cross_method_input(tmp_path: Path):
     base = tmp_path / "base.json"
     correction = tmp_path / "correction.json"

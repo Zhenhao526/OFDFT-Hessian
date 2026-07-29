@@ -34,6 +34,9 @@ def blend_models(
     alpha: float,
     target_kedf: str,
     phase: str,
+    core_amplitude: float | None = None,
+    core_cutoff: float | None = None,
+    core_power: int | None = None,
 ) -> dict[str, Any]:
     if not 0.0 <= alpha <= 1.0:
         raise ValueError("alpha must be between zero and one")
@@ -79,6 +82,31 @@ def blend_models(
             raise ValueError(f"pair model repulsive core differs: {field}")
     if int(base_core["power"]) != int(correction_core["power"]):
         raise ValueError("pair model repulsive core differs: power")
+    output_core = {
+        "amplitude_ev": (
+            float(core_amplitude)
+            if core_amplitude is not None
+            else float(base_core["amplitude_ev"])
+        ),
+        "cutoff_angstrom": (
+            float(core_cutoff)
+            if core_cutoff is not None
+            else float(base_core["cutoff_angstrom"])
+        ),
+        "power": (
+            int(core_power)
+            if core_power is not None
+            else int(base_core["power"])
+        ),
+    }
+    if output_core["amplitude_ev"] <= 0.0:
+        raise ValueError("core amplitude must be positive")
+    if not 0.0 < output_core["cutoff_angstrom"] < float(
+        base_model["cutoff_angstrom"]
+    ):
+        raise ValueError("core cutoff must be positive and below pair cutoff")
+    if output_core["power"] < 1:
+        raise ValueError("core power must be positive")
     base_coefficients = [float(value) for value in base_model["coefficients_ev"]]
     correction_coefficients = [
         float(value) for value in correction_model["coefficients_ev"]
@@ -103,6 +131,9 @@ def blend_models(
             "the target-minus-reference variance"
         ),
         "alpha_correction": alpha,
+        "core_override": (
+            output_core if output_core != base_core else None
+        ),
         "base": {
             "path": str(base_path.resolve()),
             "sha256": sha256(base_path),
@@ -117,7 +148,7 @@ def blend_models(
             "centers_angstrom": base_model["centers_angstrom"],
             "sigma_angstrom": base_model["sigma_angstrom"],
             "cutoff_angstrom": base_model["cutoff_angstrom"],
-            "repulsive_core": base_model["repulsive_core"],
+            "repulsive_core": output_core,
             "coefficients_ev": coefficients,
         },
         "reference_gate_passed": True,
@@ -144,6 +175,9 @@ def main() -> None:
     parser.add_argument("--alpha", type=float, required=True)
     parser.add_argument("--target-kedf", choices=("xwm", "lkt"), required=True)
     parser.add_argument("--phase", choices=("solid", "liquid"), required=True)
+    parser.add_argument("--core-amplitude", type=float)
+    parser.add_argument("--core-cutoff", type=float)
+    parser.add_argument("--core-power", type=int)
     args = parser.parse_args()
     result = blend_models(
         args.base,
@@ -152,6 +186,9 @@ def main() -> None:
         alpha=args.alpha,
         target_kedf=args.target_kedf,
         phase=args.phase,
+        core_amplitude=args.core_amplitude,
+        core_cutoff=args.core_cutoff,
+        core_power=args.core_power,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
