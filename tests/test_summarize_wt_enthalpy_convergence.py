@@ -26,6 +26,13 @@ def report(discard: float, delta_h_mev: float = 84.0) -> dict:
     }
 
 
+def kedf_report(discard: float, method: str = "xwm") -> dict:
+    result = report(discard)
+    result["schema"] = "kedf-zero-pressure-fusion-enthalpy-series-v1"
+    result["target_kedf"] = method
+    return result
+
+
 class EnthalpyConvergenceTests(unittest.TestCase):
     def test_verified_when_discard_reports_agree(self):
         result = summarize([report(0.25), report(0.5, 84.4), report(0.75, 83.8)])
@@ -79,8 +86,23 @@ class EnthalpyConvergenceTests(unittest.TestCase):
         reports = [report(0.25), report(0.5)]
         reports[0]["schema"] = "wt-zero-pressure-fusion-enthalpy-series-v1"
 
-        with self.assertRaisesRegex(ValueError, "total-energy v2"):
+        with self.assertRaisesRegex(ValueError, "total-energy schema"):
             summarize(reports)
+
+    def test_kedf_reports_preserve_method_specific_schema(self):
+        result = summarize(
+            [kedf_report(0.25), kedf_report(0.5), kedf_report(0.75)]
+        )
+
+        self.assertEqual(
+            result["schema"], "kedf-enthalpy-discard-convergence-summary-v1"
+        )
+        self.assertEqual(result["target_kedf"], "xwm")
+        self.assertEqual(result["status"], "verified")
+
+    def test_rejects_cross_method_kedf_reports(self):
+        with self.assertRaisesRegex(ValueError, "different target KEDFs"):
+            summarize([kedf_report(0.25, "xwm"), kedf_report(0.5, "lkt")])
 
 
 if __name__ == "__main__":

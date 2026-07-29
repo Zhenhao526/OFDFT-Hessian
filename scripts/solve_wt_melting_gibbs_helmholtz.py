@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Solve a WT melting point from an absolute DeltaG anchor and P=0 enthalpies."""
+"""Solve a WT/XWM/LKT melting point from an absolute DeltaG anchor and P=0 enthalpies."""
 
 from __future__ import annotations
 
@@ -178,19 +178,48 @@ def main() -> None:
     convergence_matches, enthalpy_uncertainties = convergence_summary_matches_series(
         enthalpy_convergence, enthalpy_series
     )
+    anchor_schema = combination.get("schema")
+    if anchor_schema == "wt-melting-free-energy-combination-v2":
+        target_kedf = "wt"
+        expected_series_schema = "wt-zero-pressure-fusion-enthalpy-series-v2"
+        expected_convergence_schema = "wt-enthalpy-discard-convergence-summary-v2"
+        output_schema = "wt-gibbs-helmholtz-melting-v2"
+    elif anchor_schema == "kedf-melting-free-energy-anchor-v1":
+        target_kedf = str(combination.get("target_kedf", "")).lower()
+        expected_series_schema = "kedf-zero-pressure-fusion-enthalpy-series-v1"
+        expected_convergence_schema = (
+            "kedf-enthalpy-discard-convergence-summary-v1"
+        )
+        output_schema = "kedf-gibbs-helmholtz-melting-v1"
+    else:
+        target_kedf = ""
+        expected_series_schema = ""
+        expected_convergence_schema = ""
+        output_schema = "unsupported-gibbs-helmholtz-input"
     checks = {
         "free_energy_anchor_verified": combination["status"]
         == "anchor_temperature_free_energy_verified"
-        and combination.get("schema") == "wt-melting-free-energy-combination-v2",
+        and anchor_schema
+        in {
+            "wt-melting-free-energy-combination-v2",
+            "kedf-melting-free-energy-anchor-v1",
+        },
         "free_energy_anchor_checks_verified": bool(combination.get("checks"))
         and all(combination["checks"].values()),
+        "target_kedf_supported": target_kedf in {"wt", "xwm", "lkt"},
+        "target_kedf_matches": str(
+            enthalpy_series.get("target_kedf", "wt")
+        ).lower()
+        == target_kedf
+        and str(enthalpy_convergence.get("target_kedf", "wt")).lower()
+        == target_kedf,
         "enthalpy_total_energy_definition_verified": (
             enthalpy_series.get("schema")
-            == "wt-zero-pressure-fusion-enthalpy-series-v2"
+            == expected_series_schema
             and enthalpy_series.get("enthalpy_energy_definition")
             == "sampled_total_energy_plus_external_pv"
             and enthalpy_convergence.get("schema")
-            == "wt-enthalpy-discard-convergence-summary-v2"
+            == expected_convergence_schema
             and enthalpy_convergence.get("enthalpy_energy_definition")
             == "sampled_total_energy_plus_external_pv"
         ),
@@ -268,7 +297,8 @@ def main() -> None:
         }
     )
     result = {
-        "schema": "wt-gibbs-helmholtz-melting-v2",
+        "schema": output_schema,
+        "target_kedf": target_kedf,
         "status": "verified" if all(checks.values()) else "temperature_bracket_incomplete",
         "checks": checks,
         "thermodynamic_convention": {

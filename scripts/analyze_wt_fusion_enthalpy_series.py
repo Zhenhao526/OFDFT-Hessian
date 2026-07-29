@@ -166,6 +166,13 @@ def main() -> None:
 
     manifest_path = args.manifest.resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    target_kedf = str(manifest.get("target_kedf", "wt")).lower()
+    if target_kedf == "wt":
+        result_schema = "wt-zero-pressure-fusion-enthalpy-series-v2"
+    elif target_kedf in {"xwm", "lkt"}:
+        result_schema = "kedf-zero-pressure-fusion-enthalpy-series-v1"
+    else:
+        raise ValueError(f"unsupported target KEDF {target_kedf!r}")
     base = manifest_path.parent
     analyzed_points = []
     for point in sorted(manifest["points"], key=lambda item: item["temperature_k"]):
@@ -307,7 +314,8 @@ def main() -> None:
         )
     result = {
         **manifest,
-        "schema": "wt-zero-pressure-fusion-enthalpy-series-v2",
+        "schema": result_schema,
+        "target_kedf": target_kedf,
         "enthalpy_energy_definition": "sampled_total_energy_plus_external_pv",
         "discard_fraction": args.discard_fraction,
         "blocks": args.blocks,

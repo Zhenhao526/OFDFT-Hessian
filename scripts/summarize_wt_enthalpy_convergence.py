@@ -37,9 +37,31 @@ def summarize(
     by_report = []
     reference_temperatures = None
     point_rows: Dict[str, list[Dict[str, Any]]] = {}
+    schemas = {str(report.get("schema", "")) for report in reports}
+    supported_schemas = {
+        "wt-zero-pressure-fusion-enthalpy-series-v2",
+        "kedf-zero-pressure-fusion-enthalpy-series-v1",
+    }
+    if not schemas <= supported_schemas:
+        raise ValueError("enthalpy reports must use a total-energy schema")
+    if len(schemas) != 1:
+        raise ValueError("enthalpy reports use different schemas")
+    source_schema = schemas.pop()
+    target_kedf_values = {
+        str(report.get("target_kedf", "wt")).lower() for report in reports
+    }
+    if len(target_kedf_values) != 1:
+        raise ValueError("enthalpy reports use different target KEDFs")
+    target_kedf = target_kedf_values.pop()
+    if source_schema == "wt-zero-pressure-fusion-enthalpy-series-v2":
+        if target_kedf != "wt":
+            raise ValueError("WT enthalpy schema requires target_kedf=wt")
+        output_schema = "wt-enthalpy-discard-convergence-summary-v2"
+    else:
+        if target_kedf not in {"xwm", "lkt"}:
+            raise ValueError("KEDF enthalpy schema requires XWM or LKT")
+        output_schema = "kedf-enthalpy-discard-convergence-summary-v1"
     for report in reports:
-        if report.get("schema") != "wt-zero-pressure-fusion-enthalpy-series-v2":
-            raise ValueError("enthalpy reports must use the total-energy v2 schema")
         if (
             report.get("enthalpy_energy_definition")
             != "sampled_total_energy_plus_external_pv"
@@ -137,7 +159,8 @@ def summarize(
         ),
     }
     return {
-        "schema": "wt-enthalpy-discard-convergence-summary-v2",
+        "schema": output_schema,
+        "target_kedf": target_kedf,
         "enthalpy_energy_definition": "sampled_total_energy_plus_external_pv",
         "status": "verified" if all(checks.values()) else "extension_required",
         "checks": checks,
