@@ -28,6 +28,7 @@ def make_grid(tmp_path: Path) -> Path:
             metadata = {
                 "csvr_tau": tau,
                 "mpi_ranks": 12,
+                "pair_model": str(pair),
                 "pair_model_sha256": sha256(pair),
                 "source_step": 295,
                 "source_structure_sha256": sha256(source_structure),
@@ -75,6 +76,31 @@ def make_grid(tmp_path: Path) -> Path:
     return root
 
 
+def make_phase_specific_grid(tmp_path: Path) -> Path:
+    root = make_grid(tmp_path)
+    manifest_path = root / "formal_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    solid_pair = Path(manifest.pop("pair_model"))
+    solid_sha = manifest.pop("pair_model_sha256")
+    liquid_pair = tmp_path / "liquid-pair.dat"
+    liquid_pair.write_text("liquid pair\n")
+    manifest["pair_models_by_phase"] = {
+        "solid": {"path": str(solid_pair), "sha256": solid_sha},
+        "liquid": {
+            "path": str(liquid_pair),
+            "sha256": sha256(liquid_pair),
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    for index in range(9):
+        metadata_path = root / "liquid" / f"lambda_{index:02d}" / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["pair_model"] = str(liquid_pair)
+        metadata["pair_model_sha256"] = sha256(liquid_pair)
+        metadata_path.write_text(json.dumps(metadata))
+    return root
+
+
 def test_verifies_and_checksums_complete_formal_grid(tmp_path):
     root = make_grid(tmp_path)
 
@@ -117,3 +143,24 @@ def test_rejects_unexpected_existing_output(tmp_path):
     )
     assert result["status"] == "failed"
     assert failed["checks"]["no_old_out"] is False
+
+
+def test_verifies_phase_specific_pair_models(tmp_path):
+    root = make_phase_specific_grid(tmp_path)
+
+    result = verify(
+        root,
+        target_kedf="lkt",
+        steps=3000,
+        ranks=12,
+        source_step=295,
+        minimum_nn=2.0,
+        default_tau=5.0,
+        tau_overrides={("solid", "lambda_02"): 2.0},
+    )
+
+    assert result["status"] == "verified"
+    assert all(
+        window["checks"]["pair_sha_matches"]
+        for window in result["windows"]
+    )

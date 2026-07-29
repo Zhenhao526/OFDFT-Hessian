@@ -160,7 +160,7 @@ def design_method(
         raise ValueError(f"{name}: pilot grid is not verified")
     method = None
     phase_designs = {}
-    pair_models = set()
+    pair_models_by_phase: dict[str, Path] = {}
     recommended_steps = []
     for phase in ("solid", "liquid"):
         phase_result = merged["phase_results"][phase]
@@ -186,7 +186,12 @@ def design_method(
             method = phase_method
         elif method != phase_method:
             raise ValueError(f"{name}: phases use different KEDFs")
-        pair_models.update(window["pair_model"] for window in windows)
+        phase_pair_models = {
+            Path(window["pair_model"]).resolve() for window in windows
+        }
+        if len(phase_pair_models) != 1:
+            raise ValueError(f"{name}: {phase} windows use different pair models")
+        pair_models_by_phase[phase] = phase_pair_models.pop()
         selection = choose_steps(
             args.candidate_steps,
             weights,
@@ -211,22 +216,26 @@ def design_method(
             "windows": windows,
             "step_selection": selection,
         }
-    if len(pair_models) != 1:
-        raise ValueError(f"{name}: phases use different pair models")
-    pair_model = Path(pair_models.pop()).resolve()
+    pair_model_records = {
+        phase: {
+            "path": str(pair_model),
+            "sha256": sha256(pair_model),
+        }
+        for phase, pair_model in pair_models_by_phase.items()
+    }
+    unique_pair_models = set(pair_models_by_phase.values())
     steps = max(recommended_steps)
     windows_total = sum(
         len(phase_designs[phase]["windows"]) for phase in ("solid", "liquid")
     )
     waves = math.ceil(windows_total / args.parallel_windows)
     wall_hours = steps * args.seconds_per_step_per_wave * waves / 3600.0
-    return {
+    result = {
         "name": name,
         "target_kedf": method,
         "pilot_merged_analysis": str(merged_path),
         "pilot_merged_analysis_sha256": sha256(merged_path),
-        "pair_model": str(pair_model),
-        "pair_model_sha256": sha256(pair_model),
+        "pair_models_by_phase": pair_model_records,
         "recommended_steps_per_window": steps,
         "recommended_discard_fractions": [0.25, 0.5, 0.75],
         "production_temperature_tolerance_K": 20.0,
@@ -240,6 +249,11 @@ def design_method(
             "estimated_wall_hours": wall_hours,
         },
     }
+    if len(unique_pair_models) == 1:
+        pair_model = unique_pair_models.pop()
+        result["pair_model"] = str(pair_model)
+        result["pair_model_sha256"] = sha256(pair_model)
+    return result
 
 
 def parse_method(value: str) -> tuple[str, Path]:

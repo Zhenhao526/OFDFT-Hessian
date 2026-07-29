@@ -102,7 +102,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     element = load_json(ROOT / "config" / "al.json")
     tau_overrides = parse_tau_overrides(args.tau_override)
     known_keys: set[tuple[str, str]] = set()
-    pair_models: set[Path] = set()
+    pair_models_by_phase: dict[str, Path] = {}
     phase_manifests = {}
     source_records = []
 
@@ -110,6 +110,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         rows = selected_rows(merged, phase)
         windows = []
         phase_metadata = []
+        phase_pair_models: set[Path] = set()
         for window_index, row in enumerate(rows):
             label = str(row["label"])
             key = (phase, label)
@@ -128,7 +129,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             pair_model = Path(source_metadata["pair_model"]).resolve()
             if not pair_model.is_file():
                 raise FileNotFoundError(pair_model)
-            pair_models.add(pair_model)
+            phase_pair_models.add(pair_model)
 
             source = load_atom_source(
                 source_run.as_posix(), "last", "Al", include_velocities=True
@@ -211,10 +212,15 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             phase_metadata.append(source_record)
             source_records.append(source_record)
 
+        if len(phase_pair_models) != 1:
+            raise ValueError(
+                f"{phase} formal windows use different pair models"
+            )
+        pair_model = phase_pair_models.pop()
+        pair_models_by_phase[phase] = pair_model
         first_metadata = json.loads(
             (Path(rows[0]["run"]) / "metadata.json").read_text()
         )
-        pair_model = Path(first_metadata["pair_model"]).resolve()
         manifest = {
             "schema": "kedf-pair-ti-formal-production-v1",
             "phase": phase,
@@ -245,23 +251,35 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             f"{phase}:{label}" for phase, label in unknown_overrides
         )
         raise ValueError(f"tau overrides not present in merged pilot: {rendered}")
-    if len(pair_models) != 1:
-        raise ValueError("solid and liquid formal windows use different pair models")
-    pair_model = pair_models.pop()
+    pair_model_records = {
+        phase: {
+            "path": str(pair_model),
+            "sha256": sha256(pair_model),
+        }
+        for phase, pair_model in pair_models_by_phase.items()
+    }
+    unique_pair_models = set(pair_models_by_phase.values())
     result = {
-        "schema": "kedf-ti-formal-production-manifest-v1",
+        "schema": (
+            "kedf-ti-formal-production-manifest-v1"
+            if len(unique_pair_models) == 1
+            else "kedf-ti-formal-production-manifest-v2"
+        ),
         "status": "prepared",
         "launch_authorized": False,
         "target_kedf": target_kedf,
         "merged_pilot_analysis": str(merged_path),
         "merged_pilot_analysis_sha256": sha256(merged_path),
-        "pair_model": str(pair_model),
-        "pair_model_sha256": sha256(pair_model),
+        "pair_models_by_phase": pair_model_records,
         "steps_per_window": args.steps,
         "mpi_ranks_per_window": args.ranks,
         "phase_manifests": phase_manifests,
         "sources": source_records,
     }
+    if len(unique_pair_models) == 1:
+        pair_model = unique_pair_models.pop()
+        result["pair_model"] = str(pair_model)
+        result["pair_model_sha256"] = sha256(pair_model)
     (output / "formal_manifest.json").write_text(
         json.dumps(result, indent=2) + "\n"
     )

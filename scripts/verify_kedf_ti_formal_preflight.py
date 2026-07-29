@@ -33,6 +33,23 @@ def parse_input(path: Path) -> dict[str, str]:
     return values
 
 
+def pair_models_by_phase(manifest: dict[str, Any]) -> dict[str, dict[str, str]]:
+    records = manifest.get("pair_models_by_phase")
+    if records is not None:
+        if set(records) != {"solid", "liquid"}:
+            raise ValueError(
+                "pair_models_by_phase must contain solid and liquid"
+            )
+        return records
+    return {
+        phase: {
+            "path": manifest["pair_model"],
+            "sha256": manifest["pair_model_sha256"],
+        }
+        for phase in ("solid", "liquid")
+    }
+
+
 def verify(
     root: Path,
     *,
@@ -47,7 +64,7 @@ def verify(
     root = root.resolve()
     manifest_path = root / "formal_manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    pair_model = Path(manifest["pair_model"])
+    phase_pair_models = pair_models_by_phase(manifest)
     merged = Path(manifest["merged_pilot_analysis"])
     sources = {
         (record["phase"], record["label"]): record
@@ -59,9 +76,10 @@ def verify(
         "target_kedf_matches": manifest.get("target_kedf") == target_kedf,
         "steps_match": manifest.get("steps_per_window") == steps,
         "ranks_match": manifest.get("mpi_ranks_per_window") == ranks,
-        "pair_sha_matches": (
-            pair_model.is_file()
-            and sha256(pair_model) == manifest.get("pair_model_sha256")
+        "pair_sha_matches": all(
+            Path(record["path"]).is_file()
+            and sha256(Path(record["path"])) == record["sha256"]
+            for record in phase_pair_models.values()
         ),
         "merged_sha_matches": (
             merged.is_file()
@@ -73,6 +91,7 @@ def verify(
     windows: list[dict[str, Any]] = []
     checksum_paths = [manifest_path]
     for phase in ("solid", "liquid"):
+        expected_pair = phase_pair_models[phase]
         phase_manifest_path = root / phase / "manifest.json"
         phase_manifest = json.loads(phase_manifest_path.read_text())
         checksum_paths.append(phase_manifest_path)
@@ -129,7 +148,9 @@ def verify(
                 ),
                 "pair_sha_matches": (
                     metadata.get("pair_model_sha256")
-                    == manifest.get("pair_model_sha256")
+                    == expected_pair["sha256"]
+                    and metadata.get("pair_model")
+                    == expected_pair["path"]
                 ),
                 "no_old_out": not old_outputs,
                 "run_local_executable": (

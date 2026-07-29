@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "usage: $0 FORMAL_ROOT REPOSITORY PAIR_DAT" >&2
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+  echo "usage: $0 FORMAL_ROOT REPOSITORY SOLID_PAIR_DAT [LIQUID_PAIR_DAT]" >&2
   exit 2
 fi
 
 formal_root=$1
 repository=$2
-pair_dat=$3
+solid_pair_dat=$3
+liquid_pair_dat=${4:-$solid_pair_dat}
 log=$formal_root/formal_pipeline.log
 cpu_ranges=(0-11 12-23 24-35 38-49 50-61 62-73)
 
 [[ -f "$formal_root/formal_manifest.json" ]]
 [[ -f "$formal_root/preflight.json" ]]
 [[ -f "$formal_root/INPUT_SHA256SUMS" ]]
-[[ -f "$pair_dat" ]]
+[[ -f "$solid_pair_dat" ]]
+[[ -f "$liquid_pair_dat" ]]
 for phase in solid liquid; do
   [[ -f "$formal_root/$phase/manifest.json" ]]
 done
@@ -56,8 +58,21 @@ for phase in ("solid", "liquid"):
         print(window["lambda"])
 PY
 )
+mapfile -t phases < <(
+  python3 - "$formal_root" <<'PY'
+import json
+import sys
+from pathlib import Path
 
-if [[ ${#points[@]} -ne 18 || ${#lambdas[@]} -ne 18 ]]; then
+root = Path(sys.argv[1])
+for phase in ("solid", "liquid"):
+    manifest = json.loads((root / phase / "manifest.json").read_text())
+    for _window in manifest["windows"]:
+        print(phase)
+PY
+)
+
+if [[ ${#points[@]} -ne 18 || ${#lambdas[@]} -ne 18 || ${#phases[@]} -ne 18 ]]; then
   echo "expected 18 formal phase/lambda windows" >&2
   exit 2
 fi
@@ -73,12 +88,18 @@ run_wave() {
   local first=$1
   local count=$2
   local pids=()
-  local index point lambda cpus status
+  local index point phase lambda pair_dat cpus status
 
   for ((slot=0; slot<count; slot++)); do
     index=$((first + slot))
     point=${points[$index]}
+    phase=${phases[$index]}
     lambda=${lambdas[$index]}
+    if [[ $phase == solid ]]; then
+      pair_dat=$solid_pair_dat
+    else
+      pair_dat=$liquid_pair_dat
+    fi
     cpus=${cpu_ranges[$slot]}
     (
       cd "$point"
