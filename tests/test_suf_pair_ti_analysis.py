@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.analyze_suf_pair_ti import analyze
 
 
@@ -108,3 +110,47 @@ def test_missing_liquid_msd_fails_when_diffusion_is_required(tmp_path: Path):
 
     assert result["status"] == "production_gate_failed"
     assert result["checks"]["liquid_diffusion"] is False
+
+
+def test_power_transformed_coordinate_integrates_nonuniform_lambda_grid(
+    tmp_path: Path,
+):
+    for coordinate in (0.0, 0.25, 0.5, 0.75, 1.0):
+        write_window(
+            tmp_path,
+            coordinate**2,
+            minimum_distance=2.1,
+            du_offset=1.0,
+        )
+
+    result = analyze(
+        tmp_path,
+        blocks=5,
+        integration_coordinate_power=2.0,
+    )
+
+    assert result["status"] == "verified"
+    assert result["delta_f_pair_minus_suf_simpson_ev_per_atom"] == pytest.approx(
+        1.0, abs=1.0e-4
+    )
+    assert result["integration_coordinate"] == {
+        "lambda_equals_x_to_power": 2.0,
+        "spacing": 0.25,
+    }
+    assert result["windows"][0]["integration_jacobian"] == 0.0
+    assert result["windows"][-1]["integration_jacobian"] == 2.0
+
+
+def test_nonuniform_lambda_grid_requires_matching_coordinate_power(tmp_path: Path):
+    for coupling in (0.0, 0.0625, 0.25, 0.5625, 1.0):
+        write_window(
+            tmp_path,
+            coupling,
+            minimum_distance=2.1,
+            du_offset=-0.057,
+        )
+
+    with pytest.raises(
+        ValueError, match="integration-coordinate windows must be evenly spaced"
+    ):
+        analyze(tmp_path, blocks=5)

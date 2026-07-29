@@ -10,6 +10,9 @@ output=${OUTPUT:-$run_root/lkt/free_energy_T0900/liquid_suf_proxy_ti_lambda9_ste
 steps=${STEPS:-3000}
 temperature=${TEMPERATURE:-900}
 cpu_list=${CPU_LIST:-36,37,74,75}
+grid_points=${GRID_POINTS:-9}
+lambda_power=${LAMBDA_POWER:-1}
+gamma_per_fs=${GAMMA_PER_FS:-0.02}
 
 IFS=, read -r -a cpus <<< "$cpu_list"
 [[ ${#cpus[@]} -ge 1 ]] || {
@@ -33,12 +36,20 @@ IFS=, read -r -a cpus <<< "$cpu_list"
   exit 2
 }
 
-python3 - "$model" "$validation/validation_summary.json" <<'PY'
+python3 - \
+  "$model" \
+  "$validation/validation_summary.json" \
+  "$grid_points" \
+  "$lambda_power" \
+  "$gamma_per_fs" <<'PY'
 import json
 import sys
 
 model = json.load(open(sys.argv[1], encoding="utf-8"))
 validation = json.load(open(sys.argv[2], encoding="utf-8"))
+grid_points = int(sys.argv[3])
+lambda_power = float(sys.argv[4])
+gamma_per_fs = float(sys.argv[5])
 checks = {
     "model_static_gate": model.get("reference_gate_passed") is True,
     "model_is_lkt_liquid_suf_proxy": (
@@ -47,6 +58,9 @@ checks = {
         and model.get("reference_kind") == "suf_radial_proxy"
     ),
     "dynamics_verified": validation.get("status") == "verified",
+    "odd_grid_with_endpoints": grid_points >= 3 and grid_points % 2 == 1,
+    "valid_lambda_power": lambda_power >= 1.0,
+    "valid_langevin_friction": gamma_per_fs > 0.0,
 }
 print(json.dumps(checks, sort_keys=True))
 if not all(checks.values()):
@@ -71,7 +85,17 @@ sha256sum \
   "$validation/run/checkpoint.json" \
   > "$output/SOURCE_SHA256"
 
-lambdas=(0.000 0.125 0.250 0.375 0.500 0.625 0.750 0.875 1.000)
+mapfile -t lambdas < <(
+  python3 - "$grid_points" "$lambda_power" <<'PY'
+import sys
+
+points = int(sys.argv[1])
+power = float(sys.argv[2])
+for index in range(points):
+    coordinate = index / (points - 1)
+    print(f"{coordinate**power:.12f}")
+PY
+)
 cd "$repo"
 for ((first = 0; first < ${#lambdas[@]}; first += ${#cpus[@]})); do
   pids=()
@@ -80,7 +104,7 @@ for ((first = 0; first < ${#lambdas[@]}; first += ${#cpus[@]})); do
     index=$((first + slot))
     ((index < ${#lambdas[@]})) || break
     coupling=${lambdas[$index]}
-    label=$(printf 'lambda_%0.3f' "$coupling" | tr '.' 'p')
+    label=$(printf 'lambda_%0.6f' "$coupling" | tr '.' 'p')
     point=$output/$label
     labels+=("$label")
     (
@@ -95,6 +119,7 @@ for ((first = 0; first < ${#lambdas[@]}; first += ${#cpus[@]})); do
         --suf-sigma 1.28 \
         --suf-cutoff-sigma 5.0 \
         --steps "$steps" \
+        --gamma-per-fs "$gamma_per_fs" \
         --sample-every 10 \
         --seed "$((202608100 + index))" \
         --threads 1 \
@@ -131,11 +156,12 @@ for suffix in d25 d50 d75; do
     --max-half-drift 4 \
     --max-quadrature-difference 2 \
     --minimum-overlap-ess 0.05 \
-    --max-overlap-closure 2
+    --max-overlap-closure 2 \
+    --integration-coordinate-power "$lambda_power"
   reports+=("$report")
 done
 
-python3 - "$output" "${reports[@]}" <<'PY'
+python3 - "$output" "$grid_points" "$lambda_power" "$gamma_per_fs" "${reports[@]}" <<'PY'
 import hashlib
 import json
 import sys
@@ -143,7 +169,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 root = Path(sys.argv[1])
-reports = [json.loads(Path(path).read_text()) for path in sys.argv[2:]]
+grid_points = int(sys.argv[2])
+lambda_power = float(sys.argv[3])
+gamma_per_fs = float(sys.argv[4])
+reports = [json.loads(Path(path).read_text()) for path in sys.argv[5:]]
 integrals = [
     float(report["delta_f_pair_minus_suf_simpson_mev_per_atom"])
     for report in reports
@@ -154,15 +183,18 @@ checks = {
         report.get("status") == "verified" for report in reports
     ),
     "integral_discard_spread_le_2_mev_per_atom": spread <= 2.0,
-    "all_nine_windows_complete": len(
+    "all_requested_windows_complete": len(
         list(root.glob("lambda_*/summary.json"))
-    ) == 9,
+    ) == grid_points,
 }
 payload = {
     "schema": "lkt-suf-proxy-ti-pilot-summary-v1",
     "status": "pilot_grid_verified" if all(checks.values()) else "pilot_gate_failed",
     "created_utc": datetime.now(timezone.utc).isoformat(),
     "checks": checks,
+    "grid_points": grid_points,
+    "lambda_equals_x_to_power": lambda_power,
+    "gamma_per_fs": gamma_per_fs,
     "discard_integrals_mev_per_atom": integrals,
     "discard_spread_mev_per_atom": spread,
     "minimum_adjacent_effective_sample_fraction": min(

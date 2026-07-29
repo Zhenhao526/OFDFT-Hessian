@@ -51,7 +51,11 @@ def analyze(
     max_quadrature_difference: float = 1.0,
     minimum_overlap_ess: float = 0.05,
     max_overlap_closure: float = 2.0,
+    integration_coordinate_power: float = 1.0,
 ) -> Dict[str, Any]:
+    if integration_coordinate_power < 1.0:
+        raise ValueError("integration coordinate power must be at least one")
+
     windows: List[Dict[str, Any]] = []
     production_du: List[List[float]] = []
     natoms_values = set()
@@ -120,21 +124,51 @@ def analyze(
     if len(windows) < 3 or len(windows) % 2 == 0:
         raise ValueError("an odd number of lambda windows is required")
     lambdas = [window["lambda"] for window in windows]
-    spacing = lambdas[1] - lambdas[0]
+    coordinates = [
+        coupling ** (1.0 / integration_coordinate_power)
+        for coupling in lambdas
+    ]
+    spacing = coordinates[1] - coordinates[0]
     if any(
         not math.isclose(right - left, spacing, rel_tol=0.0, abs_tol=1.0e-12)
-        for left, right in zip(lambdas, lambdas[1:])
+        for left, right in zip(coordinates, coordinates[1:])
     ):
-        raise ValueError("lambda windows must be evenly spaced")
+        raise ValueError("integration-coordinate windows must be evenly spaced")
     if not math.isclose(lambdas[0], 0.0) or not math.isclose(lambdas[-1], 1.0):
         raise ValueError("lambda grid must include zero and one")
 
-    means = [window["du_mean_ev_per_atom"] for window in windows]
-    first = [window["du_first_half_ev_per_atom"] for window in windows]
-    second = [window["du_second_half_ev_per_atom"] for window in windows]
+    jacobians = [
+        (
+            1.0
+            if integration_coordinate_power == 1.0
+            else integration_coordinate_power
+            * coordinate ** (integration_coordinate_power - 1.0)
+        )
+        for coordinate in coordinates
+    ]
+    for window, coordinate, jacobian in zip(windows, coordinates, jacobians):
+        window["integration_coordinate"] = coordinate
+        window["integration_jacobian"] = jacobian
+
+    means = [
+        window["du_mean_ev_per_atom"] * jacobian
+        for window, jacobian in zip(windows, jacobians)
+    ]
+    first = [
+        window["du_first_half_ev_per_atom"] * jacobian
+        for window, jacobian in zip(windows, jacobians)
+    ]
+    second = [
+        window["du_second_half_ev_per_atom"] * jacobian
+        for window, jacobian in zip(windows, jacobians)
+    ]
     block_integrals = [
         integrate_simpson(
-            [window["block_means"][block] for window in windows], spacing
+            [
+                window["block_means"][block] * jacobian
+                for window, jacobian in zip(windows, jacobians)
+            ],
+            spacing,
         )
         for block in range(blocks)
     ]
@@ -231,6 +265,10 @@ def analyze(
         "natoms": natoms,
         "target_temperature_k": target_temperature,
         "discard_fraction": discard_fraction,
+        "integration_coordinate": {
+            "lambda_equals_x_to_power": integration_coordinate_power,
+            "spacing": spacing,
+        },
         "blocks": blocks,
         "windows": windows,
         "adjacent_overlap": adjacent_overlap,
@@ -258,6 +296,7 @@ def analyze(
             "maximum_quadrature_difference_mev_per_atom": max_quadrature_difference,
             "minimum_adjacent_effective_sample_fraction": minimum_overlap_ess,
             "maximum_adjacent_closure_mev_per_atom": max_overlap_closure,
+            "integration_coordinate_power": integration_coordinate_power,
         },
         "minimum_distance_gate_angstrom": minimum_distance,
         "delta_f_pair_minus_reference_simpson_ev_per_atom": simpson,
@@ -283,6 +322,7 @@ def main() -> None:
     parser.add_argument("--max-quadrature-difference", type=float, default=1.0)
     parser.add_argument("--minimum-overlap-ess", type=float, default=0.05)
     parser.add_argument("--max-overlap-closure", type=float, default=2.0)
+    parser.add_argument("--integration-coordinate-power", type=float, default=1.0)
     args = parser.parse_args()
 
     result = analyze(
@@ -301,6 +341,7 @@ def main() -> None:
         max_quadrature_difference=args.max_quadrature_difference,
         minimum_overlap_ess=args.minimum_overlap_ess,
         max_overlap_closure=args.max_overlap_closure,
+        integration_coordinate_power=args.integration_coordinate_power,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
