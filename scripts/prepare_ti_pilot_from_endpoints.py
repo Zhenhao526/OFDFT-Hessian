@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--solid-pair-model", type=Path)
     parser.add_argument("--liquid-pair-model", type=Path)
     parser.add_argument("--steps", type=int, default=100)
+    parser.add_argument("--csvr-tau", type=float, default=20.0)
     parser.add_argument(
         "--config",
         type=Path,
@@ -66,7 +67,7 @@ def main() -> None:
                 lambdas=LAMBDAS,
                 steps=args.steps,
                 dt=1.0,
-                csvr_tau=20.0,
+                csvr_tau=args.csvr_tau,
                 dumpfreq=5,
                 restartfreq=args.steps,
                 seed=51000 + 1000 * phase_index,
@@ -89,6 +90,7 @@ def main() -> None:
         "target_kedf": target_kedf,
         "temperature_K": endpoint_manifest["temperature_K"],
         "steps": args.steps,
+        "csvr_tau_fs": args.csvr_tau,
         "lambdas": LAMBDAS,
         "phases": prepared,
         "pair_models_by_phase": {
