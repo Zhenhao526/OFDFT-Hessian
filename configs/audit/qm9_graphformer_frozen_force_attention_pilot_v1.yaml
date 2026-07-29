@@ -1,0 +1,90 @@
+protocol_id: qm9_graphformer_frozen_force_attention_pilot_v1
+frozen_at: "2026-07-29T18:30:00+08:00"
+
+scope:
+  purpose: >-
+    Train a derivative-aware equivariant force attention readout on a
+    deterministic train-only parent subset before any further Hessian-head or
+    Graphformer-unfreezing experiment.
+  dataset_role: train800_architecture_development_only
+  selected_parent_count: 128
+  fit_parent_count: 96
+  held_parent_count: 32
+  sample_ids: all_available_geometries_at_final_density
+  backbone_trainable: false
+  energy_head_modified: false
+  validation_access_allowed: false
+  test100_access_allowed: false
+  validation_evaluations_used: 0
+  test100_evaluations_used: 0
+
+inputs:
+  dataset_root: /home/shenwei01/xzh_node02_20260724/data/QM9PBEForceRandom1000Train800RebuildV1
+  train_only_dataset_manifest_sha256: 9506bf6573ecdea705555d204c389ce7508735baccc3c13533a7b23c623370ed
+  source_run_dir: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_train800_egf_force1_s12330_rebuild_v1
+  source_checkpoint: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_train800_egf_force1_s12330_rebuild_v1/checkpoints/last.ckpt
+  source_checkpoint_sha256: ca45fda1eedb9815e9cac26c23f95f0a60666f73c89d4a0e967803ddc4690a45
+  source_checkpoint_step: 12330
+  source_force_semantics: negative_coordinate_derivative_of_learned_kinetic_plus_xc_scalar
+  target_force_semantics: stored_clean_pbe_total_nuclear_force
+
+selection:
+  seed: 20260729
+  method: sha256_rank_over_train_parent_id
+  fit_role: first_96_selected_parents
+  held_role: remaining_32_selected_parents
+  scf_iteration: -1
+  checkpoint_selection_uses_held: false
+
+model:
+  node_feature_dim: 768
+  attention_dim: 128
+  attention_heads: 8
+  latent_dim: 32
+  pair_hidden_dim: 64
+  radial_centers_bohr: [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0]
+  radial_width_bohr: 0.75
+  zero_initialize: true
+  exact_constraints:
+    - atom_permutation_covariance
+    - rotation_covariance
+    - translation_invariance
+    - zero_net_force
+    - zero_net_torque
+
+training:
+  seed: 20260729
+  dtype: float32
+  optimizer: AdamW
+  learning_rate: 0.0001
+  weight_decay: 1.0e-8
+  steps: 1000
+  samples_per_step: 16
+  gradient_clip_norm: 10.0
+  objective: mean_sample_component_mse_normalized_by_fit_force_rms
+  model_selection: fixed_final_step_without_held_parent_selection
+
+evaluation:
+  primary: held_parent_pbe_force_component_mae_hartree_per_bohr
+  compare:
+    - zero_force
+    - source_graphformer_energy_derivative_force
+    - frozen_graphformer_attention_force
+
+gates:
+  fit_component_mae_max: 0.003
+  held_component_mae_max: 0.005
+  held_relative_mae_improvement_over_source_min: 0.10
+  held_relative_mae_improvement_over_zero_min: 0.50
+  net_force_max_abs_max: 1.0e-6
+  net_torque_max_abs_max: 1.0e-6
+
+decision:
+  pass: >-
+    Use the trained attention encoder to initialize a force-aware
+    Hessian/response readout on train20.
+  fail_fit: >-
+    Revise the equivariant force basis before touching Graphformer.
+  fit_pass_held_fail: >-
+    Keep Graphformer frozen and expand parent/geometry coverage without
+    accessing validation or Test100.
