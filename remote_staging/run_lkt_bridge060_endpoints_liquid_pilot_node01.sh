@@ -17,7 +17,7 @@ pilot=$root/ti_pilot_phase_specific_bridge060_lambda9_steps300_v1
 merged=$root/ti_pilot_merged_phase_specific_bridge060_verified_v1
 design=$root/ti_formal_design_phase_specific_bridge060_v1.json
 log=$root/lkt_bridge060_abacus_pilot_pipeline.log
-python=${PYTHON:-python3}
+python=${PYTHON:-$workspace/.venv-reference/bin/python}
 
 exec > >(tee -a "$log") 2>&1
 
@@ -36,8 +36,6 @@ command -v "$python" >/dev/null
 [[ -f $solid_dat ]]
 [[ -f $bridge_json ]]
 [[ -f $old_merged ]]
-[[ ! -e $bridge_dat ]]
-[[ ! -e $endpoints ]]
 [[ ! -e $pilot ]]
 [[ ! -e $merged ]]
 [[ ! -e $design ]]
@@ -75,16 +73,36 @@ env PYTHONPATH=. "$python" scripts/export_pair_reference_for_abacus.py \
   "$bridge_json" "$bridge_dat"
 sha256sum "$bridge_json" "$bridge_dat" >"$root/liquid_variance_bridge_alpha060_v1.sha256"
 
-env PYTHONPATH=. "$python" scripts/prepare_ti_endpoints_from_confirmations.py \
-  --confirmation-root "$confirmation" \
-  --out "$endpoints" \
-  --solid-pair-model "$solid_json" \
-  --liquid-pair-model "$bridge_json" \
-  --steps 10 \
-  --config config/abacus_lkt_ti_cpu12.json
-bash remote_staging/run_kedf_ti_endpoints_node_local.sh \
-  "$endpoints" "$repository" \
-  "$solid_json" "$solid_dat" "$bridge_json" "$bridge_dat" "$python"
+if [[ ! -f $endpoints/endpoint_pipeline.done ]]; then
+  if [[ ! -e $endpoints ]]; then
+    env PYTHONPATH=. "$python" scripts/prepare_ti_endpoints_from_confirmations.py \
+      --confirmation-root "$confirmation" \
+      --out "$endpoints" \
+      --solid-pair-model "$solid_json" \
+      --liquid-pair-model "$bridge_json" \
+      --steps 10 \
+      --config config/abacus_lkt_ti_cpu12.json
+    bash remote_staging/run_kedf_ti_endpoints_node_local.sh \
+      "$endpoints" "$repository" \
+      "$solid_json" "$solid_dat" "$bridge_json" "$bridge_dat" "$python"
+  else
+    [[ -f $endpoints/endpoint_manifest.json ]]
+    for phase in solid liquid; do
+      pair_json=$solid_json
+      [[ $phase == liquid ]] && pair_json=$bridge_json
+      env PYTHONPATH=. "$python" scripts/validate_al108_ti_endpoints.py \
+        "$endpoints/$phase" --pair-model "$pair_json" --expected-steps 10
+      grep -q '"status": "endpoint_validation_passed"' \
+        "$endpoints/$phase/endpoint_validation.json"
+    done
+    find "$endpoints" -type f \
+      \( -name INPUT -o -name STRU -o -name KPT -o -name metadata.json \
+         -o -name manifest.json -o -name endpoint_manifest.json \
+         -o -name endpoint_validation.json \) \
+      -print0 | sort -z | xargs -0 sha256sum >"$endpoints/SHA256SUMS"
+    touch "$endpoints/endpoint_pipeline.done"
+  fi
+fi
 
 env PYTHONPATH=. "$python" scripts/prepare_ti_pilot_from_endpoints.py \
   --endpoint-root "$endpoints" \
