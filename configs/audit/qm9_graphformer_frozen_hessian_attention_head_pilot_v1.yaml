@@ -1,0 +1,87 @@
+protocol_id: qm9_graphformer_frozen_hessian_attention_head_pilot_v1
+frozen_at: "2026-07-29T17:20:00+08:00"
+
+scope:
+  purpose: >-
+    Test whether the final atom states of the intact train800 Graphformer
+    contain transferable train-only PBE Hessian information when read by a
+    small structured multi-head attention module.
+  parent_count: 20
+  sample_ids: [0]
+  fold_count: 5
+  active_fold_count: 1
+  result_role: small_scope_trend_pilot_not_formal_cv
+  backbone_trainable: false
+  energy_head_modified: false
+  validation_access_allowed: false
+  test100_access_allowed: false
+  validation_evaluations_used: 0
+  test100_evaluations_used: 0
+
+inputs:
+  dataset_root: /home/shenwei01/xzh_node02_20260724/data/QM9PBEForceRandom1000Train800RebuildV1
+  train_only_dataset_manifest_sha256: 9506bf6573ecdea705555d204c389ce7508735baccc3c13533a7b23c623370ed
+  pbe_hessian_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/pbe_hessian_train20/manifest.json
+  pbe_hessian_manifest_sha256: acc5d00a984f17f73043aafcc5954fba7722537ab55c82f803a64f99a61f30c1
+  label_subdir: labels_local_frames_global_symmetric_natrep
+  density_iteration: -1
+  density_features:
+    - mean
+    - standard_deviation
+    - root_mean_square
+    - mean_absolute
+    - maximum_absolute
+    - signed_sum_over_sqrt_dimension
+  source_run_dir: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_train800_egf_force1_s12330_rebuild_v1
+  source_checkpoint: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_train800_egf_force1_s12330_rebuild_v1/checkpoints/last.ckpt
+  source_checkpoint_sha256: ca45fda1eedb9815e9cac26c23f95f0a60666f73c89d4a0e967803ddc4690a45
+  source_checkpoint_step: 12330
+  source_hidden_semantics: final_graphformer_atom_states_at_converged_label_density
+
+model:
+  node_feature_dim: 768
+  attention_dim: 128
+  attention_heads: 8
+  latent_dim: 16
+  structured_hidden_dim: 64
+  radial_centers_bohr: [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0]
+  radial_width_bohr: 0.75
+  environment_scale_bohr: 4.0
+  output: projected_internal_cartesian_hessian
+  zero_initialize: true
+
+training:
+  seed: 20260729
+  dtype: float64
+  optimizer: AdamW
+  learning_rate: 0.001
+  weight_decay: 1.0e-8
+  steps: 200
+  gradient_clip_norm: 10.0
+  objective: mean_parent_relative_frobenius_squared
+  model_selection: fixed_final_step_without_held_parent_selection
+  fold_assignment: deterministic_natoms_composition_serpentine
+
+comparison:
+  baseline_name: structured_geometry_only_pilot_v1
+  baseline_summary: /home/shenwei01/xzh_node02_20260724/artifacts/structured_density_hessian_head_pilot_v1_20260729/summary.json
+  baseline_summary_sha256: f4769f2ac5a90016be023e7e4e3a818f1a4e6ab47fef5111f0fec060afec1f73
+  baseline_held_median_relative_frobenius: 0.24926936848858064
+
+gates:
+  fit_median_relative_frobenius_max: 0.15
+  held_median_relative_frobenius_max: 0.20
+  held_p90_relative_frobenius_max: 0.30
+  held_fraction_better_than_zero_baseline_min: 0.90
+  relative_median_improvement_over_geometry_min: 0.05
+  symmetry_max_abs_max: 1.0e-10
+  external_leakage_frobenius_max: 1.0e-10
+
+decision:
+  pass: >-
+    Unfreeze only the last G3D layer and repeat the same parent-CV protocol.
+  fail_capacity: >-
+    Do not unfreeze Graphformer; first revise the attention/tensor readout.
+  held_fail: >-
+    Keep the frozen-backbone result as representation evidence and do not
+    access validation or Test100.
