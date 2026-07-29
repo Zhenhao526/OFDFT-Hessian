@@ -79,6 +79,7 @@ def basis_and_derivative(
 
 def fit_proxy(
     *,
+    target_kedf: str = "lkt",
     p: int,
     suf_sigma_angstrom: float,
     temperature_k: float,
@@ -94,6 +95,9 @@ def fit_proxy(
     ridge: float,
     sample_min_angstrom: float | None = None,
 ) -> Dict[str, object]:
+    target_kedf = target_kedf.lower()
+    if target_kedf not in {"lkt", "xwm"}:
+        raise ValueError(f"unsupported target KEDF: {target_kedf}")
     if basis_count < 3 or samples < basis_count * 3:
         raise ValueError("insufficient basis functions or radial samples")
     if sample_min_angstrom is None:
@@ -212,11 +216,12 @@ def fit_proxy(
     )
     return {
         "schema": "mpn-radial-pair-reference-v1",
-        "target_kedf": "lkt",
+        "target_kedf": target_kedf,
         "reference_kind": "suf_radial_proxy",
         "reference_phase": "liquid",
         "purpose": (
-            "A fluid phase-specific bridge from analytic sUF to LKT; "
+            f"A fluid phase-specific bridge from analytic sUF to "
+            f"{target_kedf.upper()}; "
             "the exact sUF-to-proxy correction must be sampled independently"
         ),
         "suf": {
@@ -272,6 +277,11 @@ def main() -> None:
         description="Fit the exact sUF radial potential to ABACUS's pair basis"
     )
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--target-kedf",
+        choices=("lkt", "xwm"),
+        default="lkt",
+    )
     parser.add_argument("--p", type=int, required=True)
     parser.add_argument("--suf-sigma", type=float, required=True)
     parser.add_argument("--temperature", type=float, required=True)
@@ -297,6 +307,7 @@ def main() -> None:
     args = parser.parse_args()
 
     result = fit_proxy(
+        target_kedf=args.target_kedf,
         p=args.p,
         suf_sigma_angstrom=args.suf_sigma,
         temperature_k=args.temperature,

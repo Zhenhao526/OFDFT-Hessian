@@ -56,3 +56,27 @@ def test_hard_core_can_be_fit_above_two_angstrom():
     short_range = result["short_range_diagnostic"]
     assert short_range["u_1p5_ev"] > 4.0
     assert short_range["du_dr_1p5_ev_per_angstrom"] < -10.0
+
+
+def test_proxy_records_independent_xwm_provenance():
+    result = fit_proxy(
+        target_kedf="xwm",
+        p=50,
+        suf_sigma_angstrom=1.40,
+        temperature_k=900.0,
+        basis_count=77,
+        basis_min_angstrom=1.8,
+        basis_max_angstrom=6.3,
+        basis_width_angstrom=0.10,
+        cutoff_angstrom=6.5,
+        core_amplitude_ev=5000.0,
+        core_cutoff_angstrom=2.03,
+        core_power=2,
+        samples=2400,
+        ridge=1.0e-10,
+        sample_min_angstrom=2.03,
+    )
+
+    assert result["target_kedf"] == "xwm"
+    assert "XWM" in result["purpose"]
+    assert result["reference_gate_passed"] is True
