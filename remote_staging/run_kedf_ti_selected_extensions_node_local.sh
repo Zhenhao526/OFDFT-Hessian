@@ -12,7 +12,11 @@ pair_dat=$3
 shift 3
 phase_roots=("$@")
 log=$batch_root/extension_pipeline.log
-cpu_ranges=(0-11 12-23 24-35 38-49 50-61 62-73)
+if [[ -n ${KEDF_TI_CPU_RANGES:-} ]]; then
+  read -r -a cpu_ranges <<<"$KEDF_TI_CPU_RANGES"
+else
+  cpu_ranges=(0-11 12-23 24-35 38-49 50-61 62-73)
+fi
 
 [[ -f "$pair_dat" ]]
 for root in "${phase_roots[@]}"; do
@@ -50,6 +54,17 @@ if [[ ${#points[@]} -eq 0 || ${#points[@]} -ne ${#lambdas[@]} ]]; then
   echo "invalid selected-window batch" >&2
   exit 2
 fi
+slots_needed=$((${#points[@]} < 6 ? ${#points[@]} : 6))
+if [[ ${#points[@]} -gt 1 && ${#cpu_ranges[@]} -lt $slots_needed ]]; then
+  echo "insufficient KEDF_TI_CPU_RANGES entries" >&2
+  exit 2
+fi
+for cpus in "${cpu_ranges[@]}"; do
+  if [[ ! $cpus =~ ^[0-9]+-[0-9]+$ ]]; then
+    echo "invalid CPU range: $cpus" >&2
+    exit 2
+  fi
+done
 for point in "${points[@]}"; do
   [[ -x "$point/run_local.sh" ]]
   if find "$point" -maxdepth 1 -type d -name 'OUT.*' | grep -q .; then
