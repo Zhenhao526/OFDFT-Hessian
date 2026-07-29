@@ -4,14 +4,20 @@ set -euo pipefail
 repo=${REPO:-/home/shenwei01/WT_Al_melting_workspace_20260724/repository}
 run_root=${RUN_ROOT:-/home/shenwei01/WT_Al_melting_workspace_20260724/runs/xwm_lkt_20260727}
 torch_runner=${TORCH_RUNNER:-$repo/remote_staging/run_node05_cached_cuda_torch.sh}
-output=${OUTPUT:-$run_root/lkt/free_energy_T0900/liquid_pair_candidate_scan_v1}
+output=${OUTPUT:-$run_root/lkt/free_energy_T0900/liquid_pair_candidate_scan_v2_hardwall}
 steps=${STEPS:-10000}
 temperature=${TEMPERATURE:-900}
 cpu_list=${CPU_LIST:-36,37,74,75}
+gpu_list=${GPU_LIST:-0,1,2,3}
 
 IFS=, read -r -a cpus <<< "$cpu_list"
+IFS=, read -r -a gpus <<< "$gpu_list"
 [[ ${#cpus[@]} -eq 4 ]] || {
   echo "CPU_LIST must contain exactly four CPUs" >&2
+  exit 2
+}
+[[ ${#gpus[@]} -eq 4 ]] || {
+  echo "GPU_LIST must contain exactly four GPUs" >&2
   exit 2
 }
 [[ -x $torch_runner ]] || {
@@ -57,18 +63,18 @@ env PYTHONPATH=. python3 scripts/filter_kedf_reference_dataset.py \
   --phase liquid \
   > "$output/filter.stdout"
 
-labels=(combined30 liquid30 liquid60 liquid60_force)
+labels=(liquid_s017_b33 liquid_s014_b45 liquid_s010_b61 liquid_s008_b77)
 datasets=(
-  "$source_frames"
+  "$output/liquid_dataset/frames.jsonl"
   "$output/liquid_dataset/frames.jsonl"
   "$output/liquid_dataset/frames.jsonl"
   "$output/liquid_dataset/frames.jsonl"
 )
-max_per_phase=(30 30 60 60)
-basis_counts=(17 17 17 25)
-sigmas=(0.3 0.3 0.3 0.25)
-force_scales=(0.2 0.2 0.2 0.1)
-ridges=(1e-10 1e-10 1e-10 1e-9)
+max_per_phase=(60 60 60 60)
+basis_counts=(33 45 61 77)
+sigmas=(0.17 0.14 0.10 0.08)
+force_scales=(0.20 0.15 0.10 0.10)
+ridges=(1e-9 1e-9 1e-8 1e-7)
 
 declare -a pids=()
 for index in "${!labels[@]}"; do
@@ -76,15 +82,20 @@ for index in "${!labels[@]}"; do
   candidate=$output/$label
   mkdir -p "$candidate"
   (
-    taskset -c "${cpus[$index]}" env CUDA_VISIBLE_DEVICES= PYTHONPATH="$repo" \
+    taskset -c "${cpus[$index]}" env CUDA_VISIBLE_DEVICES="${gpus[$index]}" PYTHONPATH="$repo" \
       "$torch_runner" "$repo/scripts/fit_pair_reference.py" \
       --dataset "${datasets[$index]}" \
       --out "$candidate/model.json" \
       --max-per-phase "${max_per_phase[$index]}" \
       --basis-count "${basis_counts[$index]}" \
+      --basis-min 1.8 \
+      --basis-max 6.3 \
       --sigma "${sigmas[$index]}" \
       --force-scale "${force_scales[$index]}" \
       --ridge "${ridges[$index]}" \
+      --core-amplitude 5000 \
+      --core-cutoff 2.03 \
+      --core-power 2 \
       --threads 1
     frame_index=$(
       python3 - "${datasets[$index]}" <<'PY'
@@ -102,7 +113,7 @@ if not indices:
 print(indices[-1])
 PY
     )
-    taskset -c "${cpus[$index]}" env CUDA_VISIBLE_DEVICES= PYTHONPATH="$repo" \
+    taskset -c "${cpus[$index]}" env CUDA_VISIBLE_DEVICES="${gpus[$index]}" PYTHONPATH="$repo" \
       "$torch_runner" "$repo/scripts/run_pair_reference_md.py" \
       --model "$candidate/model.json" \
       --out "$candidate/liquid_md_steps${steps}" \
@@ -113,7 +124,7 @@ PY
       --sample-every 10 \
       --seed "$((20260730 + index))" \
       --threads 1 \
-      --device cpu \
+      --device cuda \
       --store-positions
     env PYTHONPATH="$repo" python3 "$repo/scripts/analyze_pair_reference_md.py" \
       "$candidate/liquid_md_steps${steps}" \
@@ -122,7 +133,7 @@ PY
   ) > "$candidate/run.stdout" 2>&1 &
   pids[$index]=$!
   printf '%s launched label=%s cpu=%s pid=%s\n' \
-    "$(date -Iseconds)" "$label" "${cpus[$index]}" "${pids[$index]}"
+    "$(date -Iseconds)" "$label" "${cpus[$index]}/gpu${gpus[$index]}" "${pids[$index]}"
 done
 
 failures=0
@@ -154,6 +165,18 @@ for label in labels:
     summary = json.loads((run / "summary.json").read_text())
     phase = json.loads((run / "phase_analysis.json").read_text())
     checks = {
+        "lkt_liquid_only_provenance": (
+            model.get("target_kedf") == "lkt"
+            and model.get("selected_frames") == 60
+        ),
+        "same_hard_wall_as_verified_proxy": (
+            model["model"]["repulsive_core"]
+            == {
+                "amplitude_ev": 5000.0,
+                "cutoff_angstrom": 2.03,
+                "power": 2,
+            }
+        ),
         "static_reference_gate": model.get("reference_gate_passed") is True,
         "stable": summary.get("stable") is True,
         "nearest_neighbor_gt_2_A": (
@@ -184,12 +207,13 @@ for label in labels:
 eligible = [item for item in candidates if item["eligible"]]
 eligible.sort(
     key=lambda item: (
-        -item["late_msd_slope_angstrom2_per_step"],
         item["validation"]["force_rmse_ev_per_angstrom"],
+        item["validation"]["energy_rmse_ev_per_atom"],
+        -item["late_msd_slope_angstrom2_per_step"],
     )
 )
 payload = {
-    "schema": "lkt-liquid-pair-candidate-scan-v1",
+    "schema": "lkt-liquid-hardwall-pair-candidate-scan-v2",
     "status": "verified" if eligible else "no_verified_candidate",
     "created_utc": datetime.now(timezone.utc).isoformat(),
     "steps": steps,
