@@ -17,7 +17,7 @@ pilot=$root/ti_pilot_phase_specific_bridge060_lambda9_steps300_v1
 merged=$root/ti_pilot_merged_phase_specific_bridge060_verified_v1
 design=$root/ti_formal_design_phase_specific_bridge060_v1.json
 log=$root/lkt_bridge060_abacus_pilot_pipeline.log
-python=/home/shenwei01/wt_melting_runtime_20260724/conda_prefix/bin/python
+python=${PYTHON:-python3}
 
 exec > >(tee -a "$log") 2>&1
 
@@ -30,7 +30,7 @@ mark_failed() {
 }
 trap mark_failed ERR
 
-[[ -x $python ]]
+command -v "$python" >/dev/null
 [[ -f $confirmation/zero_pressure_confirmation_summary.json ]]
 [[ -f $solid_json ]]
 [[ -f $solid_dat ]]
