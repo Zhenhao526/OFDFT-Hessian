@@ -83,7 +83,7 @@ run_wave() {
     index=$((first + slot))
     point=${points[$index]}
     lambda=${lambdas[$index]}
-    if [[ ${#points[@]} -eq 1 ]]; then
+    if [[ ${#points[@]} -eq 1 && -z ${KEDF_TI_CPU_RANGES:-} ]]; then
       cpus=0-73
     else
       cpus=${cpu_ranges[$slot]}
