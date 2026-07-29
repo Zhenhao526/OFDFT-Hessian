@@ -1,0 +1,97 @@
+protocol_id: qm9_structured_density_hessian_head_pilot_v1
+frozen_at: "2026-07-29T00:00:00+08:00"
+
+scope:
+  purpose: >-
+    Test whether a small Euclidean-covariant pair/block Hessian head gains
+    transferable curvature signal from clean converged OFDFT density
+    coefficients.
+  dataset_role: train20_architecture_development_only
+  parent_count: 20
+  sample_ids: [0]
+  fold_count: 5
+  validation_access_allowed: false
+  test100_access_allowed: false
+  validation_evaluations_used: 0
+  test100_evaluations_used: 0
+
+inputs:
+  dataset_root: /home/shenwei01/xzh_node02_20260724/data/QM9PBEForceRandom1000Train800RebuildV1
+  train_only_dataset_manifest_sha256: 9506bf6573ecdea705555d204c389ce7508735baccc3c13533a7b23c623370ed
+  pbe_hessian_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/pbe_hessian_train20/manifest.json
+  pbe_hessian_manifest_sha256: acc5d00a984f17f73043aafcc5954fba7722537ab55c82f803a64f99a61f30c1
+  label_subdir: labels_local_frames_global_symmetric_natrep
+  density_iteration: -1
+  density_features:
+    - mean
+    - standard_deviation
+    - root_mean_square
+    - mean_absolute
+    - maximum_absolute
+    - signed_sum_over_sqrt_dimension
+
+model:
+  elements: [1, 6, 7, 8, 9]
+  hidden_dim: 64
+  radial_centers_bohr: [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0]
+  radial_width_bohr: 0.75
+  environment_scale_bohr: 4.0
+  output: projected_internal_cartesian_hessian
+  exact_constraints:
+    - permutation_covariance
+    - rotation_covariance
+    - hessian_symmetry
+    - translation_null_space
+    - rotation_null_space_at_reference
+
+ablations:
+  order: [geometry_only, geometry_plus_density]
+  geometry_only:
+    use_density: false
+  geometry_plus_density:
+    use_density: true
+
+training:
+  seed: 20260729
+  dtype: float64
+  optimizer: AdamW
+  learning_rate: 0.002
+  weight_decay: 1.0e-8
+  steps: 800
+  gradient_clip_norm: 10.0
+  objective: mean_parent_relative_frobenius_squared
+  model_selection: fixed_final_step_without_held_parent_selection
+  density_normalization: fit_on_training_parents_per_fold
+  fold_assignment: deterministic_natoms_composition_serpentine
+
+evaluation:
+  primary: five_fold_parent_heldout_internal_hessian_relative_frobenius
+  zero_hessian_baseline_relative_frobenius: 1.0
+  report:
+    - fit_parent_relative_frobenius
+    - held_parent_relative_frobenius
+    - held_parent_mae
+    - symmetry_max_abs
+    - external_leakage_frobenius
+    - geometry_vs_density_paired_difference
+    - parameter_count
+
+gates:
+  fit_median_relative_frobenius_max: 0.15
+  held_median_relative_frobenius_max: 0.50
+  held_p90_relative_frobenius_max: 1.00
+  held_fraction_better_than_zero_baseline_min: 0.75
+  density_relative_median_improvement_over_geometry_min: 0.05
+  symmetry_max_abs_max: 1.0e-10
+  external_leakage_frobenius_max: 1.0e-10
+
+decision:
+  pass: >-
+    Integrate the density-aware head behind the converged-density Graphformer
+    path and generate clean fixed-density/relaxed Schur teachers.
+  fail_capacity: >-
+    Enrich the equivariant block basis before adding more parents or optimizer
+    scans.
+  fit_pass_held_fail: >-
+    Keep the result as a nontransferable capacity diagnostic and do not access
+    validation/Test100.
