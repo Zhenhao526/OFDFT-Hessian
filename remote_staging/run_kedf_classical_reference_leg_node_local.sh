@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo=${REPO:-/home/shenwei01/WT_Al_melting_workspace_20260724/repository}
 python=${PYTHON:-/home/shenwei01/WT_Al_melting_workspace_20260724/.venv-reference-cuda/bin/python}
+torch_runner=${TORCH_RUNNER:-$repo/remote_staging/run_node05_cached_cuda_torch.sh}
 model=${MODEL:?MODEL is required}
 restart=${RESTART:?RESTART is required}
 reference=${REFERENCE:?REFERENCE is required}
@@ -20,7 +21,7 @@ cpu=${CPU:-36}
 
 [[ $leg_kind == einstein || $leg_kind == suf ]]
 [[ $expected_phase == solid || $expected_phase == liquid ]]
-[[ -x $python && -f $model && -f $restart && -f $reference ]]
+[[ -x $python && -x $torch_runner && -f $model && -f $restart && -f $reference ]]
 [[ ! -e $output ]]
 
 "$python" - "$model" "$restart" "$reference" "$grid_points" "$lambda_power" <<'PY'
@@ -95,9 +96,7 @@ for index in "${!lambdas[@]}"; do
   coupling=${lambdas[$index]}
   label=$(printf 'lambda_%0.6f' "$coupling" | tr '.' 'p')
   point=$output/$label
-  command=(
-    "$python"
-  )
+  command=("$torch_runner")
   if [[ $leg_kind == einstein ]]; then
     command+=(
       scripts/run_einstein_pair_ti_md.py
