@@ -1,0 +1,104 @@
+protocol_id: qm9_residual_random1000_graphformer_v1
+date: 2026-07-29
+
+scientific_question: >-
+  Does an unchanged Graphformer learn the nonlocal kinetic correction
+  Ts - T_APBEK more accurately and robustly than it learns Ts + Exc directly?
+
+identity:
+  parents: QM9 IDs 1..1000
+  split_algorithm: NumPy legacy permutation seed 8
+  parent_counts:
+    train: 800
+    validation: 100
+    test: 100
+  samples_per_parent: 4
+  train_parent_sha256: d3ef814cf83eba4cff37f6a076c618a6016d8df4d2931286732c999cca54513d
+  validation_parent_sha256: 4735dd45a3dcfe1f7c72d2f0db9c979d974e9fb61333d44cbb10bf7502c445f0
+  test_parent_sha256: a4684bf139dcfc63d5012e3da88825ce2130b181909cf30517a05d45b717e147
+
+data:
+  train_dataset: QM9PBEForceRandom1000Train800RebuildV1
+  validation_dataset: QM9PBEForceRandom1000Val100RebuildV1
+  test_dataset: QM9PBEForceRandom1000Test100RebuildV1
+  validation_first: true
+  test_blind_until_protocol_freeze: true
+  forbidden_storage: /scratch
+
+models:
+  architecture: unchanged Graphformer
+  trainable_parameter_count: 18692586
+  common_seed: 676368232
+  epochs: 10
+  effective_batch_size: 32
+  force_supervision: false
+  arms:
+    apbek:
+      learned_target: zero residual
+      trainable_parameters: 0
+      reconstructed_term: T_APBEK + PBE_XC
+    direct:
+      learned_target: Ts + Exc
+      reconstructed_term: Graphformer
+    residual:
+      learned_target: Ts - T_APBEK
+      reconstructed_term: Graphformer_delta_Ts + T_APBEK + PBE_XC
+
+total_energy:
+  expression: >-
+    E = Graphformer_delta_Ts + T_APBEK + E_XC_PBE + E_H + E_ext + E_nn
+  density_dependent_terms:
+    - Graphformer_delta_Ts
+    - T_APBEK
+    - E_XC_PBE
+    - E_H
+    - E_ext
+  geometry_term:
+    - E_nn
+
+primary_validation_metrics:
+  metrics:
+    - energy_mae_hartree
+    - energy_mae_hartree_per_electron
+    - projected_gradient_l1_per_sample
+    - projected_gradient_l2_per_sample
+    - projected_gradient_component_rmse
+    - numerical_failure_count
+  scopes:
+    - all labelled SCF density states
+    - ground-state density and sample-0 geometry
+
+representation_gate:
+  numerical_failures: 0
+  learned_residual_vs_apbek:
+    minimum_energy_mae_reduction_fraction: 0.30
+    minimum_gradient_l2_reduction_fraction: 0.30
+  residual_vs_direct:
+    pass_if_either:
+      - energy_mae_reduction_fraction_at_least: 0.10
+        gradient_l2_regression_fraction_at_most: 0.05
+      - gradient_l2_reduction_fraction_at_least: 0.10
+        energy_mae_regression_fraction_at_most: 0.05
+    strong_pass:
+      energy_mae_reduction_fraction_at_least: 0.10
+      gradient_l2_reduction_fraction_at_least: 0.10
+
+downstream_validation_after_representation_gate:
+  density_relaxation:
+    validation_parents: 20
+    required_convergence_fraction: 0.95
+  complete_total_force:
+    validation_parents: 20
+    method: finite difference of density-relaxed total energy
+  complete_total_hessian:
+    validation_parents: 10
+    method: finite difference of complete total forces
+  test100:
+    access: once after model and thresholds are frozen
+    required_freeze_record: qm9_residual_random1000_v1/protocol_frozen.json
+    model_selection_on_test: forbidden
+
+interpretation_limits:
+  - Fixed-density Graphformer nuclear derivatives are not complete OFDFT forces.
+  - No force or Hessian claim is allowed before density-relaxed total-energy validation.
+  - A random1000 result is a pilot and not a full-QM9 generalization claim.

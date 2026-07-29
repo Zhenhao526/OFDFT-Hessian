@@ -1,0 +1,58 @@
+# @package _global_
+
+defaults:
+  - str25/default
+  - override /data: qm9_pbe_force_random1000_residual_rebuild_v1
+  - override /model/loss_function: l1
+  - override /trainer: gpu
+  - override /callbacks: qm9_full_scale
+  - override /logger: tensorboard
+
+name: qm9_random1000_residual_kin_minus_apbe_eg_rebuild_v1
+tags:
+  - qm9_random1000
+  - graphformer
+  - residual_kin_minus_apbe
+  - apbek
+  - pbe_xc
+  - energy_gradient
+  - rebuild_v1
+
+seed: 676368232
+train: true
+validate: true
+test: false
+ckpt_path: null
+weight_ckpt_path: null
+
+data:
+  # The trained Graphformer predicts Delta Ts = Ts - T_APBEK.  At OFDFT
+  # evaluation FunctionalFactory adds APBEK, PBE XC, Hartree and external terms.
+  target_key: kin_minus_apbe
+  datamodule:
+    batch_size: 8
+    num_workers: 8
+    pin_memory: true
+    shuffle_train: true
+    shuffle_val: false
+
+model:
+  force_supervision: false
+  profile_timing: true
+  logging_mixin_interval: null
+  metric_interval: 10
+
+trainer:
+  max_epochs: 10
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  accumulate_grad_batches: 4
+
+callbacks:
+  model_checkpoint:
+    save_last: true
+    save_top_k: 2
+  throughput_monitor:
+    estimate_num_samples: 39456
+    estimate_epochs: [10]
+    target_num_devices: 1

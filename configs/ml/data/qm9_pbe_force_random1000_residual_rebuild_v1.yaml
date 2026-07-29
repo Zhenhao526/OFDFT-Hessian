@@ -1,0 +1,14 @@
+defaults:
+  - qm9
+
+# Train800 and its statistics stay in the immutable rebuilt dataset.  The
+# sidecar split references validation labels from the separate Held200 root.
+dataset_name: "QM9PBEForceRandom1000Train800RebuildV1"
+
+datamodule:
+  split_file: ${oc.env:QM9_RESIDUAL1000_SPLIT}
+  train_only: false
+  dataset_kwargs:
+    limit_scf_iterations: 1
+    keep_initial_guess: false
+    load_force_label: false
