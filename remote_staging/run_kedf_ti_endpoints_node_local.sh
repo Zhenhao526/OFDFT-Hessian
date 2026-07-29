@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 5 ]]; then
-  echo "usage: $0 ENDPOINT_ROOT REPOSITORY PAIR_JSON PAIR_DAT PYTHON" >&2
+if [[ $# -ne 5 && $# -ne 7 ]]; then
+  echo "usage: $0 ENDPOINT_ROOT REPOSITORY SOLID_PAIR_JSON SOLID_PAIR_DAT [LIQUID_PAIR_JSON LIQUID_PAIR_DAT] PYTHON" >&2
   exit 2
 fi
 
 endpoint_root=$1
 repository=$2
-pair_json=$3
-pair_dat=$4
-python=$5
+solid_pair_json=$3
+solid_pair_dat=$4
+if [[ $# -eq 5 ]]; then
+  liquid_pair_json=$solid_pair_json
+  liquid_pair_dat=$solid_pair_dat
+  python=$5
+else
+  liquid_pair_json=$5
+  liquid_pair_dat=$6
+  python=$7
+fi
 log=$endpoint_root/endpoint_pipeline.log
 
 points=(
@@ -23,6 +31,10 @@ points=(
 )
 modes=(baseline 0.0 1.0 baseline 0.0 1.0)
 cpu_ranges=(0-11 12-23 24-35 38-49 50-61 62-73)
+pair_dats=(
+  "$solid_pair_dat" "$solid_pair_dat" "$solid_pair_dat"
+  "$liquid_pair_dat" "$liquid_pair_dat" "$liquid_pair_dat"
+)
 
 for point in "${points[@]}"; do
   [[ -x "$point/run_local.sh" ]]
@@ -38,6 +50,7 @@ for index in "${!points[@]}"; do
   point=${points[$index]}
   mode=${modes[$index]}
   cpus=${cpu_ranges[$index]}
+  pair_dat=${pair_dats[$index]}
   (
     cd "$point"
     if [[ "$mode" == baseline ]]; then
@@ -75,6 +88,8 @@ fi
 
 cd "$repository"
 for phase in solid liquid; do
+  pair_json=$solid_pair_json
+  [[ $phase == liquid ]] && pair_json=$liquid_pair_json
   env PYTHONPATH=. "$python" scripts/validate_al108_ti_endpoints.py \
     "$endpoint_root/$phase" --pair-model "$pair_json" \
     --expected-steps 10 >>"$log" 2>&1

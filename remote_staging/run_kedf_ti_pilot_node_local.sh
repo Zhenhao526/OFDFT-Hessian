@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "usage: $0 PILOT_ROOT REPOSITORY PAIR_DAT" >&2
+if [[ $# -ne 3 && $# -ne 4 ]]; then
+  echo "usage: $0 PILOT_ROOT REPOSITORY SOLID_PAIR_DAT [LIQUID_PAIR_DAT]" >&2
   exit 2
 fi
 
 pilot_root=$1
 repository=$2
-pair_dat=$3
+solid_pair_dat=$3
+liquid_pair_dat=${4:-$solid_pair_dat}
 log=$pilot_root/pilot_pipeline.log
 cpu_ranges=(0-11 12-23 24-35 38-49 50-61 62-73)
 
 [[ -f "$pilot_root/pilot_manifest.json" ]]
-[[ -f "$pair_dat" ]]
+[[ -f "$solid_pair_dat" ]]
+[[ -f "$liquid_pair_dat" ]]
 for phase in solid liquid; do
   [[ -f "$pilot_root/$phase/manifest.json" ]]
 done
@@ -61,18 +63,20 @@ run_wave() {
   local first=$1
   local count=$2
   local pids=()
-  local index point lambda cpus status
+  local index point lambda cpus status phase_pair_dat
 
   for ((slot=0; slot<count; slot++)); do
     index=$((first + slot))
     point=${points[$index]}
     lambda=${lambdas[$index]}
     cpus=${cpu_ranges[$slot]}
+    phase_pair_dat=$solid_pair_dat
+    ((index >= 9)) && phase_pair_dat=$liquid_pair_dat
     (
       cd "$point"
       exec taskset -c "$cpus" env \
         OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-        MPN_TI_LAMBDA="$lambda" MPN_TI_PAIR_MODEL="$pair_dat" \
+      MPN_TI_LAMBDA="$lambda" MPN_TI_PAIR_MODEL="$phase_pair_dat" \
         ./run_local.sh
     ) >"$point/run.stdout" 2>&1 &
     pids+=("$!")

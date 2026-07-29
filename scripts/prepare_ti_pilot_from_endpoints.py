@@ -9,6 +9,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from mpn_melting.abacus_input import load_json
+from scripts.kedf_phase_pair_models import resolve_phase_pair_models
 from scripts.prepare_al108_ti_windows import prepare
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--endpoint-root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--pair-model", type=Path, required=True)
+    parser.add_argument("--pair-model", type=Path)
+    parser.add_argument("--solid-pair-model", type=Path)
+    parser.add_argument("--liquid-pair-model", type=Path)
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument(
         "--config",
@@ -27,6 +30,14 @@ def main() -> None:
         default=ROOT / "config" / "abacus_wt_ti_node04_cpu12.json",
     )
     args = parser.parse_args()
+    pair_models = resolve_phase_pair_models(
+        pair_model=args.pair_model,
+        solid_pair_model=args.solid_pair_model,
+        liquid_pair_model=args.liquid_pair_model,
+    )
+    for phase, pair_model in pair_models.items():
+        if not pair_model.is_file():
+            raise FileNotFoundError(f"missing {phase} pair model: {pair_model}")
     if args.out.exists():
         raise FileExistsError(f"refusing to overwrite {args.out}")
     endpoint_manifest = json.loads((args.endpoint_root / "endpoint_manifest.json").read_text())
@@ -59,7 +70,7 @@ def main() -> None:
                 dumpfreq=5,
                 restartfreq=args.steps,
                 seed=51000 + 1000 * phase_index,
-                pair_model=args.pair_model,
+                pair_model=pair_models[phase],
                 config=args.config,
                 ranks=None,
             )
@@ -70,6 +81,7 @@ def main() -> None:
                 "target_kedf": target_kedf,
                 "source": item["source"],
                 "zero_pressure_volume_per_atom_A3": item["zero_pressure_volume_per_atom_A3"],
+                "pair_model": str(pair_models[phase].resolve()),
             }
         )
     manifest = {
@@ -79,6 +91,9 @@ def main() -> None:
         "steps": args.steps,
         "lambdas": LAMBDAS,
         "phases": prepared,
+        "pair_models_by_phase": {
+            item["phase"]: item["pair_model"] for item in prepared
+        },
     }
     (args.out / "pilot_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest, indent=2))

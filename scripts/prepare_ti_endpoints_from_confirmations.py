@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from argparse import Namespace
 from pathlib import Path
 
 from mpn_melting.abacus_input import load_json
+from scripts.kedf_phase_pair_models import resolve_phase_pair_models
 from scripts.prepare_al108_ti_windows import SUPPORTED_KEDFS, prepare
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +20,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--confirmation-root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--pair-model", type=Path, required=True)
+    parser.add_argument("--pair-model", type=Path)
+    parser.add_argument("--solid-pair-model", type=Path)
+    parser.add_argument("--liquid-pair-model", type=Path)
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument(
         "--config",
@@ -26,6 +30,14 @@ def main() -> None:
         default=ROOT / "config" / "abacus_wt_ti_node04_cpu12.json",
     )
     args = parser.parse_args()
+    pair_models = resolve_phase_pair_models(
+        pair_model=args.pair_model,
+        solid_pair_model=args.solid_pair_model,
+        liquid_pair_model=args.liquid_pair_model,
+    )
+    for phase, pair_model in pair_models.items():
+        if not pair_model.is_file():
+            raise FileNotFoundError(f"missing {phase} pair model: {pair_model}")
     if args.out.exists():
         raise FileExistsError(f"refusing to overwrite {args.out}")
     final_summary = (
@@ -66,7 +78,7 @@ def main() -> None:
             "csvr_tau": 20.0,
             "dumpfreq": 1,
             "restartfreq": args.steps,
-            "pair_model": args.pair_model,
+            "pair_model": pair_models[phase],
             "config": args.config,
             "ranks": None,
         }
@@ -79,6 +91,10 @@ def main() -> None:
                 "target_kedf": target_kedf,
                 "source": item["run"],
                 "zero_pressure_volume_per_atom_A3": item["volume_per_atom_A3"],
+                "pair_model": str(pair_models[phase].resolve()),
+                "pair_model_sha256": hashlib.sha256(
+                    pair_models[phase].read_bytes()
+                ).hexdigest(),
             }
         )
     manifest = {
@@ -87,6 +103,13 @@ def main() -> None:
         "temperature_K": summary["temperature_K"],
         "steps": args.steps,
         "phases": phases,
+        "pair_models_by_phase": {
+            item["phase"]: {
+                "path": item["pair_model"],
+                "sha256": item["pair_model_sha256"],
+            }
+            for item in phases
+        },
     }
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "endpoint_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
