@@ -163,6 +163,7 @@ def main() -> None:
         "model": str(args.model.resolve()),
         "lambda": args.lambda_value,
         "temperature_k": args.temperature,
+        "target_temperature_k": args.temperature,
         "suf_p": args.suf_p,
         "suf_sigma_angstrom": args.suf_sigma,
         "steps": args.steps,

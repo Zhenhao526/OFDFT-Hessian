@@ -118,6 +118,9 @@ def main() -> None:
         for step in range(args.steps + 1):
             if step % args.sample_every == 0:
                 harmonic_energy, _ = harmonic()
+                fractional = (positions - anchors) @ inverse
+                fractional -= torch.round(fractional)
+                site_displacement = fractional @ lattice
                 record = {
                     "step": step,
                     "time_fs": step * args.dt_fs,
@@ -134,6 +137,9 @@ def main() -> None:
                     "kinetic_energy_ev_per_atom": kinetic_energy(velocities)
                     / positions.shape[0],
                     "nearest_neighbor_angstrom": float(nearest),
+                    "msd_angstrom2": float(
+                        (site_displacement * site_displacement).sum(dim=1).mean()
+                    ),
                 }
                 if args.store_positions:
                     record["positions_angstrom"] = positions.tolist()
@@ -160,6 +166,20 @@ def main() -> None:
                     f"rmin={float(nearest)}"
                 )
 
+    checkpoint = {
+        "schema": "mpn-einstein-pair-ti-checkpoint-v1",
+        "model": str(args.model.resolve()),
+        "lambda": args.lambda_value,
+        "target_temperature_k": args.temperature,
+        "dt_fs": args.dt_fs,
+        "steps": args.steps,
+        "positions_angstrom": positions.tolist(),
+        "velocities_angstrom_per_fs": velocities.tolist(),
+        "lattice_angstrom": lattice.tolist(),
+    }
+    (args.out / "checkpoint.json").write_text(
+        json.dumps(checkpoint, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
     summary = {
         "schema": "mpn-einstein-pair-ti-summary-v1",
         "natoms": positions.shape[0],
