@@ -96,7 +96,9 @@ def validate(args: argparse.Namespace) -> dict:
         positions = torch.tensor(frame.positions, dtype=torch.float64)
         lattice = torch.tensor(frame.lattice, dtype=torch.float64)
         energy, forces, _ = evaluate_model(positions, lattice, model)
-        reference_energy_errors.append(abs(float(energy) - zero_by_step[frame.step]["U_REF_eV"]))
+        reference_energy_errors.append(
+            float(energy) - zero_by_step[frame.step]["U_REF_eV"]
+        )
         if frame.forces is None:
             raise ValueError("lambda=0 dump is missing forces")
         for actual, expected in zip(frame.forces, forces.tolist()):
@@ -126,7 +128,7 @@ def validate(args: argparse.Namespace) -> dict:
         "lambda1_forces_match_baseline": max_frame_difference(baseline_frames, one_frames, "forces")
         < 1.0e-8,
         "lambda0_reference_energy_matches_python": (
-            max(reference_energy_errors, default=math.inf)
+            centered_max_abs(reference_energy_errors)
             < REFERENCE_ENERGY_TOLERANCE_EV
         ),
         "lambda0_reference_forces_match_python": (
@@ -147,7 +149,19 @@ def validate(args: argparse.Namespace) -> dict:
             if math.isfinite(target_energy_centered_error)
             else None
         ),
-        "max_lambda0_reference_energy_error_eV": max(reference_energy_errors, default=None),
+        "lambda0_python_minus_reference_energy_offset_eV": (
+            sum(reference_energy_errors) / len(reference_energy_errors)
+            if reference_energy_errors
+            else None
+        ),
+        "max_lambda0_reference_energy_error_eV": (
+            max((abs(value) for value in reference_energy_errors), default=None)
+        ),
+        "max_lambda0_reference_energy_centered_error_eV": (
+            centered_max_abs(reference_energy_errors)
+            if reference_energy_errors
+            else None
+        ),
         "max_lambda0_reference_force_error_eV_per_A": max(reference_force_errors, default=None),
         "max_lambda1_position_error_A": max_frame_difference(baseline_frames, one_frames, "positions"),
         "max_lambda1_force_error_eV_per_A": max_frame_difference(baseline_frames, one_frames, "forces"),

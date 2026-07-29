@@ -28,3 +28,7 @@ def test_component_step_count_includes_zero_based_first_step():
 
 def test_centered_error_accepts_a_stable_energy_bookkeeping_offset():
     assert centered_max_abs([0.00225, 0.00227, 0.00223]) < 3.0e-5
+
+
+def test_centered_error_rejects_a_configuration_dependent_reference_mismatch():
+    assert centered_max_abs([0.00225, 0.00227, 0.00280]) > 1.0e-4
