@@ -8,7 +8,7 @@ root=$run_root/lkt/free_energy_T0900
 source=${SOURCE:-$root/liquid_pair_candidate_scan_v2_hardwall/liquid_dataset}
 base=${BASE:-$root/liquid_suf_pair_proxy_v6_hardwall.json}
 restart=${RESTART:-$root/liquid_suf_pair_proxy_v6_validation_steps20000/run/checkpoint.json}
-output=${OUTPUT:-$root/liquid_variance_bridge_scan_v1}
+output=${OUTPUT:-$root/liquid_variance_bridge_scan_v2}
 steps=${STEPS:-30000}
 alphas=(0.75 0.85 0.90 0.95)
 labels=(alpha_0p750 alpha_0p850 alpha_0p900 alpha_0p950)
@@ -65,13 +65,19 @@ base = json.load(open(sys.argv[1]))
 fit = json.load(open(sys.argv[2]))
 assert base["target_kedf"] == fit["target_kedf"] == "lkt"
 assert fit["reference_gate_passed"]
-for key in (
-    "centers_angstrom",
-    "sigma_angstrom",
-    "cutoff_angstrom",
-    "repulsive_core",
-):
-    assert base["model"][key] == fit["model"][key], key
+assert len(base["model"]["centers_angstrom"]) == len(
+    fit["model"]["centers_angstrom"]
+)
+assert max(
+    abs(left - right)
+    for left, right in zip(
+        base["model"]["centers_angstrom"],
+        fit["model"]["centers_angstrom"],
+    )
+) <= 1.0e-12
+for key in ("sigma_angstrom", "cutoff_angstrom"):
+    assert abs(base["model"][key] - fit["model"][key]) <= 1.0e-12, key
+assert base["model"]["repulsive_core"] == fit["model"]["repulsive_core"]
 print("fit_validation", fit["validation"])
 PY
 

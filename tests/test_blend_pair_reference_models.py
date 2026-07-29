@@ -14,6 +14,7 @@ def write_model(
     *,
     target_kedf: str = "lkt",
     sigma: float = 0.1,
+    centers: list[float] | None = None,
 ) -> None:
     path.write_text(
         json.dumps(
@@ -23,7 +24,7 @@ def write_model(
                 "reference_gate_passed": True,
                 "short_range_guard_passed": True,
                 "model": {
-                    "centers_angstrom": [1.8, 2.0],
+                    "centers_angstrom": centers or [1.8, 2.0],
                     "sigma_angstrom": sigma,
                     "cutoff_angstrom": 6.5,
                     "coefficients_ev": coefficients,
@@ -79,6 +80,28 @@ def test_rejects_incompatible_basis(tmp_path: Path):
             target_kedf="lkt",
             phase="liquid",
         )
+
+
+def test_accepts_roundoff_level_center_differences(tmp_path: Path):
+    base = tmp_path / "base.json"
+    correction = tmp_path / "correction.json"
+    write_model(base, [1.0, 2.0, 3.0], centers=[1.8, 2.0])
+    write_model(
+        correction,
+        [3.0, 4.0, 5.0],
+        centers=[1.8 + 5.0e-16, 2.0 - 5.0e-16],
+    )
+
+    result = blend_models(
+        base,
+        correction,
+        tmp_path / "blend.json",
+        alpha=0.5,
+        target_kedf="lkt",
+        phase="liquid",
+    )
+
+    assert result["model"]["centers_angstrom"] == [1.8, 2.0]
 
 
 def test_rejects_cross_method_input(tmp_path: Path):

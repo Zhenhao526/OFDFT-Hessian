@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,18 @@ from typing import Any
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def compatible_sequence(left: Any, right: Any) -> bool:
+    return (
+        isinstance(left, list)
+        and isinstance(right, list)
+        and len(left) == len(right)
+        and all(
+            math.isclose(float(a), float(b), rel_tol=0.0, abs_tol=1.0e-12)
+            for a, b in zip(left, right)
+        )
+    )
 
 
 def blend_models(
@@ -41,15 +54,31 @@ def blend_models(
 
     base_model = base_document["model"]
     correction_model = correction_document["model"]
-    shared_fields = (
-        "centers_angstrom",
-        "sigma_angstrom",
-        "cutoff_angstrom",
-        "repulsive_core",
-    )
-    for field in shared_fields:
-        if base_model[field] != correction_model[field]:
+    if not compatible_sequence(
+        base_model["centers_angstrom"],
+        correction_model["centers_angstrom"],
+    ):
+        raise ValueError("pair model field differs: centers_angstrom")
+    for field in ("sigma_angstrom", "cutoff_angstrom"):
+        if not math.isclose(
+            float(base_model[field]),
+            float(correction_model[field]),
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
             raise ValueError(f"pair model field differs: {field}")
+    base_core = base_model["repulsive_core"]
+    correction_core = correction_model["repulsive_core"]
+    for field in ("amplitude_ev", "cutoff_angstrom"):
+        if not math.isclose(
+            float(base_core[field]),
+            float(correction_core[field]),
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(f"pair model repulsive core differs: {field}")
+    if int(base_core["power"]) != int(correction_core["power"]):
+        raise ValueError("pair model repulsive core differs: power")
     base_coefficients = [float(value) for value in base_model["coefficients_ev"]]
     correction_coefficients = [
         float(value) for value in correction_model["coefficients_ev"]
@@ -85,9 +114,12 @@ def blend_models(
             "dataset": correction_document.get("dataset"),
         },
         "model": {
-            field: base_model[field] for field in shared_fields
-        }
-        | {"coefficients_ev": coefficients},
+            "centers_angstrom": base_model["centers_angstrom"],
+            "sigma_angstrom": base_model["sigma_angstrom"],
+            "cutoff_angstrom": base_model["cutoff_angstrom"],
+            "repulsive_core": base_model["repulsive_core"],
+            "coefficients_ev": coefficients,
+        },
         "reference_gate_passed": True,
         "short_range_guard_passed": (
             base_document.get("short_range_guard_passed") is True
