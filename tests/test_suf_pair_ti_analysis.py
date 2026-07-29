@@ -16,7 +16,7 @@ def write_window(
     du_offset: float,
     include_msd: bool = True,
 ) -> None:
-    window = root / f"lambda_{coupling:.3f}".replace(".", "p")
+    window = root / f"lambda_{coupling:.12f}".replace(".", "p")
     window.mkdir(parents=True)
     rows = []
     for index in range(40):
@@ -139,6 +139,33 @@ def test_power_transformed_coordinate_integrates_nonuniform_lambda_grid(
     }
     assert result["windows"][0]["integration_jacobian"] == 0.0
     assert result["windows"][-1]["integration_jacobian"] == 2.0
+
+
+def test_power_grid_accepts_serialized_lambda_rounding(tmp_path: Path):
+    for index in range(17):
+        coordinate = index / 16
+        write_window(
+            tmp_path,
+            round(coordinate**4, 12),
+            minimum_distance=2.1,
+            du_offset=1.0,
+        )
+
+    result = analyze(
+        tmp_path,
+        blocks=5,
+        integration_coordinate_power=4.0,
+        max_quadrature_difference=5.0,
+    )
+
+    assert result["status"] == "verified"
+    assert result["delta_f_pair_minus_suf_simpson_ev_per_atom"] == pytest.approx(
+        1.0, abs=1.0e-4
+    )
+    assert result["integration_coordinate"] == {
+        "lambda_equals_x_to_power": 4.0,
+        "spacing": 0.0625,
+    }
 
 
 def test_nonuniform_lambda_grid_requires_matching_coordinate_power(tmp_path: Path):

@@ -124,14 +124,14 @@ def analyze(
     if len(windows) < 3 or len(windows) % 2 == 0:
         raise ValueError("an odd number of lambda windows is required")
     lambdas = [window["lambda"] for window in windows]
-    coordinates = [
-        coupling ** (1.0 / integration_coordinate_power)
-        for coupling in lambdas
+    spacing = 1.0 / (len(windows) - 1)
+    coordinates = [index * spacing for index in range(len(windows))]
+    expected_lambdas = [
+        coordinate**integration_coordinate_power for coordinate in coordinates
     ]
-    spacing = coordinates[1] - coordinates[0]
     if any(
-        not math.isclose(right - left, spacing, rel_tol=0.0, abs_tol=1.0e-12)
-        for left, right in zip(coordinates, coordinates[1:])
+        not math.isclose(actual, expected, rel_tol=0.0, abs_tol=5.0e-11)
+        for actual, expected in zip(lambdas, expected_lambdas)
     ):
         raise ValueError("integration-coordinate windows must be evenly spaced")
     if not math.isclose(lambdas[0], 0.0) or not math.isclose(lambdas[-1], 1.0):
