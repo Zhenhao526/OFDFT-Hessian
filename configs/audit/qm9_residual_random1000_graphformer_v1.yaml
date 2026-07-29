@@ -6,16 +6,20 @@ scientific_question: >-
   Ts - T_APBEK more accurately and robustly than it learns Ts + Exc directly?
 
 identity:
-  parents: QM9 IDs 1..1000
-  split_algorithm: NumPy legacy permutation seed 8
+  parents: >-
+    1000 QM9 parents sampled from all IDs 1..133885 with Python
+    random.Random seed 20260709, then sorted
+  subset_parent_sha256: 5424c420d51296fc9a5440b5dc23fcee596cc00a632f5fe6fa224f7ba3e2b2ee
+  split_algorithm: NumPy legacy permutation seed 8 on the sorted random1000 subset
   parent_counts:
     train: 800
     validation: 100
     test: 100
   samples_per_parent: 4
-  train_parent_sha256: d3ef814cf83eba4cff37f6a076c618a6016d8df4d2931286732c999cca54513d
-  validation_parent_sha256: 4735dd45a3dcfe1f7c72d2f0db9c979d974e9fb61333d44cbb10bf7502c445f0
-  test_parent_sha256: a4684bf139dcfc63d5012e3da88825ce2130b181909cf30517a05d45b717e147
+  train_parent_sha256: 318d1cfcecc4dcb54506269b6deffc81d116f26a260cf254e205db6e41a7799a
+  train_parent_ids_file_sha256: 0c8685734b9fdeae21e6e21644619cd20e66d2ee18c1c3563d85277ae31c36e2
+  validation_parent_sha256: 656210f57a7878344493ae3ff3f1e835d7d70811994c39cdee6b635ebd097197
+  test_parent_sha256: 6567a7e4a9eea038935409f1bb4fdbd52eca386d2e8a8137baca4577c7468c03
 
 data:
   train_dataset: QM9PBEForceRandom1000Train800RebuildV1

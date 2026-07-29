@@ -24,14 +24,17 @@ inference.
 
 ## Frozen comparison
 
-The historical random1000 identity is restored without opening old damaged
-storage:
+The historical random1000 identity is restored from the original generation
+algorithm and checked against the rebuilt Train800 provenance:
 
-- parents: QM9 IDs 1 through 1000;
-- parent split: NumPy legacy permutation with seed 8;
+- parents: 1000 IDs sampled from all 133,885 QM9 parents with Python
+  `random.Random(20260709)`, then sorted;
+- parent split: NumPy legacy permutation with seed 8 on that sorted subset;
 - train/validation/test: 800/100/100 parents;
 - four geometries per parent;
-- train parent identity is checked against the immutable rebuilt train800 split.
+- the reconstructed Train800 parent file hash is
+  `0c8685734b9fdeae21e6e21644619cd20e66d2ee18c1c3563d85277ae31c36e2`,
+  exactly matching the immutable rebuilt Train800 provenance.
 
 The three comparison arms are:
 
@@ -74,7 +77,7 @@ Test100 once. Test100 is not used for model selection.
 On node02 local storage:
 
 ```bash
-export FULL_QM9_RAW_DIR=/home/shenwei01/xzh_node02_20260724/data/QM9/raw
+export FULL_QM9_RAW_DIR=/home/shenwei01/xzh_node02_20260724/runtime_parent/_runtime/qm9_p0/QM9/raw
 export RESIDUAL_GPU=7
 STAGE=all bash scripts/launch_qm9_residual_random1000_node02.sh
 ```

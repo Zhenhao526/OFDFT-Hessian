@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build the blind-safe sidecar split for the QM9 random1000 residual experiment.
 
-The historical random1000 identity is deterministic: QM9 parents 1..1000 are
-permuted with NumPy seed 8, then split into 800/100/100 parents.  The rebuilt
-train800 payload remains untouched.  Validation100 and Test100 labels live in
-separate datasets, and split entries may therefore reference three dataset
-directories.
+The historical random1000 identity is deterministic: 1000 parents are sampled
+from all 133885 QM9 parents with Python ``random.Random(20260709)``, sorted, and
+then split into 800/100/100 parents with NumPy seed 8.  The rebuilt train800
+payload remains untouched.  Validation100 and Test100 labels live in separate
+datasets, and split entries may therefore reference three dataset directories.
 
 By default this script opens train and validation labels only.  Test labels are
 not inspected or included until ``--unlock-test`` is passed after model and
@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 import pickle
+import random
 from pathlib import Path
 from typing import Iterable
 
@@ -25,14 +26,19 @@ import numpy as np
 import zarr
 
 
-SEED = 8
-PARENT_COUNT = 1000
+SUBSET_SEED = 20260709
+SPLIT_SEED = 8
+QM9_PARENT_COUNT = 133885
+SUBSET_PARENT_COUNT = 1000
 SAMPLES_PER_PARENT = 4
 PARTITION_SIZES = {"train": 800, "val": 100, "test": 100}
+EXPECTED_RANDOM1000_PARENT_HASH = (
+    "5424c420d51296fc9a5440b5dc23fcee596cc00a632f5fe6fa224f7ba3e2b2ee"
+)
 EXPECTED_PARENT_HASHES = {
-    "train": "d3ef814cf83eba4cff37f6a076c618a6016d8df4d2931286732c999cca54513d",
-    "val": "4735dd45a3dcfe1f7c72d2f0db9c979d974e9fb61333d44cbb10bf7502c445f0",
-    "test": "a4684bf139dcfc63d5012e3da88825ce2130b181909cf30517a05d45b717e147",
+    "train": "318d1cfcecc4dcb54506269b6deffc81d116f26a260cf254e205db6e41a7799a",
+    "val": "656210f57a7878344493ae3ff3f1e835d7d70811994c39cdee6b635ebd097197",
+    "test": "6567a7e4a9eea038935409f1bb4fdbd52eca386d2e8a8137baca4577c7468c03",
 }
 
 
@@ -49,11 +55,43 @@ def _parent_hash(parent_ids: Iterable[int]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def historical_random1000_parent_ids() -> list[int]:
+    """Return the exact sorted subset created by prepare_qm9_random_subset.py."""
+    all_parent_ids = list(range(1, QM9_PARENT_COUNT + 1))
+    rng = random.Random(SUBSET_SEED)
+    selected = rng.sample(all_parent_ids, SUBSET_PARENT_COUNT)
+
+    # Preserve the historical fast-path guard in prepare_qm9_random_subset.py.
+    selected_set = set(selected)
+    if 1 in selected_set and SUBSET_PARENT_COUNT in selected_set:
+        unselected = [
+            parent_id
+            for parent_id in all_parent_ids
+            if parent_id not in selected_set
+        ]
+        replacement = rng.choice(unselected)
+        selected = [
+            replacement if parent_id == SUBSET_PARENT_COUNT else parent_id
+            for parent_id in selected
+        ]
+
+    selected = sorted(selected)
+    if len(selected) != SUBSET_PARENT_COUNT or len(set(selected)) != SUBSET_PARENT_COUNT:
+        raise AssertionError("Historical random1000 subset size or uniqueness drifted")
+    actual_hash = _parent_hash(selected)
+    if actual_hash != EXPECTED_RANDOM1000_PARENT_HASH:
+        raise AssertionError(
+            "Historical random1000 subset identity drifted: "
+            f"{actual_hash} != {EXPECTED_RANDOM1000_PARENT_HASH}"
+        )
+    return selected
+
+
 def historical_parent_split() -> dict[str, list[int]]:
     """Return the exact parent split used by the historical random1000 run."""
-    parent_ids = np.arange(1, PARENT_COUNT + 1, dtype=np.int64)
+    parent_ids = np.asarray(historical_random1000_parent_ids(), dtype=np.int64)
     # RandomState intentionally matches the legacy ``np.random.seed`` code.
-    order = np.random.RandomState(SEED).permutation(PARENT_COUNT)
+    order = np.random.RandomState(SPLIT_SEED).permutation(SUBSET_PARENT_COUNT)
     split = {
         "train": parent_ids[order[:800]].tolist(),
         "val": parent_ids[order[800:900]].tolist(),
@@ -205,9 +243,11 @@ def build(args: argparse.Namespace) -> dict:
         "schema_version": 1,
         "protocol": "qm9_random1000_residual_graphformer_v1",
         "historical_definition": (
-            "QM9 parent IDs 1..1000; NumPy legacy permutation seed 8; "
-            "800/100/100 parent split"
+            "1000 QM9 parents sampled from IDs 1..133885 with Python random "
+            "seed 20260709, sorted, then split 800/100/100 with NumPy legacy "
+            "permutation seed 8"
         ),
+        "subset_parent_hash": EXPECTED_RANDOM1000_PARENT_HASH,
         "partition_sizes": PARTITION_SIZES,
         "parent_hashes": EXPECTED_PARENT_HASHES,
         "parents": {
