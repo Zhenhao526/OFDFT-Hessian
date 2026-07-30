@@ -19,6 +19,37 @@ def phase_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {str(row["phase"]): row for row in rows}
 
 
+def load_document_chain(
+    root: Path,
+    *,
+    seen: set[Path] | None = None,
+) -> list[dict[str, Any]]:
+    root = root.resolve()
+    visited = set() if seen is None else seen
+    if root in visited:
+        raise ValueError("enthalpy extension parent chain contains a cycle")
+    visited.add(root)
+    manifest_path = root / "confirmation_manifest.json"
+    summary_path = root / "confirmation_summary.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    documents = []
+    parent = manifest.get("parent_confirmation")
+    if parent is not None:
+        documents.extend(
+            load_document_chain(Path(parent), seen=visited)
+        )
+    documents.append(
+        {
+            "root": root,
+            "manifest_path": manifest_path,
+            "summary_path": summary_path,
+            "manifest": manifest,
+            "summary": json.loads(summary_path.read_text(encoding="utf-8")),
+        }
+    )
+    return documents
+
+
 def build_point_from_roots(
     enthalpy_roots: list[Path],
     zero_pressure_path: Path,
@@ -28,22 +59,12 @@ def build_point_from_roots(
     enthalpy_roots = [root.resolve() for root in enthalpy_roots]
     zero_pressure_path = zero_pressure_path.resolve()
     documents = []
+    document_roots: set[Path] = set()
     for root in enthalpy_roots:
-        manifest_path = root / "confirmation_manifest.json"
-        summary_path = root / "confirmation_summary.json"
-        documents.append(
-            {
-                "root": root,
-                "manifest_path": manifest_path,
-                "summary_path": summary_path,
-                "manifest": json.loads(
-                    manifest_path.read_text(encoding="utf-8")
-                ),
-                "summary": json.loads(
-                    summary_path.read_text(encoding="utf-8")
-                ),
-            }
-        )
+        for document in load_document_chain(root):
+            if document["root"] not in document_roots:
+                documents.append(document)
+                document_roots.add(document["root"])
     zero_pressure = json.loads(zero_pressure_path.read_text(encoding="utf-8"))
 
     if zero_pressure.get("status") != "all_confirmations_passed":
@@ -85,38 +106,54 @@ def build_point_from_roots(
     ):
         raise ValueError("zero-pressure phase gates did not all pass")
 
-    selected: dict[str, dict[str, Any]] = {}
+    selected: dict[str, list[dict[str, Any]]] = {
+        "solid": [],
+        "liquid": [],
+    }
     for document in documents:
         manifest_phases = phase_map(document["manifest"]["phases"])
         summary_results = phase_map(document["summary"]["results"])
         for phase in set(manifest_phases) & set(summary_results):
             if summary_results[phase].get("status") != "passed":
                 continue
-            if phase in selected:
-                raise ValueError(f"duplicate passed {phase} enthalpy trajectory")
-            selected[phase] = {
-                "manifest_phase": manifest_phases[phase],
-                "summary_result": summary_results[phase],
-                "steps": int(document["manifest"]["steps"]),
-                "stress_available": bool(
-                    document["manifest"].get("stress_available", False)
-                ),
-                "manifest_path": document["manifest_path"],
-                "summary_path": document["summary_path"],
-            }
-    if set(selected) != {"solid", "liquid"}:
+            if selected[phase]:
+                parent = document["manifest"].get("parent_confirmation")
+                previous_root = selected[phase][-1]["root"]
+                if parent is None or Path(parent).resolve() != previous_root:
+                    raise ValueError(
+                        f"duplicate passed {phase} enthalpy trajectory"
+                    )
+            selected[phase].append(
+                {
+                    "root": document["root"],
+                    "manifest_phase": manifest_phases[phase],
+                    "summary_result": summary_results[phase],
+                    "steps": int(document["manifest"]["steps"]),
+                    "stress_available": bool(
+                        document["manifest"].get("stress_available", False)
+                    ),
+                    "manifest_path": document["manifest_path"],
+                    "summary_path": document["summary_path"],
+                }
+            )
+    if any(not selected[phase] for phase in ("solid", "liquid")):
         raise ValueError("verified solid and liquid enthalpy trajectories are required")
-    for phase in selected:
-        if not math.isclose(
-            float(selected[phase]["manifest_phase"]["volume_per_atom_A3"]),
-            float(zero_phases[phase]["volume_per_atom_A3"]),
-            rel_tol=1.0e-10,
-            abs_tol=1.0e-10,
-        ):
-            raise ValueError(f"{phase} enthalpy and zero-pressure volumes differ")
+    for phase in ("solid", "liquid"):
+        for segment in selected[phase]:
+            if not math.isclose(
+                float(segment["manifest_phase"]["volume_per_atom_A3"]),
+                float(zero_phases[phase]["volume_per_atom_A3"]),
+                rel_tol=1.0e-10,
+                abs_tol=1.0e-10,
+            ):
+                raise ValueError(
+                    f"{phase} enthalpy and zero-pressure volumes differ"
+                )
 
     stress_flags = {
-        bool(selected[phase]["stress_available"]) for phase in selected
+        bool(segment["stress_available"])
+        for phase in ("solid", "liquid")
+        for segment in selected[phase]
     }
     if len(stress_flags) != 1:
         raise ValueError("solid and liquid enthalpy pressure modes differ")
@@ -126,29 +163,35 @@ def build_point_from_roots(
     if method == "xwm" and trajectory_pressure_required:
         raise ValueError("XWM enthalpy trajectories unexpectedly claim stress")
 
-    solid_steps = int(selected["solid"]["steps"])
-    liquid_steps = int(selected["liquid"]["steps"])
-    phase_runs = {
-        phase: selected[phase]["manifest_phase"]["run"]
+    segment_steps = {
+        phase: [int(segment["steps"]) for segment in selected[phase]]
         for phase in ("solid", "liquid")
     }
+    phase_runs = {
+        phase: [
+            segment["manifest_phase"]["run"] for segment in selected[phase]
+        ]
+        for phase in ("solid", "liquid")
+    }
+    solid_steps = sum(segment_steps["solid"])
+    liquid_steps = sum(segment_steps["liquid"])
     return {
         "temperature_k": temperature,
         "target_pressure_kbar": 0.0,
         "steps": max(solid_steps, liquid_steps),
         "solid_steps": solid_steps,
         "liquid_steps": liquid_steps,
-        "solid_run": phase_runs["solid"],
-        "liquid_run": phase_runs["liquid"],
-        "solid_runs": [phase_runs["solid"]],
-        "liquid_runs": [phase_runs["liquid"]],
-        "solid_segment_steps": [solid_steps],
-        "liquid_segment_steps": [liquid_steps],
+        "solid_run": phase_runs["solid"][-1],
+        "liquid_run": phase_runs["liquid"][-1],
+        "solid_runs": phase_runs["solid"],
+        "liquid_runs": phase_runs["liquid"],
+        "solid_segment_steps": segment_steps["solid"],
+        "liquid_segment_steps": segment_steps["liquid"],
         "solid_volume_per_atom_A3": float(
-            selected["solid"]["manifest_phase"]["volume_per_atom_A3"]
+            selected["solid"][-1]["manifest_phase"]["volume_per_atom_A3"]
         ),
         "liquid_volume_per_atom_A3": float(
-            selected["liquid"]["manifest_phase"]["volume_per_atom_A3"]
+            selected["liquid"][-1]["manifest_phase"]["volume_per_atom_A3"]
         ),
         "trajectory_pressure_required": trajectory_pressure_required,
         "zero_pressure_verified": True,
@@ -163,13 +206,26 @@ def build_point_from_roots(
         "enthalpy_trajectory_provenance": {
             phase: {
                 "confirmation_manifest": {
-                    "path": str(selected[phase]["manifest_path"]),
-                    "sha256": sha256(selected[phase]["manifest_path"]),
+                    "path": str(selected[phase][-1]["manifest_path"]),
+                    "sha256": sha256(selected[phase][-1]["manifest_path"]),
                 },
                 "confirmation_summary": {
-                    "path": str(selected[phase]["summary_path"]),
-                    "sha256": sha256(selected[phase]["summary_path"]),
+                    "path": str(selected[phase][-1]["summary_path"]),
+                    "sha256": sha256(selected[phase][-1]["summary_path"]),
                 },
+                "segments": [
+                    {
+                        "confirmation_manifest": {
+                            "path": str(segment["manifest_path"]),
+                            "sha256": sha256(segment["manifest_path"]),
+                        },
+                        "confirmation_summary": {
+                            "path": str(segment["summary_path"]),
+                            "sha256": sha256(segment["summary_path"]),
+                        },
+                    }
+                    for segment in selected[phase]
+                ],
             }
             for phase in ("solid", "liquid")
         },

@@ -171,3 +171,82 @@ def test_combines_independently_passed_phase_roots(tmp_path: Path) -> None:
         "solid",
         "liquid",
     }
+
+
+def test_follows_verified_extension_parent_chain(tmp_path: Path) -> None:
+    parent = tmp_path / "parent"
+    extension = tmp_path / "extension"
+    pressure = tmp_path / "pressure.json"
+    write_pair(
+        parent,
+        pressure,
+        method="xwm",
+        stress_available=False,
+    )
+    write_pair(
+        extension,
+        tmp_path / "unused-pressure.json",
+        method="xwm",
+        stress_available=False,
+    )
+    manifest = json.loads(
+        (extension / "confirmation_manifest.json").read_text()
+    )
+    manifest["parent_confirmation"] = str(parent)
+    (extension / "confirmation_manifest.json").write_text(
+        json.dumps(manifest)
+    )
+
+    point = build_point_from_roots([extension], pressure)
+
+    assert point["solid_segment_steps"] == [3000, 3000]
+    assert point["liquid_segment_steps"] == [3000, 3000]
+    assert point["solid_steps"] == 6000
+    assert point["liquid_steps"] == 6000
+    assert point["solid_runs"] == [
+        str(parent / "solid"),
+        str(extension / "solid"),
+    ]
+    assert len(
+        point["enthalpy_trajectory_provenance"]["liquid"]["segments"]
+    ) == 2
+
+
+def test_rejects_independent_duplicate_passed_pairs(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    pressure = tmp_path / "pressure.json"
+    write_pair(first, pressure, method="xwm", stress_available=False)
+    write_pair(
+        second,
+        tmp_path / "unused-pressure.json",
+        method="xwm",
+        stress_available=False,
+    )
+
+    with pytest.raises(ValueError, match="duplicate passed (solid|liquid)"):
+        build_point_from_roots([first, second], pressure)
+
+
+def test_rejects_extension_parent_cycle(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    pressure = tmp_path / "pressure.json"
+    write_pair(first, pressure, method="xwm", stress_available=False)
+    write_pair(
+        second,
+        tmp_path / "unused-pressure.json",
+        method="xwm",
+        stress_available=False,
+    )
+    for root, parent in ((first, second), (second, first)):
+        manifest = json.loads(
+            (root / "confirmation_manifest.json").read_text()
+        )
+        manifest["parent_confirmation"] = str(parent)
+        (root / "confirmation_manifest.json").write_text(
+            json.dumps(manifest)
+        )
+
+    with pytest.raises(ValueError, match="cycle"):
+        build_point_from_roots([first], pressure)
