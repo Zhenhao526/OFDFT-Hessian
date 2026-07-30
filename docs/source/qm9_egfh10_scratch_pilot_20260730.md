@@ -279,3 +279,51 @@ learning rate, balance F/H gradient contributions, and add multiple independent
 internal displacement directions per parent. The same one-parent evaluation
 should be rerun until all 90 points pass the fixed `1e-8` gate before
 expanding to more molecules.
+
+## Article warm-start continuation to step 200
+
+The article-warm-start step-100 checkpoint was subsequently resumed as a full
+Lightning checkpoint, including optimizer, scheduler, epoch, and global-step
+state, and continued for another 100 optimizer steps. This is the same
+trajectory rather than another weight-only restart.
+
+- Source step-100 checkpoint SHA-256:
+  `26e244691456c42f2ed1000583da690a9b2b3eefdf1ddd22d9c94ea8b7dc8b85`.
+- Final step-200 checkpoint SHA-256:
+  `0b67be97d9793af912ba53aaef28b525669c3fab0e316da2bd7efdad0e1955fb`.
+- The log records `Restored all states` from the step-100 checkpoint and
+  terminates at `max_steps=200`.
+- The dataset, ten parents, 30 geometries, E/G/F/H definitions, scalar
+  weights, seed, and batching protocol were unchanged.
+- No validation, Test100, or full-Hessian evaluation was accessed.
+
+The table uses adjacent 50-step means. Total is the weighted training
+objective; E/G/F/H are the configured component values before their scalar
+weights.
+
+| Component | Steps 50-99 | Steps 100-149 | Steps 150-199 | Change in last two windows |
+|---|---:|---:|---:|---:|
+| Total weighted loss | 0.037027 | 0.026952 | 0.025265 | -6.26% |
+| E | 0.035390 | 0.026205 | 0.037760 | +44.09% |
+| G | 0.027398 | 0.020167 | 0.016676 | -17.31% |
+| F | 0.008424 | 0.006055 | 0.006264 | +3.46% |
+| H | 0.314562 | 0.214318 | 0.188423 | -12.08% |
+
+The total objective is still decreasing, but the rate has slowed: it fell
+27.21% from steps 50-99 to 100-149 and only another 6.26% from 100-149 to
+150-199. G and the force-secant H objective continue to improve, by 17.31%
+and 12.08% respectively in the last comparison. E and F do not show the same
+monotonic behavior: E rises 44.09% and F rises 3.46% in the last window.
+
+The weighted component-gradient norms recorded at steps 100-119 average
+4.07/0.752/3.30/0.750 for E/G/F/H respectively. Pairwise cosines remain small
+(absolute mean at most about 0.09), so there is no evidence of a single strong
+direct conflict. The current behavior is better described as a
+multi-objective plateau or trade-off: the aggregate objective still improves
+through G/H while E and F fluctuate or partially regress.
+
+This justifies retaining step 200 as a useful checkpoint, but not extending
+the same ten-molecule training indefinitely on training loss alone. The next
+decision should use a fixed held-out force/secant set and should test lower
+learning rate or explicit gradient balancing before another long
+continuation.
