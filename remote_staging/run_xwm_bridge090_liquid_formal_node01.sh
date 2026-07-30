@@ -90,6 +90,8 @@ env PYTHONPATH=. "$python" scripts/prepare_kedf_ti_formal_from_merged.py \
   --out "$formal" \
   --steps "$steps" \
   --csvr-tau 5 \
+  --tau-override liquid:lambda_0p250=1 \
+  --tau-override liquid:lambda_0p875=0.2 \
   --ranks 12 \
   --seed 2026073200 \
   --config config/abacus_xwm_ti_cpu12.json
@@ -102,7 +104,9 @@ env PYTHONPATH=. "$python" scripts/verify_kedf_ti_formal_preflight.py \
   --source-step 295 \
   --source-step-override liquid:lambda_0p875=595 \
   --minimum-nn 2.0 \
-  --csvr-tau 5
+  --csvr-tau 5 \
+  --tau-override liquid:lambda_0p250=1 \
+  --tau-override liquid:lambda_0p875=0.2
 
 bash remote_staging/run_kedf_ti_selected_extensions_node_local.sh \
   "$formal" "$repository" "$bridge_dat" "$formal/liquid"
