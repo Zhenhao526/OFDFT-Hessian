@@ -7,19 +7,19 @@ run_root=${RUN_ROOT:-$workspace/runs/xwm_lkt_20260727}
 root=$run_root/xwm/free_energy_T0900
 old_merged=$root/ti_pilot_merged_phase_specific_proxy14_v1/merged_pilot_analysis.json
 parent=$root/ti_pilot_phase_specific_bridge090_lambda9_steps300_v1/liquid
-batch=$root/ti_pilot_tempfix_phase_specific_bridge090_tau1_v1
+batch=$root/ti_pilot_tempfix_phase_specific_bridge090_tau1_v2
 fix_root=$batch/liquid_fix
 bridge_json=$root/liquid_variance_bridge_alpha_scan_v1/alpha_0p900/model.json
 bridge_dat=$root/liquid_variance_bridge_alpha090_v1.dat
-merged=$root/ti_pilot_merged_phase_specific_bridge090_verified_v2_tau1
-design=$root/ti_formal_design_phase_specific_bridge090_v2_tau1.json
+merged=$root/ti_pilot_merged_phase_specific_bridge090_verified_v3_tau1
+design=$root/ti_formal_design_phase_specific_bridge090_v3_tau1.json
 runner=$repository/remote_staging/run_kedf_ti_selected_extensions_node_local.sh
 python=${PYTHON:-$workspace/.venv-reference/bin/python}
 bridge_sha=b207a394c9ba0ee652596156425f7ed4b93b4e75d3f4b8dcdcbd6871627cd89a
 labels=(lambda_0p250 lambda_0p875)
-log=$root/xwm_bridge090_pilot_tempfix_tau1.log
-done_file=$root/xwm_bridge090_pilot_tempfix_tau1.done
-failed_file=$root/xwm_bridge090_pilot_tempfix_tau1.failed
+log=$root/xwm_bridge090_pilot_tempfix_tau1_v2.log
+done_file=$root/xwm_bridge090_pilot_tempfix_tau1_v2.done
+failed_file=$root/xwm_bridge090_pilot_tempfix_tau1_v2.failed
 
 exec > >(tee -a "$log") 2>&1
 
@@ -104,7 +104,9 @@ for label in expected:
     assert metadata["csvr_tau"] == 1.0
     assert metadata["target_kedf"] == "xwm"
     assert metadata["phase"] == "liquid"
-    assert metadata["pair_model_sha256"] == bridge_sha
+    pair_model = Path(metadata["pair_model"]).resolve()
+    assert pair_model == bridge
+    assert hashlib.sha256(pair_model.read_bytes()).hexdigest() == bridge_sha
     assert not list(run.glob("OUT.*"))
 PY
 
@@ -187,5 +189,5 @@ find "$parent" "$batch" "$merged" -type f \
      -o -name manifest.json -o -name phase_analysis.json \
      -o -name ti_analysis.json -o -name merged_pilot_analysis.json \) \
   -print0 | sort -z | xargs -0 sha256sum \
-  >"$root/xwm_bridge090_pilot_tempfix_tau1_SHA256SUMS"
+  >"$root/xwm_bridge090_pilot_tempfix_tau1_v2_SHA256SUMS"
 touch "$done_file"
