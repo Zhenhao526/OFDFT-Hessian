@@ -2,7 +2,11 @@ import json
 import os
 from pathlib import Path
 
-from scripts.verify_kedf_ti_formal_preflight import sha256, verify
+from scripts.verify_kedf_ti_formal_preflight import (
+    parse_source_step_overrides,
+    sha256,
+    verify,
+)
 
 
 def write(path: Path, text: str) -> None:
@@ -164,3 +168,47 @@ def test_verifies_phase_specific_pair_models(tmp_path):
         window["checks"]["pair_sha_matches"]
         for window in result["windows"]
     )
+
+
+def test_verifies_per_window_source_step_override(tmp_path):
+    root = make_grid(tmp_path)
+    label = "lambda_08"
+    manifest_path = root / "formal_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    source = next(
+        row
+        for row in manifest["sources"]
+        if row["phase"] == "liquid" and row["label"] == label
+    )
+    source["source_step"] = 595
+    manifest_path.write_text(json.dumps(manifest))
+    metadata_path = root / "liquid" / label / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["source_step"] = 595
+    metadata_path.write_text(json.dumps(metadata))
+
+    result = verify(
+        root,
+        target_kedf="lkt",
+        steps=3000,
+        ranks=12,
+        source_step=295,
+        minimum_nn=2.0,
+        default_tau=5.0,
+        tau_overrides={("solid", "lambda_02"): 2.0},
+        source_step_overrides={("liquid", label): 595},
+    )
+
+    assert result["status"] == "verified"
+    target = next(
+        row
+        for row in result["windows"]
+        if row["phase"] == "liquid" and row["label"] == label
+    )
+    assert target["checks"]["source_step_matches"] is True
+
+
+def test_parses_source_step_overrides():
+    assert parse_source_step_overrides(
+        ["liquid:lambda_0p875=595"]
+    ) == {("liquid", "lambda_0p875"): 595}

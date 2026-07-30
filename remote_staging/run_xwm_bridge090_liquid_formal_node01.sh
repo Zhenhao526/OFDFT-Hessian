@@ -100,6 +100,7 @@ env PYTHONPATH=. "$python" scripts/verify_kedf_ti_formal_preflight.py \
   --steps "$steps" \
   --ranks 12 \
   --source-step 295 \
+  --source-step-override liquid:lambda_0p875=595 \
   --minimum-nn 2.0 \
   --csvr-tau 5
 

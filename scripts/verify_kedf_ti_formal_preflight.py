@@ -33,6 +33,25 @@ def parse_input(path: Path) -> dict[str, str]:
     return values
 
 
+def parse_source_step_overrides(
+    values: list[str],
+) -> dict[tuple[str, str], int]:
+    overrides: dict[tuple[str, str], int] = {}
+    for value in values:
+        key, separator, step_text = value.partition("=")
+        phase, label_separator, label = key.partition(":")
+        if not separator or not label_separator or phase not in {"solid", "liquid"}:
+            raise ValueError(
+                "--source-step-override must use "
+                "solid:lambda_LABEL=STEP or liquid:lambda_LABEL=STEP"
+            )
+        step = int(step_text)
+        if step < 0:
+            raise ValueError("source step override must be non-negative")
+        overrides[(phase, label)] = step
+    return overrides
+
+
 def pair_models_by_phase(manifest: dict[str, Any]) -> dict[str, dict[str, str]]:
     records = manifest.get("pair_models_by_phase")
     if records is not None:
@@ -60,6 +79,7 @@ def verify(
     minimum_nn: float,
     default_tau: float,
     tau_overrides: dict[tuple[str, str], float],
+    source_step_overrides: dict[tuple[str, str], int] | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
     manifest_path = root / "formal_manifest.json"
@@ -70,6 +90,7 @@ def verify(
         (record["phase"], record["label"]): record
         for record in manifest["sources"]
     }
+    source_step_overrides = source_step_overrides or {}
 
     top_checks = {
         "manifest_prepared": manifest.get("status") == "prepared",
@@ -106,12 +127,15 @@ def verify(
             source = sources[(phase, label)]
             source_structure = Path(source["source_structure"])
             expected_tau = tau_overrides.get((phase, label), default_tau)
+            expected_source_step = source_step_overrides.get(
+                (phase, label), source_step
+            )
             old_outputs = list(point.glob("OUT.*"))
             run_text = run_path.read_text()
             checks = {
                 "source_step_matches": (
-                    source.get("source_step") == source_step
-                    and metadata.get("source_step") == source_step
+                    source.get("source_step") == expected_source_step
+                    and metadata.get("source_step") == expected_source_step
                 ),
                 "velocities_preserved": (
                     metadata.get("source_velocities_discarded") is False
@@ -209,6 +233,7 @@ def main() -> None:
     parser.add_argument("--minimum-nn", type=float, default=2.0)
     parser.add_argument("--csvr-tau", type=float, default=5.0)
     parser.add_argument("--tau-override", action="append", default=[])
+    parser.add_argument("--source-step-override", action="append", default=[])
     args = parser.parse_args()
     result = verify(
         args.root,
@@ -219,6 +244,9 @@ def main() -> None:
         minimum_nn=args.minimum_nn,
         default_tau=args.csvr_tau,
         tau_overrides=parse_tau_overrides(args.tau_override),
+        source_step_overrides=parse_source_step_overrides(
+            args.source_step_override
+        ),
     )
     print(json.dumps(result, indent=2))
     if result["status"] != "verified":
