@@ -12,11 +12,15 @@ python=${PYTHON:-$workspace/.venv-reference-cuda/bin/python}
 steps=${STEPS:-6000}
 temperature=900
 gamma_per_fs=0.2
-lambdas=(0.0625 0.1875 0.8125)
-cpus=(36 37 74)
-gpus=(0 1 2)
+lambdas=(0.0625 0.1875 0.8125 0.9375)
+cpus=(36 37 74 75)
+gpus=(0 1 2 3)
 done_file=$root/overlap_refinement.done
-failed_file=$root/overlap_refinement.failed
+first_failed_file=$root/overlap_refinement.failed
+failed_file=$first_failed_file
+if [[ -e $failed_file ]]; then
+  failed_file=$root/overlap_refinement_round2.failed
+fi
 
 [[ -x $torch_runner ]]
 [[ -x $python ]]
@@ -26,7 +30,6 @@ failed_file=$root/overlap_refinement.failed
 [[ -f $target ]]
 [[ -f $restart ]]
 [[ ! -e $done_file ]]
-[[ ! -e $failed_file ]]
 
 cd "$repository"
 env PYTHONPATH=. "$python" - \
@@ -53,11 +56,6 @@ assert summary["target_model"]["sha256"] == hashlib.sha256(
 ).hexdigest()
 PY
 
-for coupling in "${lambdas[@]}"; do
-  label=$(printf 'lambda_%0.6f' "$coupling" | tr '.' 'p')
-  [[ ! -e $root/$label ]]
-done
-
 exec > >(tee -a "$root/overlap_refinement.log") 2>&1
 
 mark_failed() {
@@ -74,6 +72,15 @@ labels=()
 for index in "${!lambdas[@]}"; do
   coupling=${lambdas[$index]}
   label=$(printf 'lambda_%0.6f' "$coupling" | tr '.' 'p')
+  if [[ -e $root/$label ]]; then
+    [[ -f $first_failed_file ]]
+    [[ -f $root/$label/summary.json ]]
+    [[ -f $root/$label/phase_analysis.json ]]
+    grep -q '"status": "liquid_verified"' \
+      "$root/$label/phase_analysis.json"
+    printf '%s retained completed label=%s\n' "$(date -Iseconds)" "$label"
+    continue
+  fi
   labels+=("$label")
   (
     taskset -c "${cpus[$index]}" \
@@ -163,11 +170,11 @@ phase_reports = [
     for path in sorted(root.glob("lambda_*/phase_analysis.json"))
 ]
 checks = {
-    "twelve_windows_complete": (
-        len(list(root.glob("lambda_*/summary.json"))) == 12
+    "thirteen_windows_complete": (
+        len(list(root.glob("lambda_*/summary.json"))) == 13
     ),
     "all_liquid_verified": (
-        len(phase_reports) == 12
+        len(phase_reports) == 13
         and all(item.get("status") == "liquid_verified" for item in phase_reports)
     ),
     "three_discard_reports_verified": all(
@@ -183,7 +190,7 @@ payload = {
     "phase": "liquid",
     "base_steps_per_window": 6000,
     "refinement_steps_per_window": steps,
-    "added_lambdas": [0.0625, 0.1875, 0.8125],
+    "added_lambdas": [0.0625, 0.1875, 0.8125, 0.9375],
     "reference_model": {
         "path": str(reference.resolve()),
         "sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
