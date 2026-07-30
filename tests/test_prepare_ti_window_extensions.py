@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.prepare_ti_window_extensions import resolve_phase_roots
+from scripts.prepare_ti_window_extensions import resolve_pair_model, resolve_phase_roots
 
 
 class ResolvePhaseRootsTests(unittest.TestCase):
@@ -34,6 +34,46 @@ class ResolvePhaseRootsTests(unittest.TestCase):
                 ["liquid"],
                 ["liquid=/tmp/a", "liquid=/tmp/b"],
             )
+
+
+class ResolvePairModelTests(unittest.TestCase):
+    def test_accepts_verified_lambda_one_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "parent.json"
+            override = root / "bridge.json"
+            override.write_text(
+                """{
+  "target_kedf": "lkt",
+  "phase": "liquid",
+  "reference_gate_passed": true,
+  "short_range_guard_passed": true
+}
+"""
+            )
+            selected, changed = resolve_pair_model(
+                parent,
+                override,
+                target_kedf="lkt",
+                phase="liquid",
+                selected_windows=[{"lambda": 1.0}],
+            )
+
+        self.assertEqual(selected, override.resolve())
+        self.assertTrue(changed)
+
+    def test_rejects_override_away_from_lambda_one(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            override = Path(directory) / "bridge.json"
+            override.write_text("{}\n")
+            with self.assertRaisesRegex(ValueError, "lambda=1"):
+                resolve_pair_model(
+                    Path(directory) / "parent.json",
+                    override,
+                    target_kedf="lkt",
+                    phase="liquid",
+                    selected_windows=[{"lambda": 0.875}],
+                )
 
 
 if __name__ == "__main__":

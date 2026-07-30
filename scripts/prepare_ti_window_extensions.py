@@ -15,6 +15,32 @@ from scripts.prepare_al108_ti_windows import SUPPORTED_KEDFS
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def resolve_pair_model(
+    parent_pair_model: Path,
+    override: Path | None,
+    *,
+    target_kedf: str,
+    phase: str,
+    selected_windows: list[dict],
+) -> tuple[Path, bool]:
+    if override is None:
+        return parent_pair_model.resolve(), False
+    if any(abs(float(window["lambda"]) - 1.0) > 1.0e-12 for window in selected_windows):
+        raise ValueError("pair-model override is only valid for lambda=1 windows")
+    resolved = override.resolve()
+    document = load_json(resolved)
+    model_phase = document.get("phase", document.get("reference_phase"))
+    if str(document.get("target_kedf", "")).lower() != target_kedf:
+        raise ValueError("pair-model override has the wrong target KEDF")
+    if model_phase != phase:
+        raise ValueError("pair-model override has the wrong phase provenance")
+    if document.get("reference_gate_passed") is not True:
+        raise ValueError("pair-model override did not pass its reference gate")
+    if document.get("short_range_guard_passed") is not True:
+        raise ValueError("pair-model override did not pass its short-range guard")
+    return resolved, True
+
+
 def resolve_phase_roots(
     parent: Path | None,
     phases: list[str],
@@ -64,6 +90,14 @@ def main() -> None:
         help="lambda labels to continue; omit to continue every window",
     )
     parser.add_argument(
+        "--pair-model-override",
+        type=Path,
+        help=(
+            "replace the parent pair model for selected lambda=1 windows only; "
+            "the replacement must have matching KEDF and phase provenance"
+        ),
+    )
+    parser.add_argument(
         "--config",
         type=Path,
         default=ROOT / "config" / "abacus_wt_ti_node04_cpu12.json",
@@ -107,7 +141,6 @@ def main() -> None:
                 f"config target {target_kedf!r}"
             )
         temperature = float(parent_manifest["target_temperature_K"])
-        pair_model = Path(parent_manifest["pair_model"]).resolve()
         windows = []
 
         available_labels = {str(window["label"]) for window in parent_manifest["windows"]}
@@ -122,6 +155,13 @@ def main() -> None:
             for window in parent_manifest["windows"]
             if str(window["label"]) in selected_labels
         ]
+        pair_model, pair_model_overridden = resolve_pair_model(
+            Path(parent_manifest["pair_model"]),
+            args.pair_model_override,
+            target_kedf=target_kedf,
+            phase=phase,
+            selected_windows=selected_windows,
+        )
         for window_index, window in enumerate(selected_windows):
             source_dir = parent_phase / window["label"]
             source = load_atom_source(
@@ -163,6 +203,7 @@ def main() -> None:
                     "source_step": source["step"],
                     "source_velocities_discarded": False,
                     "pair_model": str(pair_model),
+                    "pair_model_override_at_lambda_one": pair_model_overridden,
                     "steps": args.steps,
                     "csvr_tau": args.csvr_tau,
                     "mpi_ranks": args.ranks,
@@ -193,6 +234,7 @@ def main() -> None:
             "mpi_ranks": args.ranks,
             "parent": str(parent_phase),
             "pair_model": str(pair_model),
+            "pair_model_override_at_lambda_one": pair_model_overridden,
             "thermalized_initial": True,
             "windows": windows,
         }
