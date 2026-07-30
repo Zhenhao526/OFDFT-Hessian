@@ -140,3 +140,34 @@ def test_rejects_cross_method_input(tmp_path: Path):
             target_kedf="lkt",
             phase="liquid",
         )
+
+
+def test_accepts_independent_xwm_models(tmp_path: Path):
+    base = tmp_path / "xwm-base.json"
+    correction = tmp_path / "xwm-correction.json"
+    output = tmp_path / "xwm-bridge.json"
+    write_model(
+        base,
+        [1.0, 2.0, 3.0],
+        target_kedf="xwm",
+    )
+    write_model(
+        correction,
+        [3.0, 4.0, 5.0],
+        target_kedf="xwm",
+    )
+
+    result = blend_models(
+        base,
+        correction,
+        output,
+        alpha=0.25,
+        target_kedf="xwm",
+        phase="liquid",
+        core_cutoff=2.035,
+    )
+
+    assert result["target_kedf"] == "xwm"
+    assert result["phase"] == "liquid"
+    assert result["model"]["coefficients_ev"] == [1.5, 2.5, 3.5]
+    assert result["core_override"]["cutoff_angstrom"] == 2.035
