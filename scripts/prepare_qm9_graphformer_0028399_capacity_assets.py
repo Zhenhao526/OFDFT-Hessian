@@ -25,6 +25,7 @@ SAMPLE_ID = 0
 PROTOCOL_IDS = {
     "qm9_graphformer_0028399_full39_capacity_only_v1",
     "qm9_graphformer_0028399_full39_capacity_only_v2",
+    "qm9_graphformer_0028399_full_network_capacity_smoke_v3",
 }
 
 
