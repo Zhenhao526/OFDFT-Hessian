@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.prepare_ti_window_extensions import resolve_pair_model, resolve_phase_roots
+from scripts.prepare_ti_window_extensions import (
+    parse_source_run_overrides,
+    resolve_pair_model,
+    resolve_phase_roots,
+    validate_source_run_override,
+)
 
 
 class ResolvePhaseRootsTests(unittest.TestCase):
@@ -74,6 +79,47 @@ class ResolvePairModelTests(unittest.TestCase):
                     phase="liquid",
                     selected_windows=[{"lambda": 0.875}],
                 )
+
+
+class SourceRunOverrideTests(unittest.TestCase):
+    def test_accepts_verified_same_volume_lambda_one_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "liquid"
+            run.mkdir()
+            (run / "metadata.json").write_text(
+                """{
+  "target_kedf": "lkt",
+  "phase": "liquid",
+  "volume_per_atom_A3": 18.735
+}
+"""
+            )
+            (run / "phase_analysis.json").write_text(
+                '{"status": "liquid_verified"}\n'
+            )
+            selected = validate_source_run_override(
+                run,
+                target_kedf="lkt",
+                phase="liquid",
+                volume_per_atom_A3=18.735,
+                selected_windows=[{"lambda": 1.0}],
+            )
+
+        self.assertEqual(selected, run.resolve())
+
+    def test_rejects_source_override_away_from_lambda_one(self) -> None:
+        with self.assertRaisesRegex(ValueError, "lambda=1"):
+            validate_source_run_override(
+                Path("/tmp/not-read"),
+                target_kedf="lkt",
+                phase="liquid",
+                volume_per_atom_A3=18.735,
+                selected_windows=[{"lambda": 0.875}],
+            )
+
+    def test_parses_phase_specific_source_override(self) -> None:
+        roots = parse_source_run_overrides(["liquid=/tmp/liquid"])
+        self.assertEqual(roots, {"liquid": Path("/tmp/liquid").resolve()})
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from mpn_melting.abacus_input import load_json, write_job
@@ -64,6 +65,50 @@ def resolve_phase_roots(
     return {phase: resolved_parent / phase for phase in phases}
 
 
+def parse_source_run_overrides(specs: list[str] | None) -> dict[str, Path]:
+    overrides: dict[str, Path] = {}
+    for spec in specs or []:
+        phase, separator, path = spec.partition("=")
+        if not separator or phase not in {"solid", "liquid"} or not path:
+            raise ValueError(
+                "--source-run-override must use solid=PATH or liquid=PATH"
+            )
+        if phase in overrides:
+            raise ValueError(f"duplicate --source-run-override for {phase}")
+        overrides[phase] = Path(path).resolve()
+    return overrides
+
+
+def validate_source_run_override(
+    override: Path,
+    *,
+    target_kedf: str,
+    phase: str,
+    volume_per_atom_A3: float,
+    selected_windows: list[dict],
+) -> Path:
+    if any(abs(float(window["lambda"]) - 1.0) > 1.0e-12 for window in selected_windows):
+        raise ValueError("source-run override is only valid for lambda=1 windows")
+    resolved = override.resolve()
+    metadata = load_json(resolved / "metadata.json")
+    phase_analysis = load_json(resolved / "phase_analysis.json")
+    if str(metadata.get("target_kedf", "")).lower() != target_kedf:
+        raise ValueError("source-run override has the wrong target KEDF")
+    if metadata.get("phase") != phase:
+        raise ValueError("source-run override has the wrong phase provenance")
+    if phase_analysis.get("status") != f"{phase}_verified":
+        raise ValueError("source-run override did not pass its phase gate")
+    source_volume = float(metadata["volume_per_atom_A3"])
+    if not math.isclose(
+        source_volume,
+        volume_per_atom_A3,
+        rel_tol=0.0,
+        abs_tol=1.0e-8,
+    ):
+        raise ValueError("source-run override has a different volume")
+    return resolved
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--parent", type=Path)
@@ -98,6 +143,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--source-run-override",
+        action="append",
+        dest="source_run_overrides",
+        help=(
+            "use a verified same-KEDF, same-phase, same-volume source for "
+            "selected lambda=1 windows as solid=PATH or liquid=PATH"
+        ),
+    )
+    parser.add_argument(
         "--config",
         type=Path,
         default=ROOT / "config" / "abacus_wt_ti_node04_cpu12.json",
@@ -108,6 +162,13 @@ def main() -> None:
     if out.exists():
         raise FileExistsError(f"refusing to overwrite {out}")
     phase_roots = resolve_phase_roots(args.parent, list(args.phases), args.phase_roots)
+    source_run_overrides = parse_source_run_overrides(args.source_run_overrides)
+    unknown_override_phases = sorted(set(source_run_overrides) - set(phase_roots))
+    if unknown_override_phases:
+        raise ValueError(
+            "source-run override has no matching phase root: "
+            + ", ".join(unknown_override_phases)
+        )
 
     config = load_json(args.config)
     target_kedf = str(config.get("of_kinetic", "")).lower()
@@ -162,8 +223,17 @@ def main() -> None:
             phase=phase,
             selected_windows=selected_windows,
         )
+        source_run_override = None
+        if phase in source_run_overrides:
+            source_run_override = validate_source_run_override(
+                source_run_overrides[phase],
+                target_kedf=target_kedf,
+                phase=phase,
+                volume_per_atom_A3=float(parent_manifest["volume_per_atom_A3"]),
+                selected_windows=selected_windows,
+            )
         for window_index, window in enumerate(selected_windows):
-            source_dir = parent_phase / window["label"]
+            source_dir = source_run_override or parent_phase / window["label"]
             source = load_atom_source(
                 source_dir.as_posix(), "last", "Al", include_velocities=True
             )
@@ -204,6 +274,9 @@ def main() -> None:
                     "source_velocities_discarded": False,
                     "pair_model": str(pair_model),
                     "pair_model_override_at_lambda_one": pair_model_overridden,
+                    "source_run_override_at_lambda_one": (
+                        source_run_override is not None
+                    ),
                     "steps": args.steps,
                     "csvr_tau": args.csvr_tau,
                     "mpi_ranks": args.ranks,
@@ -235,6 +308,10 @@ def main() -> None:
             "parent": str(parent_phase),
             "pair_model": str(pair_model),
             "pair_model_override_at_lambda_one": pair_model_overridden,
+            "source_run_override_at_lambda_one": source_run_override is not None,
+            "source_run_override": (
+                str(source_run_override) if source_run_override is not None else None
+            ),
             "thermalized_initial": True,
             "windows": windows,
         }
