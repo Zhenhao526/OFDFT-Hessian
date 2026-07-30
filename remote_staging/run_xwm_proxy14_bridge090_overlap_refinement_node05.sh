@@ -12,9 +12,10 @@ python=${PYTHON:-$workspace/.venv-reference-cuda/bin/python}
 steps=${STEPS:-6000}
 temperature=900
 gamma_per_fs=0.2
-lambdas=(0.0625 0.1875 0.4375 0.8125)
-cpus=(36 37 74 75)
-gpus=(0 1 2 3)
+lambdas=(0.0625 0.1875 0.3125 0.4375 0.5625 0.6875 0.8125 0.9375)
+cpus=(36 37 74 75 76 77 78 79)
+gpus=(0 1 2 3 4 5 6 7)
+endpoint_steps=${ENDPOINT_STEPS:-12000}
 done_file=$root/overlap_refinement.done
 first_failed_file=$root/overlap_refinement.failed
 failed_file=$first_failed_file
@@ -81,6 +82,10 @@ for index in "${!lambdas[@]}"; do
     printf '%s retained completed label=%s\n' "$(date -Iseconds)" "$label"
     continue
   fi
+  window_steps=$steps
+  if [[ $label == lambda_0p937500 ]]; then
+    window_steps=$endpoint_steps
+  fi
   labels+=("$label")
   (
     taskset -c "${cpus[$index]}" \
@@ -94,7 +99,7 @@ for index in "${!lambdas[@]}"; do
       --temperature "$temperature" \
       --target-kedf xwm \
       --phase liquid \
-      --steps "$steps" \
+      --steps "$window_steps" \
       --gamma-per-fs "$gamma_per_fs" \
       --sample-every 10 \
       --seed "$((202609100 + index))" \
@@ -147,7 +152,7 @@ for suffix in d25 d50 d75; do
   reports+=("$report")
 done
 
-"$python" - "$root" "$steps" "$reference" "$target" \
+"$python" - "$root" "$steps" "$endpoint_steps" "$reference" "$target" \
   "${reports[@]}" <<'PY'
 import hashlib
 import json
@@ -157,9 +162,10 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 steps = int(sys.argv[2])
-reference = Path(sys.argv[3])
-target = Path(sys.argv[4])
-reports = [json.loads(Path(path).read_text()) for path in sys.argv[5:]]
+endpoint_steps = int(sys.argv[3])
+reference = Path(sys.argv[4])
+target = Path(sys.argv[5])
+reports = [json.loads(Path(path).read_text()) for path in sys.argv[6:]]
 integrals = [
     float(item["delta_f_pair_minus_reference_simpson_mev_per_atom"])
     for item in reports
@@ -170,11 +176,11 @@ phase_reports = [
     for path in sorted(root.glob("lambda_*/phase_analysis.json"))
 ]
 checks = {
-    "thirteen_windows_complete": (
-        len(list(root.glob("lambda_*/summary.json"))) == 13
+    "seventeen_windows_complete": (
+        len(list(root.glob("lambda_*/summary.json"))) == 17
     ),
     "all_liquid_verified": (
-        len(phase_reports) == 13
+        len(phase_reports) == 17
         and all(item.get("status") == "liquid_verified" for item in phase_reports)
     ),
     "three_discard_reports_verified": all(
@@ -190,7 +196,26 @@ payload = {
     "phase": "liquid",
     "base_steps_per_window": 6000,
     "refinement_steps_per_window": steps,
-    "added_lambdas": [0.0625, 0.1875, 0.4375, 0.8125],
+    "refinement_steps_by_lambda": {
+        "0.0625": steps,
+        "0.1875": steps,
+        "0.3125": steps,
+        "0.4375": steps,
+        "0.5625": steps,
+        "0.6875": steps,
+        "0.8125": steps,
+        "0.9375": endpoint_steps,
+    },
+    "added_lambdas": [
+        0.0625,
+        0.1875,
+        0.3125,
+        0.4375,
+        0.5625,
+        0.6875,
+        0.8125,
+        0.9375,
+    ],
     "reference_model": {
         "path": str(reference.resolve()),
         "sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
