@@ -394,3 +394,63 @@ does not establish held-out force/secant generalization, full-Hessian
 accuracy, or vibrational-frequency accuracy. The converged step-1300
 checkpoint should now be frozen and evaluated on a fixed held-out set before
 any further optimization.
+
+## Final step-1300 full-Hessian evaluation
+
+The frozen step-1300 checkpoint was evaluated on training molecule `0016298`
+with the same strict, density-relaxed total-OFDFT protocol previously used for
+the article-warm-start step-100 checkpoint:
+
+- full `45 x 45` Cartesian Hessian;
+- centered force differences at `1e-4` Bohr, requiring 90 independently
+  density-optimized displaced geometries;
+- label-reference initialization, Adam fallback up to 10,000 cycles, followed
+  by L-BFGS and Newton refinement;
+- PBE Hessian reference and the same mass-weighted vibrational analysis.
+
+The final checkpoint SHA-256 was
+`7c40f4dfb442f606a278b796e973d2669108b3a306a6b1e065143ee9e3e71545`.
+No Test100 example was accessed.
+
+### Hessian and vibration results
+
+| Metric | Article warm start, step 100 | Final checkpoint, step 1300 | Relative change |
+|---|---:|---:|---:|
+| Hessian relative Frobenius error | 1.255335 | **1.155365** | -7.96% |
+| Element MAE (Ha/Bohr²) | 0.045389 | **0.040515** | -10.74% |
+| Element RMSE (Ha/Bohr²) | 0.106572 | **0.098085** | -7.96% |
+| Element maximum absolute error (Ha/Bohr²) | **1.068408** | 1.121268 | +4.95% |
+| Frequency MAE (cm⁻¹) | 1616.39 | **1563.10** | -3.30% |
+| Frequency RMSE (cm⁻¹) | 1885.34 | **1820.53** | -3.44% |
+| Frequency maximum absolute error (cm⁻¹) | 3216.99 | **3171.31** | -1.42% |
+| Mean matched-mode overlap | **0.59090** | 0.56738 | -3.98% |
+| Model/PBE imaginary modes | 25 / 2 | 27 / 2 | — |
+
+For the final checkpoint, the raw Hessian antisymmetric-to-symmetric
+Frobenius ratio is `3.19e-5`, and the maximum symmetry error is
+`6.30e-5 Ha/Bohr²`. Thus, the centered force-difference construction itself
+is nearly symmetric.
+
+### Density-convergence and cost warning
+
+Only 44 of 90 displaced points met the strict final gradient threshold
+`1e-8`; the largest residual gradient norm was `2.14e-7`. The mean displaced
+optimization length was 2,992.5 cycles and the Hessian calculation required
+12,313 s (3 h 25 min). By comparison, the step-100 run reached 77/90 strict
+points and required 3,223 s.
+
+The step-1300 continuation therefore gives a modest reduction in Hessian
+matrix error, but it does not solve the Hessian or vibrational problem:
+relative Frobenius error remains greater than one, the frequency MAE remains
+above 1,500 cm⁻¹, and the predicted spectrum contains 27 imaginary modes.
+Moreover, density minimization is about 3.8 times slower and substantially
+less often reaches the strict threshold. The weaker convergence means that
+the exact numerical changes should be treated cautiously, even though the
+small antisymmetric component indicates that the assembled finite-difference
+matrix is internally stable.
+
+This single training-molecule result is evidence against continuing the same
+ten-molecule objective merely to reduce its training loss. Before any larger
+Hessian benchmark, the next experiment should first diagnose why the
+step-1300 functional produces a harder density-optimization landscape, then
+test a held-out force/secant set and a Hessian-relevant validation criterion.
