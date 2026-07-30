@@ -29,7 +29,7 @@ printf '%s  %s\n' "$reference_sha" "$reference" | sha256sum -c -
 printf '%s  %s\n' "$target_sha" "$target" | sha256sum -c -
 
 cd "$repository"
-env PYTHONPATH=. "$python" - "$reference" "$target" "$restart" <<'PY'
+env PYTHONPATH=. "$torch_runner" - "$reference" "$target" "$restart" <<'PY'
 import json
 import sys
 from pathlib import Path
