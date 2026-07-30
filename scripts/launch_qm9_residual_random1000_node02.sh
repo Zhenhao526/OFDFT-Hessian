@@ -250,8 +250,8 @@ train_models() {
         "name=${experiment}_smoke" \
         "hydra.run.dir=${smoke_dir}" \
         "trainer.max_epochs=1" \
-        "trainer.max_steps=2" \
-        "trainer.limit_val_batches=2" \
+        "+trainer.max_steps=2" \
+        "+trainer.limit_val_batches=2" \
         "data.datamodule.num_workers=0" \
         "callbacks.model_checkpoint.save_top_k=0" \
         "extras.enforce_tags=false" \
