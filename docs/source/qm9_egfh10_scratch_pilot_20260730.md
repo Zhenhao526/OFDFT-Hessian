@@ -101,3 +101,78 @@ Before increasing molecule count or optimizer steps:
 3. repeat this same 10-parent, 20-step protocol as an A/B comparison;
 4. then add a fixed held-out paired set and multiple independent displacement
    directions per molecule before making any Hessian/frequency claim.
+
+## Step-100 continuation
+
+The same scratch trajectory was resumed from the complete step-20 Lightning
+checkpoint, including optimizer state, and continued to global step 100. The
+step-20 checkpoint was retained unchanged for comparison.
+
+- Source step-20 checkpoint SHA-256:
+  `ab7070d1739f57684a4955ebab9dcce903073b039721fdb391774b8989f71c1e`.
+- Final step-100 checkpoint SHA-256:
+  `a275c5068ce0447917572872c181f7d5db697e88cc6ab2d505a7b921f6cc4824`.
+- Additional optimizer steps: 80.
+- Same 10 parents, 30 geometries, loss definitions, weights, seed, and paired
+  batching.
+- No validation or Test100 access.
+
+The table compares steps 20-59 with steps 60-99. Values are the configured
+unreduced loss components before applying their scalar weights.
+
+| Component | Steps 20-59 | Steps 60-99 | Relative change |
+|---|---:|---:|---:|
+| Total weighted loss | 0.213970 | 0.148118 | -30.8% |
+| E | 1.636408 | 0.984100 | -39.9% |
+| G | 0.049352 | 0.049377 | +0.05% |
+| F | 0.004489 | 0.004035 | -10.1% |
+| H | 0.635783 | 0.617153 | -2.93% |
+
+Longer optimization therefore continued to fit E and modestly improved F, but
+did not materially fit G or the conservative-force secant H target.
+
+## Same-molecule strict Hessian and frequency comparison
+
+To test whether the small H-loss change corresponded to useful curvature, the
+step-20 and step-100 checkpoints were evaluated on the same training parent,
+`0016298`, with an identical strict protocol:
+
+- construct the complete `45 x 45` Cartesian total-OFDFT Hessian;
+- use centered force differences at `1e-4 Bohr`;
+- independently optimize the density at all 90 displaced points;
+- require a final projected density-gradient norm below `1e-8`;
+- compare with the analytic PBE Hessian at the identical center geometry;
+- symmetrize, mass weight, remove six translation/rotation modes, and match
+  vibrational modes by maximum absolute eigenvector overlap.
+
+All 90 step-100 displacement points met the strict criterion. The maximum
+final projected density-gradient norm was `9.92e-9`.
+
+| Metric | Step 20 | Step 100 | Relative change |
+|---|---:|---:|---:|
+| Relative Frobenius | 23.9632 | 24.0841 | +0.50% |
+| Frequency MAE (cm^-1) | 4940.45 | 4931.52 | -0.18% |
+| Frequency RMSE (cm^-1) | 6454.94 | 6442.33 | -0.20% |
+| Frequency max error (cm^-1) | 17997.48 | 17975.46 | -0.12% |
+| Mean mode overlap | 0.57963 | 0.57947 | -0.03% |
+| Model imaginary modes | 25 | 25 | unchanged |
+
+The PBE reference has two imaginary modes under the same projection and
+threshold convention.
+
+## Updated conclusion
+
+Extending this configuration from 20 to 100 optimizer steps does **not**
+produce a meaningful Hessian or vibrational improvement. The tiny frequency
+changes are at the sub-percent level, Relative Frobenius becomes slightly
+worse, the mode overlap does not improve, and the imaginary-mode count is
+unchanged. Because the density optimization and force-derived Hessian are
+strictly converged, this negative result reflects the learned curvature rather
+than a failed evaluation.
+
+The next experiment should not simply add more steps with the same weights.
+It should first change the optimization geometry of the multi-objective
+problem: normalize or balance component gradients, substantially increase the
+effective G/H influence, and supervise multiple independent displacement
+directions per parent. The same one-parent strict Hessian comparison is a
+suitable cheap gate before any larger evaluation.
