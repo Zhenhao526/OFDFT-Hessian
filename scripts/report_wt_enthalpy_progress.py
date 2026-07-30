@@ -28,6 +28,11 @@ def report(root: Path, requested_steps: int) -> dict:
             continue
         samples, max_step = parse_md_log(logs[-1])
         recent = samples[-50:]
+        recent_pressures = [
+            sample["pressure_kbar"]
+            for sample in recent
+            if "pressure_kbar" in sample
+        ]
         # The run directory mtime is set when ABACUS creates OUT.* and is not
         # touched by subsequent writes inside that directory.
         elapsed_seconds = max(0.0, time.time() - run.stat().st_mtime)
@@ -50,8 +55,11 @@ def report(root: Path, requested_steps: int) -> dict:
                     [sample["temperature_K"] for sample in recent]
                 ),
                 "pressure_recent_kbar": series_stats(
-                    [sample["pressure_kbar"] for sample in recent]
+                    recent_pressures
                 ),
+                "trajectory_pressure_available": len(recent_pressures)
+                == len(recent)
+                and bool(recent),
                 "elapsed_seconds": elapsed_seconds,
                 "seconds_per_step": seconds_per_step,
                 "remaining_seconds": remaining_seconds,
