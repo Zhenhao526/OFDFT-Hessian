@@ -12,7 +12,7 @@ python=${PYTHON:-$workspace/.venv-reference-cuda/bin/python}
 steps=${STEPS:-6000}
 temperature=900
 gamma_per_fs=0.2
-lambdas=(0.0625 0.1875 0.8125 0.9375)
+lambdas=(0.0625 0.1875 0.4375 0.8125)
 cpus=(36 37 74 75)
 gpus=(0 1 2 3)
 done_file=$root/overlap_refinement.done
@@ -190,7 +190,7 @@ payload = {
     "phase": "liquid",
     "base_steps_per_window": 6000,
     "refinement_steps_per_window": steps,
-    "added_lambdas": [0.0625, 0.1875, 0.8125, 0.9375],
+    "added_lambdas": [0.0625, 0.1875, 0.4375, 0.8125],
     "reference_model": {
         "path": str(reference.resolve()),
         "sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
