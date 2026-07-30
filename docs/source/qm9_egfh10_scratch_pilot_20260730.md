@@ -327,3 +327,70 @@ the same ten-molecule training indefinitely on training loss alone. The next
 decision should use a fixed held-out force/secant set and should test lower
 learning rate or explicit gradient balancing before another long
 continuation.
+
+## Training-loss convergence continuation
+
+The article-warm-start trajectory was continued beyond step 200 with an
+explicit stopping rule rather than a fixed arbitrary endpoint:
+
+> Stop when the absolute relative changes of mean total loss are both below
+> 2% for the two most recent adjacent 50-step transitions.
+
+Each 100-step stage was resumed from a complete Lightning checkpoint at an
+epoch boundary. Model weights, AdamW moments, trainer epoch, and global step
+were preserved throughout. The original cosine schedule was allowed to finish
+at step 1000. Because continuing a `CosineAnnealingLR` beyond its `T_max`
+would increase the learning rate again, two monotone low-learning-rate tails
+were then used:
+
+1. `7e-6` from step 1000, with a new 20-epoch cosine tail;
+2. `7e-7` from step 1200, with a new 20-epoch cosine tail.
+
+For these transitions, hash-recorded checkpoint adapters changed only the
+optimizer learning rate and cosine scheduler state. Model state, optimizer
+moments, and trainer progress were not changed. No component definition,
+scalar loss weight, example, batch policy, or seed was changed.
+
+### Convergence decisions
+
+| Endpoint | Two latest 50-step total-loss changes | Decision |
+|---|---:|---|
+| Step 300 | -14.61%, -13.17% | continue |
+| Step 400 | -12.96%, -2.43% | continue |
+| Step 500 | -5.39%, -8.37% | continue |
+| Step 600 | -10.61%, +2.84% | continue |
+| Step 700 | -18.78%, -9.11% | continue |
+| Step 800 | -8.99%, -10.49% | continue |
+| Step 900 | -8.40%, -5.53% | continue |
+| Step 1000 | -2.58%, -2.45% | continue; narrowly above threshold |
+| Step 1100 | +15.30%, -1.46% | continue; low-LR transition |
+| Step 1200 | -8.53%, -7.01% | continue |
+| **Step 1300** | **-1.48%, -0.69%** | **converged; stop** |
+
+The controller stopped automatically at global step 1300; step 1400 was not
+started.
+
+### Final training-loss levels
+
+| Component | Steps 150-199 | Steps 1200-1249 | Steps 1250-1299 | Change from steps 150-199 |
+|---|---:|---:|---:|---:|
+| Total weighted loss | 0.025265 | 0.005970 | 0.005929 | -76.53% |
+| E | 0.037760 | 0.002928 | 0.002857 | -92.43% |
+| G | 0.016676 | 0.005057 | 0.005037 | -69.79% |
+| F | 0.006264 | 0.000805 | 0.000791 | -87.38% |
+| H | 0.188423 | 0.082646 | 0.082228 | -56.36% |
+
+- Final step-1300 checkpoint SHA-256:
+  `7c40f4dfb442f606a278b796e973d2669108b3a306a6b1e065143ee9e3e71545`.
+- Step-1200 source checkpoint SHA-256:
+  `c957dc33217210a5d683402dd67f97ce41d213126a2ff94fda3bd144660d731f`.
+- Ultra-low-LR adapter manifest SHA-256:
+  `930b233873502b2ff62b0dd1fe7a6a3514115b0a6ceea6ac361ccba1c4af8c70`.
+- No validation, Test100, or full-Hessian evaluation was accessed during this
+  convergence run.
+
+This establishes convergence only for the ten-parent training objective. It
+does not establish held-out force/secant generalization, full-Hessian
+accuracy, or vibrational-frequency accuracy. The converged step-1300
+checkpoint should now be frozen and evaluated on a fixed held-out set before
+any further optimization.
