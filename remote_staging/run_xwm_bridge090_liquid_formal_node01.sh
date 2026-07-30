@@ -66,8 +66,10 @@ assert merged["status"] == "pilot_grid_verified"
 assert merged["phase_results"]["solid"]["status"] == "verified"
 assert merged["phase_results"]["liquid"]["status"] == "verified"
 assert solid["status"] == "verified"
-assert design["status"] == "production_design_verified"
-selected = design["methods"]["xwm_bridge090"]["selected_steps_per_window"]
+assert design["status"] == "verified"
+methods = {method["name"]: method for method in design["methods"]}
+assert set(methods) == {"xwm_bridge090"}
+selected = methods["xwm_bridge090"]["recommended_steps_per_window"]
 assert int(selected) == steps
 expected = {
     "solid": hashlib.sha256(solid_model.read_bytes()).hexdigest(),
