@@ -37,7 +37,8 @@ def load_pair_document(
         raise ValueError(f"pair model has not passed its short-range gate: {path}")
     if target_kedf is not None and document.get("target_kedf") != target_kedf:
         raise ValueError(f"pair model has the wrong target KEDF: {path}")
-    if phase is not None and document.get("phase") != phase:
+    document_phase = document.get("phase", document.get("reference_phase"))
+    if phase is not None and document_phase != phase:
         raise ValueError(f"pair model has the wrong phase: {path}")
     return document
 

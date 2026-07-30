@@ -72,6 +72,25 @@ def test_pair_document_requires_gates_and_provenance(tmp_path):
         module.load_pair_document(path, target_kedf="lkt", phase="solid")
 
 
+def test_pair_document_accepts_reference_phase_provenance(tmp_path):
+    path = tmp_path / "proxy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "reference_gate_passed": True,
+                "short_range_guard_passed": True,
+                "target_kedf": "lkt",
+                "reference_phase": "liquid",
+                "model": {},
+            }
+        )
+    )
+
+    assert module.load_pair_document(
+        path, target_kedf="lkt", phase="liquid"
+    )["reference_phase"] == "liquid"
+
+
 def test_pair_document_rejects_missing_short_range_gate(tmp_path):
     path = tmp_path / "model.json"
     path.write_text(
