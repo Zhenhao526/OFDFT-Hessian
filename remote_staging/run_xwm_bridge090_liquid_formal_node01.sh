@@ -80,7 +80,9 @@ for phase in ("solid", "liquid"):
     assert len(rows) == 9
     for row in rows:
         metadata = json.loads((Path(row["run"]) / "metadata.json").read_text())
-        assert metadata["pair_model_sha256"] == expected[phase]
+        metadata_model = Path(metadata["pair_model"]).resolve()
+        assert metadata_model == (solid_model if phase == "solid" else bridge_model)
+        assert hashlib.sha256(metadata_model.read_bytes()).hexdigest() == expected[phase]
 PY
 
 env PYTHONPATH=. "$python" scripts/prepare_kedf_ti_formal_from_merged.py \
