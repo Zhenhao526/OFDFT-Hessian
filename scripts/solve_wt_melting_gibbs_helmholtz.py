@@ -184,7 +184,10 @@ def main() -> None:
         expected_series_schema = "wt-zero-pressure-fusion-enthalpy-series-v2"
         expected_convergence_schema = "wt-enthalpy-discard-convergence-summary-v2"
         output_schema = "wt-gibbs-helmholtz-melting-v2"
-    elif anchor_schema == "kedf-melting-free-energy-anchor-v1":
+    elif anchor_schema in {
+        "kedf-melting-free-energy-anchor-v1",
+        "kedf-melting-multileg-free-energy-anchor-v1",
+    }:
         target_kedf = str(combination.get("target_kedf", "")).lower()
         expected_series_schema = "kedf-zero-pressure-fusion-enthalpy-series-v1"
         expected_convergence_schema = (
@@ -203,6 +206,7 @@ def main() -> None:
         in {
             "wt-melting-free-energy-combination-v2",
             "kedf-melting-free-energy-anchor-v1",
+            "kedf-melting-multileg-free-energy-anchor-v1",
         },
         "free_energy_anchor_checks_verified": bool(combination.get("checks"))
         and all(combination["checks"].values()),
