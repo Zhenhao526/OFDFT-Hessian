@@ -176,3 +176,106 @@ problem: normalize or balance component gradients, substantially increase the
 effective G/H influence, and supervise multiple independent displacement
 directions per parent. The same one-parent strict Hessian comparison is a
 suitable cheap gate before any larger evaluation.
+
+## Released-article QM9 weight warm-start
+
+A subsequent test replaced random initialization with the released
+Structures25 QM9 model while keeping the EGFH10 dataset, loss weights, batch
+construction, seed, learning rate, and 100-step budget fixed. Only model
+weights were loaded; optimizer, scheduler, epoch, and global-step state were
+fresh.
+
+```text
+source:
+/home/shenwei01/xzh_node02_20260724/runtime_parent/_runtime/models/train/runs/trained-on-qm9/checkpoints/last.ckpt
+
+source SHA-256:
+9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+
+weight_ckpt_path:
+/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh10_article_warmstart_s100_v1/article_weight_adapter/article_qm9_current_compat.ckpt
+```
+
+The released checkpoint contains eight obsolete TensorFrames `odd_tensor`
+buffers that are no longer registered by the current Graphformer. Strict
+loading initially failed on exactly those eight unexpected keys. A
+hash-recorded compatibility copy removed only those non-trainable buffers;
+all remaining state was then loaded with strict `load_state_dict`. No
+trainable parameter was removed or ignored.
+
+- Adapted weight checkpoint SHA-256:
+  `aafbdb63edc0a34fa7687ca97b55b73aa2e2a3c3bf4e6ce2b255c5b3bbe347b1`.
+- Adapter manifest SHA-256:
+  `3e4cf7e47a90a7fd4b98e3bea9497fa3f6ab85c1ed5c4b13c4cc8f9fc269e3dc`.
+- Final warm-start step-100 checkpoint SHA-256:
+  `26e244691456c42f2ed1000583da690a9b2b3eefdf1ddd22d9c94ea8b7dc8b85`.
+
+### Training comparison
+
+The table compares the second half of each 100-step run. For scratch this is
+the recorded steps 60-99 of the continued trajectory.
+
+| Component | Scratch-100 | Article warm-start-100 | Relative warm-start level |
+|---|---:|---:|---:|
+| Total weighted loss | 0.148118 | 0.037027 | 25.0% |
+| E | 0.984100 | 0.035390 | 3.60% |
+| G | 0.049377 | 0.027398 | 55.5% |
+| F | 0.004035 | 0.008424 | 208.8% |
+| H | 0.617153 | 0.314562 | 51.0% |
+
+The final warm-start logged values at step 99 were E/G/F/H =
+`0.040596/0.022097/0.005245/0.198860`. Thus the released weights greatly
+improve E, G, and the one-direction H objective, while F is not uniformly
+better than the scratch run.
+
+### Same-molecule Hessian and frequency comparison
+
+The exact same `0016298` full-Hessian protocol was run for the warm-start
+checkpoint.
+
+| Metric | Scratch-100 | Article warm-start-100 | Relative change |
+|---|---:|---:|---:|
+| Relative Frobenius | 24.0841 | 1.25533 | -94.79% |
+| Hessian element MAE (Ha/Bohr^2) | 0.554465 | 0.045389 | -91.81% |
+| Hessian element RMSE (Ha/Bohr^2) | 2.044630 | 0.106572 | -94.79% |
+| Frequency MAE (cm^-1) | 4931.52 | 1616.39 | -67.22% |
+| Frequency RMSE (cm^-1) | 6442.33 | 1885.34 | -70.74% |
+| Frequency max error (cm^-1) | 17975.46 | 3216.99 | -82.10% |
+| Mean mode overlap | 0.57947 | 0.59090 | +1.97% |
+| Model imaginary modes | 25 | 25 | unchanged |
+
+The Hessian remained nearly conservative numerically:
+antisymmetric/symmetric Frobenius ratio `9.97e-6` and raw symmetry maximum
+error `3.09e-5 Ha/Bohr^2`.
+
+### Density-convergence and cost caveat
+
+This result is a strong positive screening signal but is not yet a fully
+strict accepted metric:
+
+- 77/90 displaced points finished below the `1e-8` projected-gradient gate;
+- the worst final displaced gradient norm was `1.68e-8`;
+- the remaining 13 points were close to, but above, the strict threshold;
+- mean displaced optimization cycles were `1238.99`;
+- wall time was `3222.91 s`.
+
+For the matched scratch-100 evaluation, the corresponding mean was `104.16`
+cycles and wall time `843.46 s`. The warm-start evaluation therefore required
+about 11.9 times as many optimization cycles and 3.82 times the wall time.
+Several individual Cartesian displacements triggered long fallback paths.
+
+### Warm-start conclusion
+
+Released-article weight initialization is substantially better than random
+initialization for learning useful full curvature on this pilot. It should
+replace scratch initialization as the leading branch. However, it is not yet
+an accurate vibrational model: Relative Frobenius remains above one,
+frequency MAE remains above `1600 cm^-1`, the imaginary-mode count is
+unchanged, and strict density convergence is incomplete.
+
+The next warm-start experiment should prioritize density-response stability
+and coverage rather than merely adding steps: test a lower fine-tuning
+learning rate, balance F/H gradient contributions, and add multiple independent
+internal displacement directions per parent. The same one-parent evaluation
+should be rerun until all 90 points pass the fixed `1e-8` gate before
+expanding to more molecules.
