@@ -109,6 +109,27 @@ def test_parent_pair_batch_sampler_can_infer_verified_filename_convention(tmp_pa
     assert [set(batch) for batch in sampler] == [{2, 5}]
 
 
+def test_parent_pair_batch_sampler_ignores_reference_sample_in_filename_inference(
+    tmp_path,
+):
+    source = tmp_path / "QM9PBEForceEGFH10ScratchV1"
+    paths = [
+        source / f"0000042.{sample_id:07d}.zarr.zip"
+        for sample_id in (0, 1, 2)
+    ]
+    dataset = _Dataset(paths)
+    sampler = ParentPairBatchSampler(
+        dataset,
+        batch_size=2,
+        shuffle=False,
+        pair_source_markers=["QM9PBEForceEGFH10ScratchV1"],
+        infer_pair_metadata_from_filename=True,
+    )
+
+    assert sampler.pairs == [(8, 5)]
+    assert sampler.other_indices == [0, 1, 2]
+
+
 def test_parent_pair_batch_sampler_exposes_epoch_aware_sampler(tmp_path):
     paths = []
     for source in range(6):

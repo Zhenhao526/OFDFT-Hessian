@@ -137,6 +137,12 @@ class ParentPairBatchSampler(Sampler[list[int]]):
                     raise ValueError(f"Cannot parse paired label filename {path.name}")
                 source = int(parts[0])
                 sample_id = int(parts[1])
+                # The established paired-geometry convention reserves sample 0 for the
+                # undisplaced reference structure.  Only samples 1/2, 3/4, ... are
+                # the exact +/- pairs.  Treating sample 0 as a negative endpoint
+                # creates a spurious incomplete pair with pair_id=0.
+                if sample_id == 0:
+                    continue
                 pair_id = (sample_id + 1) // 2
                 sign = 1 if sample_id % 2 == 1 else -1
             else:
