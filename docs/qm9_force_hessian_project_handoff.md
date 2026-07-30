@@ -1,6 +1,6 @@
 # QM9 Force/Hessian Project Handoff
 
-Last updated: 2026-07-28 16:00 Asia/Singapore
+Last updated: 2026-07-30 10:51 Asia/Singapore
 
 ## Purpose
 
@@ -14,8 +14,10 @@ Active scope is still the P1-410 early pilot plus a remote random1000 8-GPU trai
 
 - dataset: 410 QM9 molecules, 1640 labels;
 - models: EG baseline and EGF lambda=1.0 are the main comparison;
-- force must be derived from scalar model energy: `F_pred = -dE_pred/dR`;
-- no independent force head;
+- promotable force must be derived from scalar model energy:
+  `F_pred = -dE_pred/dR`;
+- one independent structured force-head diagnostic has now been run, but it
+  failed the source-force transfer gate and is not a promotable model;
 - random1000 labels have been generated and used for a 10-epoch EG/EGF training validation;
 - do not delete existing labels, checkpoints, cached labels, or Hessian references.
 
@@ -23,6 +25,107 @@ Current Hessian conclusions do not yet generalize to final P1/P2.
 
 Full-scale training code preparation has started, but the full 133,885-molecule QM9 force-label
 dataset has not been generated and no full-QM9 EG/EGF training job has been launched.
+
+### Graphformer-preserving derivative-head pilots (2026-07-29)
+
+Three train-only pilots now delimit what can and cannot be learned by adding
+structured derivative readouts while keeping the main OFDFT work isolated from
+validation and Test100.
+
+#### Structured Hessian/density head
+
+The first pilot is an independent, small structured Hessian control rather than
+a replacement mainline model. It assembles equivariant `3 x 3` Cartesian
+blocks, enforces exact symmetry, and projects out rigid translations and
+rotations. Five-fold parent-isolated evaluation uses the 20 clean train
+parents, sample 0 only.
+
+| Variant | Parameters | fit median relF | held median relF | held P90 | held max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| geometry only | 11,979 | 0.225775 | 0.249269 | 0.283948 | 0.324290 |
+| geometry + density summary | 13,515 | 0.225658 | 0.247198 | 0.288309 | 0.319053 |
+
+The six-scalar-per-atom density summary improves held median by only `0.8309%`,
+below the frozen `5%` gate, with 11 parent wins and 9 losses. Both variants
+beat a zero Hessian on all 20 held parents and satisfy the exact structural
+constraints, so structured direct Hessian output is feasible, but the current
+density-value summary does not establish useful density-response information.
+It is neither a Schur-complement response head nor a conservative
+total-energy Hessian.
+
+Artifact:
+`/home/shenwei01/xzh_node02_20260724/artifacts/structured_density_hessian_head_pilot_v1_20260729`.
+Formal summary SHA256:
+`f4769f2ac5a90016be023e7e4e3a818f1a4e6ab47fef5111f0fec060afec1f73`.
+Detailed report:
+`docs/qm9_structured_density_hessian_head_pilot_v1.md`.
+
+#### Frozen Graphformer Hessian attention head
+
+The corrected architecture preserves the complete `(R,c) -> Graphformer`
+backbone and adds an eight-head distance-biased structured Hessian readout from
+the final 768-dimensional atom states. All 18,692,586 backbone parameters,
+the scalar energy head, and the initial-density head remain unchanged and
+frozen; the new head has 446,403 parameters.
+
+On fold 0, 800 training steps reduce fit median relF to `0.174962`, but held
+median is `0.250678` versus `0.254864` for the matched geometry-only control:
+only a `1.64%` improvement. It wins 1 of 4 held parents, while held P90 and
+maximum error worsen to `0.292512/0.303243`. The remaining four folds and
+Graphformer unfreezing are therefore not authorized.
+
+Artifact:
+`/home/shenwei01/xzh_node02_20260724/artifacts/graphformer_frozen_hessian_attention_head_fold0_s800_v1_20260729`.
+Formal summary SHA256:
+`873f5e00a2cf4187aa225139fa058eb485f90aa235612b526c2e3b9ee25982c8`.
+Detailed report:
+`docs/qm9_graphformer_frozen_hessian_attention_head_pilot_v1.md`.
+
+#### Frozen Graphformer force attention head
+
+The force-first pilot keeps the same frozen Graphformer but adds a 443,593
+parameter equivariant attention head. It forms symmetric atom-pair scalars and
+equal-and-opposite scalar-times-unit-direction contributions, giving exact
+permutation/rotation covariance, translation invariance, zero net force, and
+zero net torque. Focused implementation tests pass `5/5`.
+
+The formal train800-only experiment deterministically selects 128 parents:
+96 fit and 32 held, with four geometries per parent (512 samples total). It
+uses 1,000 fixed steps without held checkpoint selection and reads neither
+validation nor Test100.
+
+| Split/model | component MAE (Ha/Bohr) | global relF |
+| --- | ---: | ---: |
+| fit: new force head | 0.005046 | 0.84969 |
+| fit: source energy derivative | 0.002375 | 0.42469 |
+| fit: zero force | 0.006196 | 1.00000 |
+| held: new force head | 0.005382 | 0.86199 |
+| held: source energy derivative | 0.002353 | 0.38434 |
+| held: zero force | 0.006486 | 1.00000 |
+
+The head improves held MAE over zero force by `17.02%`, but is `2.29x` worse
+than the existing source energy derivative. At parent level it is 0/32
+against the source and 31/32 against zero. Fit and held errors are close while
+fit itself remains poor, identifying representation/readout underfitting
+rather than conventional overfitting.
+
+This force checkpoint must not initialize the Hessian/response head. Longer
+training, Graphformer unfreezing, and validation/Test100 access are not
+authorized from this result. A successor must expose intermediate G3D edge
+messages, attention values, or explicit vector channels rather than relying
+only on the final invariant atom state. Density response should read the
+density branch before it is summed with element and distance embeddings.
+
+Artifact:
+`/home/shenwei01/xzh_node02_20260724/artifacts/graphformer_frozen_force_attention_pilot_v1_20260729`.
+Formal summary SHA256:
+`67fc46cc85338097a5da6e9a8ad1aa77694dbb711bdeb9d454e67ebca6ef4886`.
+Checkpoint SHA256:
+`aef7e09a86005e53f07b2d6011fc566780835770235d72cb1f83041b4b2b0eec`.
+Detailed report:
+`docs/qm9_graphformer_frozen_force_attention_pilot_v1.md`.
+GitHub backup commit:
+`2925904f65c294570cdefd59a9628ffc26ec867f`.
 
 ### Graphformer single-parent capacity-only branch (2026-07-27 22:08)
 
@@ -73,21 +176,28 @@ Frobenius `2.575980`, MAE `0.074523`, RMSE `0.226372`, symmetry max
 `1.21e-5`, density residual `1.19e-10`, and response residual `2.17e-12`.
 This reproduces the old untouched baseline and remains above the 5% gate.
 
-The sequential capacity supervisor remains active on node02 as PID `3028160`;
-the first independent arm is still `energy_readout + AdamW` (child PID
-`3028168`). Through update 18, relative Frobenius fell from `2.5759803325` to
-`0.8735228965`; the best evaluated checkpoint is update 17 at `0.8665426540`.
-The corresponding best MAE/RMSE are `0.0324138950/0.0761501030`. This is a
-66.36% baseline reduction but remains 17.33 times above the 5% capacity gate.
-Update 18 is 0.81% worse than update 17, so it is not a new best. Density
-residuals remain about `1e-10`, response residuals about `1e-12`, and symmetry
-max abs about `2e-5`; the strict numerical path remains healthy.
+The sequential capacity supervisor remains active on node02 as PID `3028160`.
+The independent `energy_readout + AdamW` arm completed all 40 configured
+updates. Its final and best relative Frobenius is `0.5790032917`, with
+MAE/RMSE `0.0239202258/0.0508816965`. This is a 77.52% baseline reduction but
+is still 11.58 times above the 5% capacity gate. It closed fail-closed with
+`capacity_passed=false` and `status=max_updates`.
 
-The durable update-18 checkpoint SHA256 is
-`5589cf31d43fdc9e8919c6acca0b7e0fa848a9097809b9439643378e9d14fdd0`.
-At 2026-07-28 15:57 Asia/Singapore, update 19 was accumulating direction 2/39.
-No `CAPACITY_PASSED_FROZEN.json` exists. Stable5, train20, held directions,
-validation and Test100 remain locked.
+The final AdamW checkpoint SHA256 is
+`cf3a86db4fc3b71d9d209b72128a2785b83808c737dc0b906bc36aadd6392a53`;
+summary SHA256 is
+`4b2c465dd37e3d3b9960e55257c09ec75de174fad4870db7afe8bcda02a2ff50`.
+Total wall time was 42.34 h, peak GPU allocation was 62172.97 MiB, and maximum
+RSS was 75668.78 MiB.
+
+The supervisor independently restarted `energy_readout + L-BFGS` from the
+fresh checkpoint. At 2026-07-30 10:44 Asia/Singapore it had completed update
+8 with relative Frobenius `0.8579292655` and MAE/RMSE
+`0.0324695286/0.0753931750`; update 9 was at direction 28/39. L-BFGS is 15.03%
+better than AdamW at equal update 8 but has not exceeded the completed AdamW
+arm. Numerical residuals remain strict. No `CAPACITY_PASSED_FROZEN.json`
+exists. Stable5, train20, held directions, validation and Test100 remain
+locked.
 
 Detailed protocol and current hashes:
 `docs/qm9_graphformer_0028399_full39_capacity_only.md`.
@@ -2885,6 +2995,9 @@ Read these for full context:
 - `docs/qm9_random1000_total_ofdft_hessian_model_optimization.md`
 - `docs/qm9_random1000_hvp100_curvature_supervision.md`
 - `docs/qm9_random1000_hvp_curvature_improvement_v1.md`
+- `docs/qm9_structured_density_hessian_head_pilot_v1.md`
+- `docs/qm9_graphformer_frozen_hessian_attention_head_pilot_v1.md`
+- `docs/qm9_graphformer_frozen_force_attention_pilot_v1.md`
 
 ## Complete-Total Capacity Update
 
@@ -3906,6 +4019,15 @@ tests/test_qm9_complete_total_compare_geometry_mlp_runs.py
   transfer claims must use the remaining 15 train20 parents.
 - The stable5 v9 coefficient vector fails that unseen15 audit by two to four orders of magnitude.
   It must not initialize or regularize another Stage-2 fit.
+- The structured density Hessian head proves that exact equivariant block assembly and rigid-mode
+  projection are trainable, but its six-value density summary improves held median by only 0.83%.
+  It is a direct matrix predictor, not a conservative total-energy Hessian or a density-response
+  Schur complement.
+- The frozen final-state Graphformer Hessian attention head improves its matched fold-0 held
+  median by only 1.64%, wins only 1/4 parents, and worsens the held tail. The frozen final-state
+  force attention head is 2.29 times worse than the existing energy-derived force and wins 0/32
+  held parents against it. Neither checkpoint is eligible for Hessian initialization, backbone
+  unfreezing, validation, or Test100.
 - The bounded `l<=1` equivariant model is finite and trainable but fails the completed full-batch
   and one-parent LBFGS ceilings by a wide margin. E2/E4 Adam runs and the `l=2` tensor smoke remain
   capacity diagnostics only; no train20 or generalization claim is authorized until every stable5
@@ -3983,6 +4105,14 @@ tests/test_qm9_complete_total_compare_geometry_mlp_runs.py
    completed cross-parent CV proves that hard clipping is not a physical or accurate fix. A new
    representation must pass median `<=0.10`, at least 80% parents `<=0.15`, P90 `<=0.20`, and the
    frequency/imaginary-mode checks before the seven validation parents may be read again.
+14. For the Graphformer-preserving derivative-head line, freeze both final-state attention heads
+   as failed controls. The next small test should expose intermediate G3D edge messages or
+   explicit vector channels and first perform fit-only distillation against the existing
+   energy-derived force. Only a readout that can recover information already present in the
+   backbone should proceed to clean PBE force labels.
+15. A density-response successor must expose the pre-summation density branch or
+   coefficient-level response tokens and preserve one scalar-energy owner. Do not treat more
+   attention width or more steps on the final invariant atom state as a response model.
 
 ## Update Rule
 
