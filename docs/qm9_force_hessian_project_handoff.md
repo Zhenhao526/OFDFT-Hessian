@@ -1,12 +1,53 @@
 # QM9 Force/Hessian Project Handoff
 
-Last updated: 2026-07-31 11:17 Asia/Shanghai
+Last updated: 2026-07-31 11:56 Asia/Shanghai
 
 ## Purpose
 
 This is the handoff and continuity document for the QM9 P1-410 and random1000 force/Hessian work. Update this file after every major code change, experiment milestone, evaluator change, model checkpoint, or conclusion change.
 
 Detailed reports remain in separate files under `docs/`; this document is the first file a new maintainer should read.
+
+### EGFH P0 density-response audit (2026-07-31)
+
+The no-training Schur-complement audit is complete on train parent `0016298`,
+internal direction 0, for the released article, EGFH step-100, and EGFH
+step-1300 checkpoints. No validation or Test100 data were accessed.
+
+The analytic relaxed HVP is numerically verified against strict reoptimized
+force differences at three displacements. At `h=1e-4 Bohr`, relative
+analytic-versus-FD errors are `4.45e-7`, `1.52e-6`, and `3.98e-7`; all
+18 endpoints pass projected density gradient `<1e-8`. Thus the following
+diagnosis is not a loose-density or finite-difference artifact.
+
+| checkpoint | `||E_RR v||` | `||response||` | `||H_relaxed v||` | response/relaxed | relaxed vs PBE rel-L2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| article | 1.6390 | 0.8471 | 1.2648 | 0.670 | 2.3130 |
+| step 100 | 58.0518 | 57.7933 | 0.7905 | 73.106 | **1.3052** |
+| step 1300 | 13.3439 | 13.4743 | 1.0497 | 12.837 | 2.0640 |
+
+Step 100 obtains its directional improvement through near-exact cancellation:
+the partial/response cosine is `-0.999917` and the cancellation index is
+`146.54`. Step 1300 is `58.1%` worse than step 100 on the same direction and
+still has cosine `-0.996983` and cancellation index `25.55`. Center density
+optimization rises from 660 article cycles to `10475/10273` at steps
+100/1300. All projected `E_cc` matrices remain positive definite but highly
+conditioned (`3.05e6--4.88e6`), while the smallest eigenvalue falls from
+`2.047e-4` to `1.186e-4`.
+
+Decision: do not scale or extend the present ten-parent fixed-KS-endpoint EGFH
+objective. Retain the scalar `(R,c) -> Graphformer -> E_total` owner and move
+the next small pilot to randomized internal-space implicit relaxed-HVP
+supervision on the model's own self-consistent density branch. Log and gate
+density curvature, response residual/norm, and cancellation rather than
+selecting by total training loss alone.
+
+Detailed report:
+`docs/qm9_egfh_p0_density_response_audit_20260731.md`.
+Formal summary:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_egfh_p0_density_response_audit_v1/0016298_d0_preflight_v2_20260731/summary.json`.
+SHA256:
+`6f343b83ecd789468271c91539aca7e8df6dc6bfbe4cb6dee2a95a9985bac241`.
 
 ### Hessian-training literature review and mainline decision (2026-07-31)
 
