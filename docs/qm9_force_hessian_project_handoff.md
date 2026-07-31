@@ -1,12 +1,42 @@
 # QM9 Force/Hessian Project Handoff
 
-Last updated: 2026-07-30 10:51 Asia/Singapore
+Last updated: 2026-07-31 11:17 Asia/Shanghai
 
 ## Purpose
 
 This is the handoff and continuity document for the QM9 P1-410 and random1000 force/Hessian work. Update this file after every major code change, experiment milestone, evaluator change, model checkpoint, or conclusion change.
 
 Detailed reports remain in separate files under `docs/`; this document is the first file a new maintainer should read.
+
+### Hessian-training literature review and mainline decision (2026-07-31)
+
+A direct web literature review now covers peer-reviewed and recent preprint
+work on full-Hessian training, stochastic HVP supervision, direct equivariant
+Hessian heads, smooth higher-order MLIPs, molecular vibrational/IR prediction,
+OFDFT functional derivatives, density response, and density-optimization
+stability. The full review is
+`docs/hessian_training_literature_review_20260731.md`.
+
+The leading recommendation is to retain the scalar
+`(R, c) -> Graphformer -> E_total` mainline and replace the present fixed
+endpoint force-secant emphasis with randomized, internal-space,
+density-relaxed HVP supervision. A new density-response module may predict
+`dc*/dR v` and precondition the response solve, but final force and Hessian
+must remain derivatives of the same scalar energy.
+
+The immediate prerequisite is a no-training Schur-complement audit comparing
+the article checkpoint, warm-start step 100, and final step 1300:
+
+- fixed-density curvature `E_RR`;
+- density-response correction `-E_Rc E_cc^-1 E_cR`;
+- projected `E_cc` spectrum/conditioning and response residual;
+- implicit relaxed HVP versus strict force differences over multiple
+  displacement sizes;
+- density-optimization convergence and cost.
+
+Do not continue the same ten-parent step-1300 objective solely to lower its
+training loss. Do not promote an independent force or Hessian head as the
+physical owner of derivatives.
 
 ## Current Scope
 
