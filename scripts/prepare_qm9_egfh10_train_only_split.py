@@ -26,9 +26,11 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     transformed = root / args.label_subdir
     raw_paths = sorted(raw_labels.glob("*.zarr.zip"))
     transformed_paths = sorted(transformed.glob("*.zarr.zip"))
-    if len(raw_paths) != 30 or len(transformed_paths) != 30:
+    samples_per_parent = 1 + 2 * args.pairs_per_parent
+    expected_labels = args.parent_count * samples_per_parent
+    if len(raw_paths) != expected_labels or len(transformed_paths) != expected_labels:
         raise ValueError(
-            "EGFH10 requires exactly 30 raw and transformed labels: "
+            f"EGFH requires exactly {expected_labels} raw and transformed labels: "
             f"raw={len(raw_paths)} transformed={len(transformed_paths)}"
         )
     if {path.name for path in raw_paths} != {
@@ -54,10 +56,20 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             ]
         )
 
-    if len(parent_samples) != 10:
-        raise ValueError(f"expected 10 parents, found {len(parent_samples)}")
+    if len(parent_samples) != args.parent_count:
+        raise ValueError(
+            f"expected {args.parent_count} parents, found {len(parent_samples)}"
+        )
+    expected_samples = [(0, 0, True)]
+    for pair_id in range(1, args.pairs_per_parent + 1):
+        expected_samples.extend(
+            [
+                (2 * pair_id - 1, 1, True),
+                (2 * pair_id, -1, True),
+            ]
+        )
     for parent, samples in parent_samples.items():
-        if sorted(samples) != [(0, 0, True), (1, 1, True), (2, -1, True)]:
+        if sorted(samples) != expected_samples:
             raise ValueError(f"invalid center/pair metadata for {parent}: {samples}")
 
     split = {
@@ -74,14 +86,16 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     split_path.write_bytes(pickle.dumps(split))
     manifest = {
         "definition": (
-            "Ten train-only QM9 parents with center and one deterministic "
-            "symmetric displacement pair per parent for scratch EGFH training."
+            f"{args.parent_count} train-only QM9 parents with center and "
+            f"{args.pairs_per_parent} deterministic symmetric displacement "
+            "pairs per parent for EGFH training."
         ),
         "dataset_name": args.dataset_name,
         "parents": sorted(parent_samples),
         "parent_count": len(parent_samples),
         "label_count": len(entries),
-        "samples_per_parent": 3,
+        "pairs_per_parent": args.pairs_per_parent,
+        "samples_per_parent": samples_per_parent,
         "validation_accessed": False,
         "test100_accessed": False,
         "split_sha256": _sha256(split_path),
@@ -96,6 +110,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--dataset-name", required=True)
+    parser.add_argument("--parent-count", type=int, default=10)
+    parser.add_argument("--pairs-per-parent", type=int, default=1)
     parser.add_argument(
         "--label-subdir",
         default="labels_local_frames_global_symmetric_natrep",
