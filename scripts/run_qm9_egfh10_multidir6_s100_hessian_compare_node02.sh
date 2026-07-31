@@ -7,13 +7,10 @@ DATASET="$ROOT/data/QM9PBEForceEGFH10MultiDir6V1"
 REFERENCE_ROOT="$ROOT/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/pbe_hessian_train20"
 REFERENCE_DIR="$REFERENCE_ROOT/cache"
 REFERENCE_MANIFEST="$REFERENCE_ROOT/manifest.json"
-TRAIN_ROOT="$ROOT/models/train/runs/qm9_graphformer_egfh10_multidir6_article_warmstart_s100_v1"
-TRAIN_SUMMARY="$ROOT/runs/qm9_graphformer_egfh10_multidir6_article_warmstart_s100_v1/summary.json"
+TRAIN_ROOT="${EGFH10_MULTIDIR_TRAIN_ROOT:-$ROOT/models/train/runs/qm9_graphformer_egfh10_multidir6_article_warmstart_s100_v1}"
+TRAIN_SUMMARY="${EGFH10_MULTIDIR_TRAIN_SUMMARY:-$ROOT/runs/qm9_graphformer_egfh10_multidir6_article_warmstart_s100_v1/summary.json}"
 CHECKPOINT="$TRAIN_ROOT/checkpoints/last.ckpt"
-RUN_NAME=EGFH10MultiDir6WarmS100
 MOLECULE_ID=0016298
-OUT_ROOT="$ROOT/runs/qm9_graphformer_egfh10_multidir6_total_hessian_vibration_s100_v1"
-MOLECULE_OUT="$OUT_ROOT/per_molecule/$MOLECULE_ID"
 BASELINE_ROOT="$ROOT/runs/qm9_graphformer_egfh10_total_hessian_vibration_article_warmstart_s100_v1"
 DEVICE="${EGFH10_HESSIAN_DEVICE:-0}"
 
@@ -21,14 +18,6 @@ DEVICE="${EGFH10_HESSIAN_DEVICE:-0}"
   echo "This EGFH10 multi-direction Hessian comparison is authorized on node02 only." >&2
   exit 2
 }
-for path in \
-  "$ROOT" "$REPO" "$DATASET" "$REFERENCE_ROOT" "$TRAIN_ROOT" \
-  "$OUT_ROOT" "$BASELINE_ROOT"; do
-  if [[ "$path" == /scratch* ]]; then
-    echo "EGFH10 multi-direction Hessian comparison must not use /scratch." >&2
-    exit 2
-  fi
-done
 [[ -f "$TRAIN_SUMMARY" && -f "$CHECKPOINT" ]] || {
   echo "Missing completed multi-direction training result." >&2
   exit 1
@@ -37,6 +26,21 @@ EXPECTED_CHECKPOINT_SHA="$(
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["checkpoint_sha256"])' \
     "$TRAIN_SUMMARY"
 )"
+FINAL_STEP="$(
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["final_optimizer_step"])' \
+    "$TRAIN_SUMMARY"
+)"
+RUN_NAME="${EGFH10_MULTIDIR_RUN_NAME:-EGFH10MultiDir6S${FINAL_STEP}}"
+OUT_ROOT="${EGFH10_MULTIDIR_HESSIAN_OUT:-$ROOT/runs/qm9_graphformer_egfh10_multidir6_total_hessian_vibration_s${FINAL_STEP}_v1}"
+MOLECULE_OUT="$OUT_ROOT/per_molecule/$MOLECULE_ID"
+for path in \
+  "$ROOT" "$REPO" "$DATASET" "$REFERENCE_ROOT" "$TRAIN_ROOT" \
+  "$OUT_ROOT" "$BASELINE_ROOT"; do
+  if [[ "$path" == /scratch* ]]; then
+    echo "EGFH10 multi-direction Hessian comparison must not use /scratch." >&2
+    exit 2
+  fi
+done
 [[ "$(sha256sum "$CHECKPOINT" | awk '{print $1}')" == \
   "$EXPECTED_CHECKPOINT_SHA" ]] || {
   echo "Multi-direction checkpoint hash mismatch." >&2
@@ -100,7 +104,7 @@ python scripts/qm9_hessian_vibrational_metrics.py \
   >"$OUT_ROOT/logs/vibrational_0016298.log" 2>&1
 
 python - \
-  "$BASELINE_ROOT" "$OUT_ROOT" "$EXPECTED_CHECKPOINT_SHA" <<'PY'
+  "$BASELINE_ROOT" "$OUT_ROOT" "$EXPECTED_CHECKPOINT_SHA" "$FINAL_STEP" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -108,6 +112,7 @@ from pathlib import Path
 baseline_root = Path(sys.argv[1])
 candidate_root = Path(sys.argv[2])
 checkpoint_sha = sys.argv[3]
+final_step = int(sys.argv[4])
 molecule_id = "0016298"
 
 baseline_hessian = json.loads(
@@ -128,18 +133,20 @@ def comparison(key: str, before: dict, after: dict) -> dict:
     new = float(after[key])
     return {
         "one_direction_s100": old,
-        "six_directions_s100": new,
+        f"six_directions_s{final_step}": new,
         "absolute_change": new - old,
         "relative_change": None if old == 0.0 else (new - old) / old,
     }
 
 summary = {
     "definition": (
-        "Controlled one-versus-six paired-direction comparison with identical "
-        "ten parents, article weight-only initialization, E/G/F/H weights, "
-        "100 optimizer steps, and strict density-relaxed Hessian protocol."
+        "One-versus-six paired-direction comparison with identical ten "
+        "parents, article weight-only initialization, E/G/F/H weights, and "
+        "strict density-relaxed Hessian protocol. The six-direction candidate "
+        f"was trained to its declared convergence point at step {final_step}."
     ),
     "molecule_id": molecule_id,
+    "candidate_final_optimizer_step": final_step,
     "candidate_checkpoint_sha256": checkpoint_sha,
     "hessian": {
         "relative_frobenius": comparison(
