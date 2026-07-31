@@ -447,6 +447,10 @@ def _relax(
         ),
     )
     metadata = point["optimization_metadata"]
+    metadata["total_point_elapsed_s"] = float(point["total_point_elapsed_s"])
+    metadata["density_optimization_elapsed_s"] = float(
+        point["density_optimization_elapsed_s"]
+    )
     final_norm = float(metadata["final_gradient_norm"])
     if not bool(metadata["converged"]) or final_norm >= density_args.density_strict_threshold:
         failure_root = Path(density_args.output_dir) / "failed_density_points"
@@ -539,6 +543,10 @@ def _optimization_stage_columns(metadata: dict[str, Any]) -> dict[str, Any]:
         ),
         "newton_final_gradient_norm": metadata.get("newton_final_gradient_norm"),
         "newton_krylov_iterations_total": int(sum(krylov_iterations)),
+        "density_optimization_elapsed_s": metadata.get(
+            "density_optimization_elapsed_s"
+        ),
+        "total_point_elapsed_s": metadata.get("total_point_elapsed_s"),
         "response_predictor_fast_path_attempted": metadata.get(
             "response_predictor_fast_path_attempted", False
         ),
@@ -550,6 +558,26 @@ def _optimization_stage_columns(metadata: dict[str, Any]) -> dict[str, Any]:
         ),
         "response_predictor_fast_path_fallback_reason": metadata.get(
             "response_predictor_fast_path_fallback_reason"
+        ),
+        "response_predictor_fast_path_failed_cycles": metadata.get(
+            "response_predictor_fast_path_failed_cycles", 0
+        ),
+        "response_predictor_fast_path_failed_lbfgs_closure_evaluations": metadata.get(
+            "response_predictor_fast_path_failed_lbfgs_closure_evaluations", 0
+        ),
+        "response_predictor_fast_path_failed_newton_energy_evaluations": metadata.get(
+            "response_predictor_fast_path_failed_newton_energy_evaluations", 0
+        ),
+        "response_predictor_fast_path_failed_newton_krylov_iterations_total": int(
+            sum(
+                metadata.get(
+                    "response_predictor_fast_path_failed_newton_krylov_iterations",
+                    [],
+                )
+            )
+        ),
+        "response_predictor_fast_path_failed_point_elapsed_s": metadata.get(
+            "response_predictor_fast_path_failed_point_elapsed_s", 0.0
         ),
     }
 
@@ -1015,6 +1043,51 @@ def _density_refresh_scope(
     ):
         return "all"
     return None
+
+
+def _assert_density_refresh_cost_gates(
+    rows: list[dict[str, Any]],
+    protocol: dict[str, Any],
+    density_args: argparse.Namespace,
+    source_capacity_step: int,
+) -> None:
+    gates = protocol.get("gates", {})
+    maximum_cycles = gates.get("density_refresh_max_cycles")
+    maximum_full_fallbacks = gates.get("density_fallback_full_count")
+    if maximum_cycles is None and maximum_full_fallbacks is None:
+        return
+    transition_rows = [
+        row
+        for row in rows
+        if row.get("parameter_step") is not None
+        and int(row["parameter_step"]) > source_capacity_step
+        and row.get("kind") == "base"
+    ]
+    if maximum_cycles is not None:
+        offenders = [
+            row
+            for row in transition_rows
+            if int(row.get("cycles", 0)) > int(maximum_cycles)
+        ]
+        if offenders:
+            raise RuntimeError(
+                "density refresh exceeded the fail-closed cycle gate: "
+                + ", ".join(
+                    f"step={row['parameter_step']} cycles={row.get('cycles')}"
+                    for row in offenders
+                )
+            )
+    if maximum_full_fallbacks is not None:
+        full_fallbacks = sum(
+            int(row.get("fallback_cycles", 0))
+            >= int(density_args.fallback_max_cycle)
+            for row in transition_rows
+        )
+        if full_fallbacks > int(maximum_full_fallbacks):
+            raise RuntimeError(
+                "density refresh exceeded the fail-closed full-fallback gate: "
+                f"{full_fallbacks} > {int(maximum_full_fallbacks)}"
+            )
 
 
 def _assert_training_density_stationarity(
@@ -2256,6 +2329,80 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 "density-cost screen settings drifted from protocol: "
                 + ", ".join(drift)
             )
+    if protocol.get("protocol_id") == "qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3":
+        formal = protocol.get("formal_training", {})
+        screen = protocol.get("density_cost_screen", {})
+        replay_lr = (
+            args.replay_learning_rate
+            if args.replay_learning_rate is not None
+            else args.learning_rate
+        )
+        v3_numeric = {
+            "learning_rate": (args.learning_rate, formal.get("learning_rate")),
+            "replay_learning_rate": (
+                replay_lr,
+                formal.get("replay_learning_rate"),
+            ),
+            "hvp_learning_rate": (
+                args.hvp_learning_rate
+                if args.hvp_learning_rate is not None
+                else args.learning_rate,
+                formal.get("hvp_learning_rate"),
+            ),
+            "weight_decay": (args.weight_decay, formal.get("weight_decay")),
+            "replay_update_period": (
+                args.replay_update_period,
+                formal.get("replay_update_period"),
+            ),
+            "gradient_clip_norm": (
+                args.gradient_clip_norm,
+                formal.get("gradient_clip_norm"),
+            ),
+            "density_predictor_damping": (
+                args.density_predictor_damping,
+                screen.get("density_predictor_damping"),
+            ),
+            "density_parameter_trust_threshold": (
+                args.density_parameter_trust_threshold,
+                screen.get("density_parameter_trust_threshold"),
+            ),
+            "density_parameter_trust_minimum_scale": (
+                args.density_parameter_trust_minimum_scale,
+                screen.get("density_parameter_trust_minimum_scale"),
+            ),
+            "density_predictor_corrector_threshold": (
+                args.density_predictor_corrector_threshold,
+                screen.get("density_predictor_corrector_threshold"),
+            ),
+        }
+        v3_drift = [
+            key
+            for key, (actual, expected) in v3_numeric.items()
+            if expected is None
+            or actual is None
+            or not math.isclose(
+                float(actual), float(expected), rel_tol=0.0, abs_tol=1.0e-15
+            )
+        ]
+        if not args.alternating_hvp_updates:
+            v3_drift.append("alternating_hvp_updates")
+        if not args.density_parameter_trust_region:
+            v3_drift.append("density_parameter_trust_region")
+        if not args.density_predictor_corrector_first:
+            v3_drift.append("density_predictor_corrector_first")
+        if args.evaluation_mode == "full":
+            expected_steps = 5 if args.resume_capacity_optimizer else 10
+            if (
+                args.max_steps != expected_steps
+                or args.checkpoint_interval != int(formal.get("checkpoint_interval", -1))
+                or args.eval_interval != int(formal.get("evaluation_interval", -1))
+            ):
+                v3_drift.append("formal_schedule")
+        if v3_drift:
+            raise ValueError(
+                "v3 trust/corrector settings drifted from protocol: "
+                + ", ".join(v3_drift)
+            )
     frozen_asset_reuse = protocol.get("frozen_train_only_asset_reuse")
     if frozen_asset_reuse is not None:
         parent_binding_valid = (
@@ -2535,6 +2682,54 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     != args.egf_label_density_replay
                 ):
                     failures.append("capacity checkpoint E/G/F replay-branch mismatch")
+                if protocol.get("protocol_id") == "qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3":
+                    replay_lr = (
+                        args.replay_learning_rate
+                        if args.replay_learning_rate is not None
+                        else args.learning_rate
+                    )
+                    checkpoint_numeric = {
+                        "replay_learning_rate": replay_lr,
+                        "hvp_learning_rate": (
+                            args.hvp_learning_rate
+                            if args.hvp_learning_rate is not None
+                            else args.learning_rate
+                        ),
+                        "gradient_clip_norm": args.gradient_clip_norm,
+                        "weight_decay": args.weight_decay,
+                        "replay_update_period": args.replay_update_period,
+                        "density_predictor_damping": args.density_predictor_damping,
+                        "density_parameter_trust_threshold": (
+                            args.density_parameter_trust_threshold
+                        ),
+                        "density_parameter_trust_minimum_scale": (
+                            args.density_parameter_trust_minimum_scale
+                        ),
+                        "density_predictor_corrector_threshold": (
+                            args.density_predictor_corrector_threshold
+                        ),
+                    }
+                    for key, expected in checkpoint_numeric.items():
+                        recorded = capacity_state.get(key)
+                        if recorded is None or not math.isclose(
+                            float(recorded),
+                            float(expected),
+                            rel_tol=0.0,
+                            abs_tol=1.0e-15,
+                        ):
+                            failures.append(f"capacity checkpoint {key} mismatch")
+                    checkpoint_boolean = {
+                        "density_parameter_trust_region": (
+                            args.density_parameter_trust_region
+                        ),
+                        "density_predictor_corrector_first": (
+                            args.density_predictor_corrector_first
+                        ),
+                        "alternating_hvp_updates": args.alternating_hvp_updates,
+                    }
+                    for key, expected in checkpoint_boolean.items():
+                        if capacity_state.get(key) is not expected:
+                            failures.append(f"capacity checkpoint {key} mismatch")
         elif args.resume_capacity_optimizer:
             failures.append(
                 "--resume-capacity-optimizer requires a bound capacity checkpoint"
@@ -2703,6 +2898,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             context, molecules, density_args, refresh_index=0
         )
     )
+    _assert_density_refresh_cost_gates(
+        density_rows, protocol, density_args, source_capacity_step
+    )
     _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
     hessian_rows = []
     if (
@@ -2771,6 +2969,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "gradient_clip_norm": args.gradient_clip_norm,
         "weight_decay": args.weight_decay,
+        "alternating_hvp_updates": args.alternating_hvp_updates,
+        "replay_update_period": args.replay_update_period,
         "egf_label_density_replay": args.egf_label_density_replay,
         "proxy_hvp_fallback_allowed": False,
         "validation_accessed": False,
@@ -2863,6 +3063,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 refreshed = _refresh_densities(
                     context, molecules, density_args, refresh_index=refresh_index
                 )
+            _assert_density_refresh_cost_gates(
+                refreshed, protocol, density_args, source_capacity_step
+            )
             density_rows.extend(refreshed)
             _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
             density_parameter_step = current_parameter_step
@@ -3536,6 +3739,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     refresh_index=refresh_index,
                 )
             )
+            _assert_density_refresh_cost_gates(
+                refreshed, protocol, density_args, source_capacity_step
+            )
             density_rows.extend(refreshed)
             _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
             density_parameter_step = reported_step
@@ -3665,6 +3871,19 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             bool(row.get("response_predictor_fast_path_succeeded", False))
             for row in transition_density_rows
         ),
+        "total_point_elapsed_s": float(
+            sum(
+                float(row.get("total_point_elapsed_s", 0.0))
+                for row in transition_density_rows
+            )
+        ),
+        "maximum_point_elapsed_s": max(
+            (
+                float(row.get("total_point_elapsed_s", 0.0))
+                for row in transition_density_rows
+            ),
+            default=0.0,
+        ),
         "all_strictly_converged": bool(transition_density_rows)
         and all(
             float(row.get("final_gradient_norm", math.inf))
@@ -3672,6 +3891,46 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             for row in transition_density_rows
         ),
     }
+    accepted_trust_scales = [
+        float(row["density_parameter_predictor_accepted_scale"])
+        for row in loss_rows
+        if "density_parameter_predictor_accepted_scale" in row
+    ]
+    density_cost_audit["median_parameter_trust_scale"] = (
+        float(np.median(accepted_trust_scales))
+        if accepted_trust_scales
+        else math.nan
+    )
+    density_gates = protocol.get("gates", {})
+    density_cost_gate_required = any(
+        key in density_gates
+        for key in (
+            "density_refresh_max_cycles",
+            "density_fallback_full_count",
+            "median_parameter_trust_scale_min",
+        )
+    )
+    density_cost_gate_passed = True
+    if density_cost_gate_required:
+        density_cost_gate_passed = bool(transition_density_rows) and bool(
+            density_cost_audit["all_strictly_converged"]
+        )
+    if "density_refresh_max_cycles" in density_gates:
+        density_cost_gate_passed = density_cost_gate_passed and (
+            density_cost_audit["maximum_cycles"]
+            <= int(density_gates["density_refresh_max_cycles"])
+        )
+    if "density_fallback_full_count" in density_gates:
+        density_cost_gate_passed = density_cost_gate_passed and (
+            density_cost_audit["full_fallback_count"]
+            <= int(density_gates["density_fallback_full_count"])
+        )
+    if "median_parameter_trust_scale_min" in density_gates:
+        density_cost_gate_passed = density_cost_gate_passed and (
+            bool(accepted_trust_scales)
+            and density_cost_audit["median_parameter_trust_scale"]
+            >= float(density_gates["median_parameter_trust_scale_min"])
+        )
     summary = {
         "definition": checkpoint_definition,
         "protocol_id": protocol["protocol_id"],
@@ -3773,6 +4032,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "stopped_early": stopped_early,
         "density_refresh_count": refresh_index + 1,
         "density_cost_audit": density_cost_audit,
+        "density_cost_gate_passed": density_cost_gate_passed,
         "density_response_unroll_steps": args.density_response_unroll_steps,
         "density_response_unroll_lr": args.density_response_unroll_lr,
         "connect_lagrange_multiplier_response": (
@@ -3807,6 +4067,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "energy_force_regression_gate_passed": energy_force_gate_passed,
         "energy_force_relative_regression_max": energy_force_regression_limit,
         "stage1_gate_passed": bool(final_metrics)
+        and density_cost_gate_passed
         and energy_force_gate_passed
         and (
             not args.strict_active_density_refresh

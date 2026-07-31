@@ -14,6 +14,7 @@ from scripts.qm9_complete_total_capacity_train import (
     MoleculeState,
     RelaxedPoint,
     _assert_training_density_stationarity,
+    _assert_density_refresh_cost_gates,
     _center_density_checkpoint_state,
     _density_refresh_scope,
     _hutchinson_direction,
@@ -199,6 +200,37 @@ def test_response_predictor_trust_scales_are_bounded_halvings():
     ]
     with pytest.raises(ValueError, match="minimum scale"):
         _response_predictor_trial_scales(0.0)
+
+
+def test_density_refresh_cost_gates_fail_closed_on_long_transition():
+    protocol = {
+        "gates": {
+            "density_refresh_max_cycles": 500,
+            "density_fallback_full_count": 0,
+        }
+    }
+    density_args = SimpleNamespace(fallback_max_cycle=10000)
+    with pytest.raises(RuntimeError, match="cycle gate"):
+        _assert_density_refresh_cost_gates(
+            [{"parameter_step": 1, "kind": "base", "cycles": 501}],
+            protocol,
+            density_args,
+            source_capacity_step=0,
+        )
+    with pytest.raises(RuntimeError, match="full-fallback gate"):
+        _assert_density_refresh_cost_gates(
+            [
+                {
+                    "parameter_step": 1,
+                    "kind": "base",
+                    "cycles": 12,
+                    "fallback_cycles": 10000,
+                }
+            ],
+            protocol,
+            density_args,
+            source_capacity_step=0,
+        )
 
 
 def test_checkpoint_density_state_preserves_certification_boundary():
