@@ -1,6 +1,6 @@
 # QM9 Force/Hessian Project Handoff
 
-Last updated: 2026-07-31 20:55 Asia/Shanghai
+Last updated: 2026-07-31 22:15 Asia/Shanghai
 
 ## Purpose
 
@@ -167,6 +167,97 @@ Protocol SHA256:
 `05388f09d09121106c02fab28a7b0d21979fb9c2ea42633b170463c7a090d72b`.
 Summary/training/density CSV SHA256 values are respectively
 `0622a82c...538b661`, `f5f36998...564641`, and `d11c07fc...d2fb`.
+
+### Density-stationarity trust/corrector formal result (2026-07-31)
+
+The registered v3 ten-step formal run is complete on train parent `0016298`.
+It starts again from the untouched released article checkpoint, uses the same
+seed and probe sequence as v2, retains replay/HVP learning rates of `1e-7`,
+and computes complete 39-direction analytic relaxed Hessians at steps 0 and
+10. The step-0 metrics reproduce v2 to numerical precision, so the comparison
+isolates the density/parameter transition change. Validation and Test100 were
+not accessed.
+
+All ten parameter transitions pass the density-cost gates. The trust scales
+are `1, 0.5, 0.25, 0.25, 1, 0.5, 0.5, 0.5, 0.5, 1`; both replay updates accept
+the full step. Refresh cycles are `8, 10, 7, 9, 9, 14, 11, 8, 9, 10`. Thus:
+
+- total transition cycles fall from v2's 30,781 to 95, a 99.691% reduction
+  (approximately 324-fold);
+- maximum transition cost is 14 cycles, versus 10,270 in the combined v2
+  audit;
+- all ten corrector-first attempts succeed and full fallback count is zero;
+- median trust scale is `0.5`, above the frozen `0.25` gate;
+- the ten final projected density gradients are below `5e-9`;
+- the correctors use 61 LBFGS closures, 34 Newton energy evaluations, and
+  2,796 total PCG iterations, taking 63.08 s at the refreshed points;
+- the one-time article-checkpoint initialization takes 621 cycles and is
+  reported separately rather than counted as a parameter transition.
+
+The run completes without the v2 step-6 OOM. Peak allocated GPU memory is
+77,341 MiB, maximum RSS is 71,515 MiB, and total wall time including both
+full-39 evaluations is 4,039.9 s. The step-5 checkpoint contains its center
+density and the run crosses the old interruption point without a resume.
+
+The physical comparison is:
+
+| metric | step 0 | v2 step 10 | v3 trust step 10 | v3 relative change |
+| --- | ---: | ---: | ---: | ---: |
+| Relative Frobenius | 1.81813482 | 1.78874982 | 1.80479003 | -0.734% |
+| MAE (Ha/Bohr^2) | 0.05864775 | 0.05840789 | 0.05853407 | -0.194% |
+| RMSE (Ha/Bohr^2) | 0.15435100 | 0.15185635 | 0.15321809 | -0.734% |
+| direction-HVP median relative error | 1.860450 | 1.827301 | 1.846205 | -0.766% |
+| direction-HVP P90 relative error | 2.617930 | 2.592008 | 2.602074 | -0.606% |
+| direction-HVP maximum relative error | 5.206214 | 5.212822 | 5.208959 | +0.053% |
+| complete-total force MAE (Ha/Bohr) | 0.07749919 | 0.07747370 | 0.07748614 | -0.017% |
+| total-energy absolute error (Ha) | 0.00036958 | 0.00041337 | 0.00038320 | +3.684% |
+
+The complete Hessian is 39/39, its base projected density gradient is
+`1.03e-10`, maximum response residual is `7.47e-13`, and raw symmetry maximum
+absolute error remains `4.62e-6`. The density-cost and E/F regression gates
+both pass. The aggregate Stage-1 gate remains false because its frozen
+absolute Hessian requirement is Relative Frobenius `<=0.90`, not because of a
+density, E/F, response, completeness, or finiteness failure.
+
+Same-definition vibrational postprocessing gives:
+
+| metric | step 0 | v2 step 10 | v3 trust step 10 | v3 relative change |
+| --- | ---: | ---: | ---: | ---: |
+| frequency MAE (cm^-1) | 959.535 | 936.711 | 951.245 | -0.864% |
+| frequency RMSE (cm^-1) | 1306.385 | 1295.790 | 1302.414 | -0.304% |
+| maximum frequency error (cm^-1) | 3465.189 | 3429.364 | 3449.649 | -0.448% |
+| mean mode overlap | 0.594695 | 0.586853 | 0.594179 | -0.087% |
+| model/PBE imaginary modes | 12 / 2 | 11 / 2 | 12 / 2 | unchanged |
+
+Decision: retain the KKT density predictor, stationarity checks,
+corrector-first Newton-PCG path, checkpoint density state, and fail-closed
+cost accounting. They remove the recurring 10k refresh bottleneck and restore
+the energy gate. Do not lower replay LR next: both replay steps accepted
+`alpha=1` and refreshed in 9/10 cycles, so replay is not the cause. However,
+do not scale the current hard-threshold trust rule yet. The accepted parameter
+step norms sum to about 65.5% of the raw AdamW step norms, while the Relative
+Frobenius improvement is only 45.4% of v2's improvement. The method preserves
+the direction of Hessian/frequency learning but is too conservative and the
+absolute errors remain far from acceptable.
+
+The next P0 should preserve the density preconditioner but replace permanent
+step truncation with bounded continuation/substeps toward the full AdamW
+update. Each substep must satisfy the same stationarity/corrector and
+`<=500`-cycle gates. First compare this on the same four-HVP trajectory, with
+all rejected trust candidates persisted; only then run another ten-step
+full-39 formal. A small trust-threshold sensitivity check is a secondary
+option. Do not access validation or Test100 and do not expand molecule count
+before the one-parent comparison preserves materially more of v2's Hessian
+gain.
+
+Formal directory:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3/0016298_hvp_trust_formal_s10_v3_20260731`.
+Final checkpoint SHA256:
+`6cede865a50749d77e39724f368638266dee9c5dd074b7bfde61361ad0882665`.
+Summary/training/density/final-Hessian SHA256 values are respectively
+`89151fbe...e345a6`, `05f40a8f...b71620`, `6e510def...679c7`, and
+`9602b5f1...578ba6`. The analytic vibrational summary SHA256 is
+`02328b2f...505970`.
 
 ### Six-direction Rademacher EGFH result (2026-07-31)
 
