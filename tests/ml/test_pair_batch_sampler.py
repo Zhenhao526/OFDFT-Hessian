@@ -91,6 +91,39 @@ def test_parent_pair_batch_sampler_shards_whole_batches_across_ranks(tmp_path):
     assert set(rank_batches[0]).isdisjoint(rank_batches[1])
 
 
+def test_parent_pair_batch_sampler_can_place_three_pairs_in_one_batch(tmp_path):
+    paths = []
+    expected_pairs = []
+    for source in range(6):
+        pair = []
+        for sign in (-1, 1):
+            path = tmp_path / f"{source}_{sign}.zarr"
+            _write_reference(path, source=source, pair_id=1, sign=sign)
+            paths.append(path)
+            pair.append(3 * (len(paths) - 1) + 2)
+        expected_pairs.append(set(pair))
+    _add_ordinary_paths(tmp_path, paths, count=4)
+    sampler = ParentPairBatchSampler(
+        _Dataset(paths),
+        batch_size=12,
+        pairs_per_batch=3,
+        shuffle=False,
+        num_replicas=1,
+        rank=0,
+    )
+
+    batches = [set(batch) for batch in sampler]
+
+    assert len(batches) == 2
+    assert all(len(batch) == 12 for batch in batches)
+    assert all(
+        sum(pair <= batch for pair in expected_pairs) == 3 for batch in batches
+    )
+    assert all(
+        sum(pair <= batch for batch in batches) == 1 for pair in expected_pairs
+    )
+
+
 def test_parent_pair_batch_sampler_can_infer_verified_filename_convention(tmp_path):
     source = tmp_path / "QM9PBEForceRandom1000PairedTrain"
     paths = [

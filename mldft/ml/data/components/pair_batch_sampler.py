@@ -27,6 +27,7 @@ class ParentPairBatchSampler(Sampler[list[int]]):
         rank: int | None = None,
         pair_source_markers: list[str] | tuple[str, ...] | None = None,
         infer_pair_metadata_from_filename: bool = False,
+        pairs_per_batch: int = 1,
         pair_replay_sidecar_dir: str | Path | None = None,
         pair_replay_interval: int = 1,
         pair_replay_phase: int = 0,
@@ -62,6 +63,9 @@ class ParentPairBatchSampler(Sampler[list[int]]):
         self.infer_pair_metadata_from_filename = bool(
             infer_pair_metadata_from_filename
         )
+        if pairs_per_batch <= 0:
+            raise ValueError("pairs_per_batch must be positive")
+        self.pairs_per_batch = int(pairs_per_batch)
         self.pair_replay_sidecar_dir = (
             None if pair_replay_sidecar_dir is None else Path(pair_replay_sidecar_dir)
         )
@@ -81,6 +85,8 @@ class ParentPairBatchSampler(Sampler[list[int]]):
         self.pairs, self.other_indices = self._index_dataset()
         if not self.pairs:
             raise ValueError("No complete exact geometry pairs found in the training dataset")
+        if self.pairs_per_batch > len(self.pairs):
+            raise ValueError("pairs_per_batch exceeds the number of available pairs")
         self.hvp_replay_indices = self._index_hvp_replay()
         if self.hvp_replay_per_batch:
             if not self.hvp_replay_indices:
@@ -249,7 +255,7 @@ class ParentPairBatchSampler(Sampler[list[int]]):
         )
         fill_pattern = [
             self.batch_size
-            - (2 if pair_active(index) else 0)
+            - (2 * self.pairs_per_batch if pair_active(index) else 0)
             - (1 if hvp_active(index) else 0)
             for index in range(period)
         ]
@@ -261,14 +267,14 @@ class ParentPairBatchSampler(Sampler[list[int]]):
 
         n_batches = 0
         ordinary_capacity = 0
-        pair_batches = 0
+        pair_count = 0
         hvp_batches = 0
         while (
-            pair_batches < len(pair_order)
+            pair_count < len(pair_order)
             or (self.hvp_replay_per_batch and hvp_batches < len(hvp_indices))
             or (can_replay_ordinary and ordinary_capacity < len(other_indices))
         ):
-            pair_batches += int(pair_active(n_batches))
+            pair_count += self.pairs_per_batch * int(pair_active(n_batches))
             hvp_batches += int(hvp_active(n_batches))
             ordinary_capacity += fill_pattern[n_batches % period]
             n_batches += 1
@@ -280,9 +286,12 @@ class ParentPairBatchSampler(Sampler[list[int]]):
         for batch_index in range(n_batches):
             batch = []
             if pair_active(batch_index):
-                pair = self.pairs[int(pair_order[pair_cursor % len(pair_order)])]
-                batch.extend(pair)
-                pair_cursor += 1
+                for offset in range(self.pairs_per_batch):
+                    pair = self.pairs[
+                        int(pair_order[(pair_cursor + offset) % len(pair_order)])
+                    ]
+                    batch.extend(pair)
+                pair_cursor += self.pairs_per_batch
             if hvp_active(batch_index):
                 batch.append(int(hvp_indices[hvp_cursor % len(hvp_indices)]))
                 hvp_cursor += 1

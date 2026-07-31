@@ -5,15 +5,15 @@ ROOT=/home/shenwei01/xzh_node02_20260724
 REPO="$ROOT/work/structures25"
 DATASET_NAME=QM9PBEForceEGFH10MultiDir6V1
 DATASET_ROOT="$ROOT/data/$DATASET_NAME"
-BASELINE_RUN="$ROOT/runs/qm9_graphformer_egfh10_multidir6_article_warmstart_s100_v1"
+BASELINE_RUN="$ROOT/runs/qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_s100_v1"
 BASELINE_TENSORBOARD="$BASELINE_RUN/tensorboard_summary.json"
 BASELINE_SUMMARY="$BASELINE_RUN/summary.json"
-BASELINE_CHECKPOINT="$ROOT/models/train/runs/qm9_graphformer_egfh10_multidir6_article_warmstart_s100_v1/checkpoints/last.ckpt"
-RUN_ROOT="$ROOT/runs/qm9_graphformer_egfh10_multidir6_convergence_v1"
+BASELINE_CHECKPOINT="$ROOT/models/train/runs/qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_s100_v1/checkpoints/last.ckpt"
+RUN_ROOT="$ROOT/runs/qm9_graphformer_egfh10_multidir6_effbatch12_convergence_v1"
 DEVICE="${EGFH10_DEVICE:-0}"
 START_STEP=200
 STEP_INCREMENT=100
-MIN_CONVERGENCE_STEP="${EGFH10_MIN_CONVERGENCE_STEP:-600}"
+MIN_CONVERGENCE_STEP="${EGFH10_MIN_CONVERGENCE_STEP:-200}"
 MAX_STEP="${EGFH10_MAX_STEP:-6000}"
 RELATIVE_TOLERANCE="${EGFH10_RELATIVE_TOLERANCE:-0.02}"
 
@@ -44,7 +44,7 @@ EXPECTED_BASELINE_SHA="$(
   echo "Missing multi-direction EGFH10 dataset manifest." >&2
   exit 1
 }
-if (( MIN_CONVERGENCE_STEP < 600 ||
+if (( MIN_CONVERGENCE_STEP < 200 ||
       MAX_STEP < MIN_CONVERGENCE_STEP ||
       MAX_STEP % STEP_INCREMENT != 0 )); then
   echo "Invalid multi-direction convergence step limits." >&2
@@ -72,7 +72,7 @@ for ((target_step = START_STEP; target_step <= MAX_STEP; target_step += STEP_INC
     source_checkpoint="$BASELINE_CHECKPOINT"
     expected_source_sha="$EXPECTED_BASELINE_SHA"
   else
-    source_checkpoint="$ROOT/models/train/runs/qm9_graphformer_egfh10_multidir6_article_warmstart_convergence_s${source_step}_v1/checkpoints/last.ckpt"
+    source_checkpoint="$ROOT/models/train/runs/qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_convergence_s${source_step}_v1/checkpoints/last.ckpt"
     source_summary="$RUN_ROOT/s${source_step}/summary.json"
     [[ -f "$source_summary" ]] || {
       echo "Missing source-stage summary: $source_summary" >&2
@@ -93,7 +93,7 @@ for ((target_step = START_STEP; target_step <= MAX_STEP; target_step += STEP_INC
     exit 1
   }
 
-  train_name="qm9_graphformer_egfh10_multidir6_article_warmstart_convergence_s${target_step}_v1"
+  train_name="qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_convergence_s${target_step}_v1"
   train_root="$ROOT/models/train/runs/$train_name"
   stage_root="$RUN_ROOT/s${target_step}"
   mkdir -p "$train_root" "$stage_root/logs"
@@ -114,6 +114,9 @@ for ((target_step = START_STEP; target_step <= MAX_STEP; target_step += STEP_INC
         weight_ckpt_path=null \
         "data.dataset_name=$DATASET_NAME" \
         "data.datamodule.pair_source_markers=[$DATASET_NAME]" \
+        data.datamodule.batch_size=12 \
+        +data.datamodule.pairs_per_batch=3 \
+        trainer.accumulate_grad_batches=1 \
         "trainer.max_steps=$target_step" \
         trainer.max_epochs=100 \
         trainer.accelerator=gpu trainer.devices=1 trainer.strategy=auto \
@@ -163,7 +166,7 @@ if last_logged_step + 1 != target_step or count != target_step - source_step:
 summary = {
     "protocol_id": (
         "qm9_graphformer_egfh10_multidir6_article_warmstart_"
-        f"convergence_s{target_step}_v1"
+        f"effbatch12_convergence_s{target_step}_v1"
     ),
     "initialization": "continued_multidirection_article_warmstart_trajectory",
     "source_optimizer_step": source_step,
@@ -179,6 +182,10 @@ summary = {
     "molecule_count": 10,
     "directions_per_molecule": 6,
     "geometry_count": 130,
+    "physical_batch_size": 12,
+    "complete_pairs_per_step": 3,
+    "graphs_per_optimizer_step": 12,
+    "gradient_accumulation": 1,
     "loss_weights": {"E": 0.1, "G": 0.8, "F": 1.0, "H": 0.01},
     "validation_accessed": False,
     "test100_accessed": False,
@@ -224,8 +231,8 @@ PY
     echo "Multi-direction training-loss convergence met at step $target_step."
     EGFH10_MULTIDIR_TRAIN_ROOT="$train_root" \
     EGFH10_MULTIDIR_TRAIN_SUMMARY="$stage_root/summary.json" \
-    EGFH10_MULTIDIR_RUN_NAME="EGFH10MultiDir6ConvergedS${target_step}" \
-    EGFH10_MULTIDIR_HESSIAN_OUT="$ROOT/runs/qm9_graphformer_egfh10_multidir6_total_hessian_vibration_converged_s${target_step}_v1" \
+    EGFH10_MULTIDIR_RUN_NAME="EGFH10MultiDir6EffBatch12ConvergedS${target_step}" \
+    EGFH10_MULTIDIR_HESSIAN_OUT="$ROOT/runs/qm9_graphformer_egfh10_multidir6_effbatch12_total_hessian_vibration_converged_s${target_step}_v1" \
       bash scripts/run_qm9_egfh10_multidir6_s100_hessian_compare_node02.sh
     exit 0
   fi
