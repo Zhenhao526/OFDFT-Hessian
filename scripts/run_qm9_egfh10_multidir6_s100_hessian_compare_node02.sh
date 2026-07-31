@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT=/home/shenwei01/xzh_node02_20260724
 REPO="$ROOT/work/structures25"
-DATASET="$ROOT/data/QM9PBEForceEGFH10MultiDir6V1"
+DATASET="$ROOT/data/QM9PBEForceEGFH10Rademacher6V1"
 REFERENCE_ROOT="$ROOT/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/pbe_hessian_train20"
 REFERENCE_DIR="$REFERENCE_ROOT/cache"
 REFERENCE_MANIFEST="$REFERENCE_ROOT/manifest.json"

@@ -3,14 +3,14 @@ set -euo pipefail
 
 ROOT=/home/shenwei01/xzh_node02_20260724
 REPO="$ROOT/work/structures25"
-DATASET_NAME=QM9PBEForceEGFH10MultiDir6V1
+DATASET_NAME=QM9PBEForceEGFH10Rademacher6V1
 DATASET_ROOT="$ROOT/data/$DATASET_NAME"
 ARTICLE_RUN="$ROOT/runs/qm9_graphformer_egfh10_article_warmstart_s100_v1"
 ADAPTED_CHECKPOINT="$ARTICLE_RUN/article_weight_adapter/article_qm9_current_compat.ckpt"
 EXPECTED_ADAPTED_SHA=aafbdb63edc0a34fa7687ca97b55b73aa2e2a3c3bf4e6ce2b255c5b3bbe347b1
-TRAIN_NAME=qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_s100_v1
+TRAIN_NAME=qm9_graphformer_egfh10_rademacher6_effbatch12_article_warmstart_s100_v1
 TRAIN_ROOT="$ROOT/models/train/runs/$TRAIN_NAME"
-RUN_ROOT="$ROOT/runs/qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_s100_v1"
+RUN_ROOT="$ROOT/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_article_warmstart_s100_v1"
 DEVICE="${EGFH10_DEVICE:-0}"
 
 [[ "$(hostname)" == node02 ]] || {
@@ -96,7 +96,7 @@ if int(total["last"]["step"]) + 1 != 100 or int(total["count"]) != 100:
 
 summary = {
     "protocol_id": (
-        "qm9_graphformer_egfh10_multidir6_effbatch12_"
+        "qm9_graphformer_egfh10_rademacher6_effbatch12_"
         "article_warmstart_s100_v1"
     ),
     "controlled_change": (
@@ -112,6 +112,7 @@ summary = {
     "final_optimizer_step": 100,
     "molecule_count": 10,
     "directions_per_molecule": 6,
+    "perturbation_distribution": "coordinatewise_rademacher",
     "geometry_count": 130,
     "physical_batch_size": 12,
     "complete_pairs_per_step": 3,

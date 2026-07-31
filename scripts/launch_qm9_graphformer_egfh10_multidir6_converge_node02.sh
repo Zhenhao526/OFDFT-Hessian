@@ -3,13 +3,13 @@ set -euo pipefail
 
 ROOT=/home/shenwei01/xzh_node02_20260724
 REPO="$ROOT/work/structures25"
-DATASET_NAME=QM9PBEForceEGFH10MultiDir6V1
+DATASET_NAME=QM9PBEForceEGFH10Rademacher6V1
 DATASET_ROOT="$ROOT/data/$DATASET_NAME"
-BASELINE_RUN="$ROOT/runs/qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_s100_v1"
+BASELINE_RUN="$ROOT/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_article_warmstart_s100_v1"
 BASELINE_TENSORBOARD="$BASELINE_RUN/tensorboard_summary.json"
 BASELINE_SUMMARY="$BASELINE_RUN/summary.json"
-BASELINE_CHECKPOINT="$ROOT/models/train/runs/qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_s100_v1/checkpoints/last.ckpt"
-RUN_ROOT="$ROOT/runs/qm9_graphformer_egfh10_multidir6_effbatch12_convergence_v1"
+BASELINE_CHECKPOINT="$ROOT/models/train/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_article_warmstart_s100_v1/checkpoints/last.ckpt"
+RUN_ROOT="$ROOT/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_convergence_v1"
 DEVICE="${EGFH10_DEVICE:-0}"
 START_STEP=200
 STEP_INCREMENT=100
@@ -72,7 +72,7 @@ for ((target_step = START_STEP; target_step <= MAX_STEP; target_step += STEP_INC
     source_checkpoint="$BASELINE_CHECKPOINT"
     expected_source_sha="$EXPECTED_BASELINE_SHA"
   else
-    source_checkpoint="$ROOT/models/train/runs/qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_convergence_s${source_step}_v1/checkpoints/last.ckpt"
+    source_checkpoint="$ROOT/models/train/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_article_warmstart_convergence_s${source_step}_v1/checkpoints/last.ckpt"
     source_summary="$RUN_ROOT/s${source_step}/summary.json"
     [[ -f "$source_summary" ]] || {
       echo "Missing source-stage summary: $source_summary" >&2
@@ -93,7 +93,7 @@ for ((target_step = START_STEP; target_step <= MAX_STEP; target_step += STEP_INC
     exit 1
   }
 
-  train_name="qm9_graphformer_egfh10_multidir6_effbatch12_article_warmstart_convergence_s${target_step}_v1"
+  train_name="qm9_graphformer_egfh10_rademacher6_effbatch12_article_warmstart_convergence_s${target_step}_v1"
   train_root="$ROOT/models/train/runs/$train_name"
   stage_root="$RUN_ROOT/s${target_step}"
   mkdir -p "$train_root" "$stage_root/logs"
@@ -165,7 +165,7 @@ if last_logged_step + 1 != target_step or count != target_step - source_step:
 
 summary = {
     "protocol_id": (
-        "qm9_graphformer_egfh10_multidir6_article_warmstart_"
+        "qm9_graphformer_egfh10_rademacher6_article_warmstart_"
         f"effbatch12_convergence_s{target_step}_v1"
     ),
     "initialization": "continued_multidirection_article_warmstart_trajectory",
@@ -181,6 +181,7 @@ summary = {
     "additional_optimizer_steps": target_step - source_step,
     "molecule_count": 10,
     "directions_per_molecule": 6,
+    "perturbation_distribution": "coordinatewise_rademacher",
     "geometry_count": 130,
     "physical_batch_size": 12,
     "complete_pairs_per_step": 3,
@@ -231,8 +232,8 @@ PY
     echo "Multi-direction training-loss convergence met at step $target_step."
     EGFH10_MULTIDIR_TRAIN_ROOT="$train_root" \
     EGFH10_MULTIDIR_TRAIN_SUMMARY="$stage_root/summary.json" \
-    EGFH10_MULTIDIR_RUN_NAME="EGFH10MultiDir6EffBatch12ConvergedS${target_step}" \
-    EGFH10_MULTIDIR_HESSIAN_OUT="$ROOT/runs/qm9_graphformer_egfh10_multidir6_effbatch12_total_hessian_vibration_converged_s${target_step}_v1" \
+    EGFH10_MULTIDIR_RUN_NAME="EGFH10Rademacher6EffBatch12ConvergedS${target_step}" \
+    EGFH10_MULTIDIR_HESSIAN_OUT="$ROOT/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_total_hessian_vibration_converged_s${target_step}_v1" \
       bash scripts/run_qm9_egfh10_multidir6_s100_hessian_compare_node02.sh
     exit 0
   fi

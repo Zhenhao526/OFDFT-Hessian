@@ -454,3 +454,48 @@ ten-molecule objective merely to reduce its training loss. Before any larger
 Hessian benchmark, the next experiment should first diagnose why the
 step-1300 functional produces a harder density-optimization landscape, then
 test a held-out force/secant set and a Hessian-relevant validation criterion.
+
+## Rademacher multi-direction replacement
+
+The Gaussian six-direction data preparation was stopped before completion and
+is not used by the next training trajectory. The replacement uses six
+independent coordinatewise Rademacher directions per parent:
+
+\[
+\Delta R_{i\alpha}=0.01\ {\rm Angstrom}\,\xi_{i\alpha},\qquad
+P(\xi_{i\alpha}=+1)=P(\xi_{i\alpha}=-1)=\tfrac12.
+\]
+
+Each direction produces the exact symmetric pair
+`R_plus = R0 + delta_R` and `R_minus = R0 - delta_R`. No translational
+projection is applied, because subtracting the per-axis mean would destroy the
+independent coordinatewise `+1/-1` distribution. Every atomic displacement
+has norm `sqrt(3) * 0.01 Angstrom`, below the configured `0.05 Angstrom`
+per-atom cap, so clipping cannot alter the sign vectors. The force-secant loss
+still divides by the full endpoint separation, so its effective direction is
+the normalized Rademacher vector.
+
+The design is motivated by two related but not identical results:
+
+- Sadegh and Spall, *Optimal random perturbations for stochastic
+  approximation using a simultaneous perturbation gradient approximation*,
+  ACC 1997, DOI `10.1109/ACC.1997.609490`, find the symmetric Bernoulli
+  component distribution optimal under their SPSA asymptotic criteria.
+- Hutchinson, *A stochastic estimator of the trace of the influence matrix
+  for Laplacian smoothing splines*, 1989, DOI
+  `10.1080/03610918908812806`, establishes the minimum-variance sign-vector
+  trace estimator.
+
+Neither theorem directly proves lower full-Hessian prediction error for this
+force-secant regression problem. Here the justified advantages are fixed
+direction norm, equal-magnitude excitation of every Cartesian coordinate, and
+isotropic second moment. The result must still be decided by the frozen
+full-Hessian evaluation.
+
+The new dataset is `QM9PBEForceEGFH10Rademacher6V1`: ten parents, six
+directions per parent, twelve displaced endpoints plus one center per parent,
+for 130 geometries. Training uses a physical batch size of 12 with three
+complete displacement pairs per optimizer step. It starts again from the same
+released-article weight-only initialization, trains to the declared
+50-step-window convergence criterion, and only then runs the strict
+density-relaxed Hessian evaluation.
