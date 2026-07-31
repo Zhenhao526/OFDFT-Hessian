@@ -78,6 +78,10 @@ class RelaxedPoint:
     final_gradient_norm: float
     cycles: int
     total_energy: float
+    initialization_mode: str = "strict_density"
+    predictor_projected_gradient_norm: float | None = None
+    predictor_total_energy: float | None = None
+    predictor_trust_scale: float | None = None
 
 
 @dataclass
@@ -398,6 +402,12 @@ def _density_namespace(args: argparse.Namespace) -> argparse.Namespace:
             "newton_krylov_tolerance": 1.0e-10,
             "newton_diagonal_probes": 8,
             "newton_damping": 1.0e-8,
+            "response_predictor_fast_refine": bool(
+                args.density_predictor_corrector_first
+            ),
+            "response_predictor_fast_refine_threshold": (
+                args.density_predictor_corrector_threshold
+            ),
             "negative_integrated_density_penalty_weight": 0.0,
             "max_xc_memory": 4000,
             "normalize_initial_guess": True,
@@ -420,6 +430,7 @@ def _relax(
     *,
     warm_start: torch.Tensor | None,
     explicit_start: torch.Tensor | None = None,
+    initialization_mode_override: str | None = None,
 ) -> tuple[RelaxedPoint, dict[str, Any]]:
     point = _evaluate_point(
         context,
@@ -431,7 +442,8 @@ def _relax(
         need_force=False,
         initial_coeffs=explicit_start,
         initialization_mode_override=(
-            "previous_refresh" if explicit_start is not None else None
+            initialization_mode_override
+            or ("previous_refresh" if explicit_start is not None else None)
         ),
     )
     metadata = point["optimization_metadata"]
@@ -497,9 +509,49 @@ def _relax(
             final_gradient_norm=final_norm,
             cycles=int(metadata["cycles"]),
             total_energy=float(metadata["final_total_energy"]),
+            initialization_mode="strict_density",
         ),
         metadata,
     )
+
+
+def _optimization_stage_columns(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Flatten density-solver stages so successful refresh costs remain auditable."""
+    krylov_iterations = metadata.get("newton_krylov_iterations") or []
+    return {
+        "initialization_mode": metadata.get("initialization_mode"),
+        "initial_gradient_norm": metadata.get("initial_gradient_norm"),
+        "first_stage_cycles": metadata.get("first_stage_cycles", 0),
+        "first_stage_final_gradient_norm": metadata.get(
+            "first_stage_final_gradient_norm"
+        ),
+        "used_fallback": metadata.get("used_fallback", False),
+        "fallback_cycles": metadata.get("fallback_cycles", 0),
+        "fallback_final_gradient_norm": metadata.get(
+            "fallback_final_gradient_norm"
+        ),
+        "lbfgs_closure_evaluations": metadata.get(
+            "lbfgs_closure_evaluations", 0
+        ),
+        "lbfgs_final_gradient_norm": metadata.get("lbfgs_final_gradient_norm"),
+        "newton_energy_evaluations": metadata.get(
+            "newton_energy_evaluations", 0
+        ),
+        "newton_final_gradient_norm": metadata.get("newton_final_gradient_norm"),
+        "newton_krylov_iterations_total": int(sum(krylov_iterations)),
+        "response_predictor_fast_path_attempted": metadata.get(
+            "response_predictor_fast_path_attempted", False
+        ),
+        "response_predictor_fast_path_used": metadata.get(
+            "response_predictor_fast_path_used", False
+        ),
+        "response_predictor_fast_path_succeeded": metadata.get(
+            "response_predictor_fast_path_succeeded", False
+        ),
+        "response_predictor_fast_path_fallback_reason": metadata.get(
+            "response_predictor_fast_path_fallback_reason"
+        ),
+    }
 
 
 def _refresh_densities(
@@ -534,6 +586,7 @@ def _refresh_densities(
                 "cycles": molecule.base.cycles,
                 "final_gradient_norm": molecule.base.final_gradient_norm,
                 "total_energy": molecule.base.total_energy,
+                **_optimization_stage_columns(metadata),
             }
         )
         for direction in molecule.directions:
@@ -563,6 +616,7 @@ def _refresh_densities(
                         "cycles": relaxed.cycles,
                         "final_gradient_norm": relaxed.final_gradient_norm,
                         "total_energy": relaxed.total_energy,
+                        **_optimization_stage_columns(metadata),
                     }
                 )
     return rows
@@ -584,13 +638,36 @@ def _refresh_base_densities(
             if molecule.base is not None
             else molecule.label_coefficients
         )
-        molecule.base, _ = _relax(
+        predicted_gradient_norm = (
+            molecule.base.predictor_projected_gradient_norm
+            if molecule.base is not None
+            else None
+        )
+        predicted_total_energy = (
+            molecule.base.predictor_total_energy
+            if molecule.base is not None
+            else None
+        )
+        predictor_trust_scale = (
+            molecule.base.predictor_trust_scale
+            if molecule.base is not None
+            else None
+        )
+        initialization_mode = (
+            molecule.base.initialization_mode
+            if molecule.base is not None
+            and molecule.base.initialization_mode
+            in {"parameter_response_prediction", "checkpoint_density_warm_start"}
+            else "previous_refresh"
+        )
+        molecule.base, metadata = _relax(
             context,
             molecule,
             molecule.positions_bohr,
             density_args,
             warm_start=None,
             explicit_start=previous_base,
+            initialization_mode_override=initialization_mode,
         )
         rows.append(
             {
@@ -604,9 +681,51 @@ def _refresh_base_densities(
                 "cycles": molecule.base.cycles,
                 "final_gradient_norm": molecule.base.final_gradient_norm,
                 "total_energy": molecule.base.total_energy,
+                "predictor_projected_gradient_norm": predicted_gradient_norm,
+                "predictor_total_energy": predicted_total_energy,
+                "predictor_trust_scale": predictor_trust_scale,
+                **_optimization_stage_columns(metadata),
             }
         )
     return rows
+
+
+def _response_predictor_trial_scales(minimum_scale: float) -> list[float]:
+    if not 0.0 < minimum_scale <= 1.0:
+        raise ValueError("density predictor trust minimum scale must lie in (0, 1]")
+    scales = []
+    scale = 1.0
+    while scale + 1.0e-15 >= minimum_scale:
+        scales.append(scale)
+        scale *= 0.5
+    return scales
+
+
+def _fixed_energy_stationarity_merit(
+    fixed_energy: Any,
+    coefficients: torch.Tensor,
+    n_electron: int,
+) -> tuple[float, float, float]:
+    variable = coefficients.detach().clone().requires_grad_(True)
+    energy = fixed_energy(variable)
+    gradient = torch.autograd.grad(energy, variable)[0]
+    normalization = fixed_energy.normalization_untransformed.detach().to(variable)
+    projected = gradient - normalization * (
+        torch.dot(normalization, gradient)
+        / torch.dot(normalization, normalization)
+    )
+    target = torch.as_tensor(
+        n_electron,
+        dtype=variable.dtype,
+        device=variable.device,
+    )
+    result = (
+        float(torch.linalg.vector_norm(projected).detach().cpu()),
+        float(energy.detach().cpu()),
+        float((torch.dot(normalization, variable) - target).detach().cpu()),
+    )
+    fixed_energy.sample.coeffs = fixed_energy.sample.coeffs.detach()
+    return result
 
 
 def _predict_next_parameter_step_densities(
@@ -618,20 +737,29 @@ def _predict_next_parameter_step_densities(
     *,
     charge: int,
     damping: float,
-) -> list[float]:
-    """Replace center-density warm starts by exact linear-response predictions."""
+    trust_region: bool,
+    trust_threshold: float,
+    trust_minimum_scale: float,
+) -> list[dict[str, float | str]]:
+    """Apply an exact response predictor and optional stationarity trust region."""
     parameter_steps = [
         new - old
         for old, new in zip(
             old_parameter_values, new_parameter_values, strict=True
         )
     ]
+    raw_parameter_step_norm = math.sqrt(
+        sum(
+            float(torch.sum(step.detach() ** 2).cpu())
+            for step in parameter_steps
+        )
+    )
     with torch.no_grad():
         for parameter, old in zip(
             parameters, old_parameter_values, strict=True
         ):
             parameter.copy_(old)
-    correction_norms: list[float] = []
+    predictions: list[dict[str, Any]] = []
     try:
         for molecule in molecules:
             if molecule.base is None:
@@ -654,21 +782,19 @@ def _predict_next_parameter_step_densities(
                 parameters,
                 parameter_steps,
                 damping=damping,
-            )
-            predicted = coefficients + correction.detach()
-            normalization = fixed_energy.normalization_untransformed
-            target = torch.as_tensor(
-                int(np.sum(molecule.atomic_numbers) - charge),
-                dtype=predicted.dtype,
-                device=predicted.device,
-            )
-            residual = torch.dot(normalization, predicted) - target
-            predicted = predicted - normalization * (
-                residual / torch.dot(normalization, normalization)
-            )
-            molecule.base.coefficients = predicted.detach().cpu()
-            correction_norms.append(
-                float(torch.linalg.vector_norm(correction).detach().cpu())
+            ).detach()
+            fixed_energy.sample.coeffs = fixed_energy.sample.coeffs.detach()
+            predictions.append(
+                {
+                    "molecule": molecule,
+                    "fixed_energy": fixed_energy,
+                    "coefficients": coefficients.detach(),
+                    "correction": correction,
+                    "correction_norm": float(
+                        torch.linalg.vector_norm(correction).detach().cpu()
+                    ),
+                    "n_electron": int(np.sum(molecule.atomic_numbers) - charge),
+                }
             )
     finally:
         with torch.no_grad():
@@ -676,7 +802,121 @@ def _predict_next_parameter_step_densities(
                 parameters, new_parameter_values, strict=True
             ):
                 parameter.copy_(new)
-    return correction_norms
+
+    scales = (
+        _response_predictor_trial_scales(trust_minimum_scale)
+        if trust_region
+        else [1.0]
+    )
+    accepted_scale: float | None = None
+    accepted_trials: list[dict[str, float]] = []
+    for scale in scales:
+        with torch.no_grad():
+            for parameter, old, step in zip(
+                parameters,
+                old_parameter_values,
+                parameter_steps,
+                strict=True,
+            ):
+                parameter.copy_(old + scale * step)
+        trials: list[dict[str, float]] = []
+        all_within_trust = True
+        for prediction in predictions:
+            fixed_energy = prediction["fixed_energy"]
+            candidate = prediction["coefficients"] + scale * prediction["correction"]
+            normalization = fixed_energy.normalization_untransformed.detach().to(candidate)
+            target = torch.as_tensor(
+                prediction["n_electron"],
+                dtype=candidate.dtype,
+                device=candidate.device,
+            )
+            candidate = candidate + normalization * (
+                (target - torch.dot(normalization, candidate))
+                / torch.dot(normalization, normalization)
+            )
+            gradient_norm, total_energy, constraint_residual = (
+                _fixed_energy_stationarity_merit(
+                    fixed_energy, candidate, prediction["n_electron"]
+                )
+            )
+            trials.append(
+                {
+                    "gradient_norm": gradient_norm,
+                    "total_energy": total_energy,
+                    "constraint_residual": constraint_residual,
+                }
+            )
+            if not math.isfinite(gradient_norm) or gradient_norm >= trust_threshold:
+                all_within_trust = False
+        if all_within_trust or not trust_region:
+            accepted_scale = scale
+            accepted_trials = trials
+            break
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if accepted_scale is None:
+        with torch.no_grad():
+            for parameter, old in zip(
+                parameters, old_parameter_values, strict=True
+            ):
+                parameter.copy_(old)
+        maximum = max(
+            (trial["gradient_norm"] for trial in trials),
+            default=math.inf,
+        )
+        raise RuntimeError(
+            "density-stationarity trust region rejected the parameter step: "
+            f"minimum_scale={trust_minimum_scale:g} max_projected_gradient={maximum:.3e} "
+            f"threshold={trust_threshold:.3e}"
+        )
+
+    diagnostics: list[dict[str, float | str]] = []
+    for prediction, trial in zip(predictions, accepted_trials, strict=True):
+        molecule = prediction["molecule"]
+        fixed_energy = prediction["fixed_energy"]
+        candidate = (
+            prediction["coefficients"]
+            + accepted_scale * prediction["correction"]
+        )
+        normalization = fixed_energy.normalization_untransformed.detach().to(candidate)
+        target = torch.as_tensor(
+            prediction["n_electron"],
+            dtype=candidate.dtype,
+            device=candidate.device,
+        )
+        candidate = candidate + normalization * (
+            (target - torch.dot(normalization, candidate))
+            / torch.dot(normalization, normalization)
+        )
+        molecule.base.coefficients = candidate.detach().cpu()
+        molecule.base.initialization_mode = "parameter_response_prediction"
+        molecule.base.predictor_projected_gradient_norm = trial["gradient_norm"]
+        molecule.base.predictor_total_energy = trial["total_energy"]
+        molecule.base.predictor_trust_scale = accepted_scale
+        diagnostics.append(
+            {
+                "molecule_id": molecule.molecule_id,
+                "raw_correction_norm": prediction["correction_norm"],
+                "accepted_correction_norm": (
+                    accepted_scale * prediction["correction_norm"]
+                ),
+                "accepted_scale": accepted_scale,
+                "raw_parameter_step_norm": raw_parameter_step_norm,
+                "accepted_parameter_step_norm": (
+                    accepted_scale * raw_parameter_step_norm
+                ),
+                "projected_gradient_norm": trial["gradient_norm"],
+                "total_energy": trial["total_energy"],
+                "constraint_residual": trial["constraint_residual"],
+            }
+        )
+    predictions.clear()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return diagnostics
 
 
 def _refresh_active_densities(
@@ -696,7 +936,7 @@ def _refresh_active_densities(
             if molecule.base is not None
             else molecule.label_coefficients
         )
-        molecule.base, _ = _relax(
+        molecule.base, metadata = _relax(
             context,
             molecule,
             molecule.positions_bohr,
@@ -716,6 +956,7 @@ def _refresh_active_densities(
                 "cycles": molecule.base.cycles,
                 "final_gradient_norm": molecule.base.final_gradient_norm,
                 "total_energy": molecule.base.total_energy,
+                **_optimization_stage_columns(metadata),
             }
         )
         for direction in selected_by_molecule[molecule.molecule_id]:
@@ -726,7 +967,7 @@ def _refresh_active_densities(
                     molecule.positions_bohr
                     + sign * density_args.displacement * direction.vector
                 )
-                relaxed, _ = _relax(
+                relaxed, metadata = _relax(
                     context,
                     molecule,
                     positions,
@@ -749,6 +990,7 @@ def _refresh_active_densities(
                         "cycles": relaxed.cycles,
                         "final_gradient_norm": relaxed.final_gradient_norm,
                         "total_energy": relaxed.total_energy,
+                        **_optimization_stage_columns(metadata),
                     }
                 )
     return rows
@@ -1559,6 +1801,7 @@ def _save_checkpoint(
         "block-coordinate complete-total relaxed-force secant capacity fit"
     ),
     provenance_update: dict[str, Any] | None = None,
+    center_density_state: dict[str, Any] | None = None,
 ) -> None:
     payload = torch.load(source_checkpoint, map_location="cpu", weights_only=False)
     payload["state_dict"] = {
@@ -1581,6 +1824,10 @@ def _save_checkpoint(
         }
     )
     payload["complete_total_capacity"] = provenance
+    if center_density_state is not None:
+        payload["complete_total_capacity"]["center_density_state"] = (
+            center_density_state
+        )
     if geometry_residual is not None:
         payload["complete_total_capacity"]["geometry_residual"] = {
             "state_dict": {
@@ -1596,6 +1843,108 @@ def _save_checkpoint(
         }
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, output)
+
+
+def _center_density_checkpoint_state(
+    molecules: list[MoleculeState],
+    parameter_step: int,
+    strict_threshold: float,
+) -> dict[str, Any]:
+    entries: dict[str, Any] = {}
+    for molecule in molecules:
+        if molecule.base is None:
+            continue
+        predicted = molecule.base.initialization_mode == "parameter_response_prediction"
+        projected_gradient_norm = (
+            molecule.base.predictor_projected_gradient_norm
+            if predicted
+            else molecule.base.final_gradient_norm
+        )
+        entries[molecule.molecule_id] = {
+            "positions_sha256": hashlib.sha256(
+                np.asarray(molecule.positions_bohr, dtype=np.float64).tobytes()
+            ).hexdigest(),
+            "parameter_step": int(parameter_step),
+            "coefficients": molecule.base.coefficients.detach().cpu(),
+            "projected_gradient_norm": projected_gradient_norm,
+            "total_energy": (
+                molecule.base.predictor_total_energy
+                if predicted
+                else molecule.base.total_energy
+            ),
+            "certified_strict": bool(
+                not predicted
+                and molecule.base.final_gradient_norm < strict_threshold
+            ),
+            "initialization_mode": molecule.base.initialization_mode,
+            "predictor_trust_scale": molecule.base.predictor_trust_scale,
+        }
+    return {
+        "schema_version": 1,
+        "parameter_step": int(parameter_step),
+        "molecules": entries,
+    }
+
+
+def _restore_center_density_checkpoint_state(
+    molecules: list[MoleculeState],
+    capacity_state: dict[str, Any] | None,
+    parameter_step: int,
+) -> int:
+    if not isinstance(capacity_state, dict):
+        return 0
+    snapshot = capacity_state.get("center_density_state")
+    if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 1:
+        return 0
+    if int(snapshot.get("parameter_step", -1)) != int(parameter_step):
+        raise ValueError("checkpoint center-density parameter step mismatch")
+    entries = snapshot.get("molecules")
+    if not isinstance(entries, dict):
+        raise ValueError("checkpoint center-density entries are malformed")
+    restored = 0
+    for molecule in molecules:
+        entry = entries.get(molecule.molecule_id)
+        if not isinstance(entry, dict):
+            continue
+        positions_sha256 = hashlib.sha256(
+            np.asarray(molecule.positions_bohr, dtype=np.float64).tobytes()
+        ).hexdigest()
+        if entry.get("positions_sha256") != positions_sha256:
+            raise ValueError(
+                f"checkpoint density geometry mismatch for {molecule.molecule_id}"
+            )
+        coefficients = entry.get("coefficients")
+        if not isinstance(coefficients, torch.Tensor) or not bool(
+            torch.isfinite(coefficients).all()
+        ):
+            raise ValueError(
+                f"checkpoint density coefficients are invalid for {molecule.molecule_id}"
+            )
+        projected_gradient_norm = float(
+            entry.get("projected_gradient_norm", math.inf)
+        )
+        certified = bool(entry.get("certified_strict", False))
+        molecule.base = RelaxedPoint(
+            positions_bohr=np.asarray(molecule.positions_bohr, dtype=np.float64),
+            coefficients=coefficients.detach().cpu(),
+            final_gradient_norm=(projected_gradient_norm if certified else math.inf),
+            cycles=0,
+            total_energy=float(entry.get("total_energy", math.nan)),
+            initialization_mode=(
+                "checkpoint_density_warm_start"
+                if certified
+                else "parameter_response_prediction"
+            ),
+            predictor_projected_gradient_norm=(
+                None if certified else projected_gradient_norm
+            ),
+            predictor_total_energy=(
+                None if certified else float(entry.get("total_energy", math.nan))
+            ),
+            predictor_trust_scale=entry.get("predictor_trust_scale"),
+        )
+        restored += 1
+    return restored
 
 
 def _selected_directions(
@@ -1745,15 +2094,30 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--hvp-update-period must be positive")
     if args.replay_update_period is not None and args.replay_update_period <= 1:
         raise ValueError("--replay-update-period must be greater than one")
+    if args.replay_learning_rate is not None and args.replay_learning_rate < 0:
+        raise ValueError("--replay-learning-rate must be nonnegative")
+    if args.replay_learning_rate is not None and not args.alternating_hvp_updates:
+        raise ValueError(
+            "--replay-learning-rate requires --alternating-hvp-updates"
+        )
     if args.loss_balance_mode == "pcgrad" and args.alternating_hvp_updates:
         raise ValueError("PCGrad and alternating HVP updates are mutually exclusive")
-    if (
-        args.evaluation_mode == "none"
-        and args.learning_rate != 0.0
-        and not args.two_step_failure_reproduction
+    if args.evaluation_mode == "none" and args.learning_rate != 0.0 and not (
+        args.two_step_failure_reproduction
     ):
         raise ValueError(
             "--evaluation-mode=none is restricted to zero-learning-rate smokes"
+        )
+    if args.evaluation_mode == "density_cost" and (
+        args.max_steps > 4
+        or args.checkpoint_interval != 1
+        or not args.density_parameter_trust_region
+        or not args.density_predictor_corrector_first
+    ):
+        raise ValueError(
+            "--evaluation-mode=density_cost requires max-steps<=4, "
+            "checkpoint-interval=1, --density-parameter-trust-region, and "
+            "--density-predictor-corrector-first"
         )
     if args.two_step_failure_reproduction and (
         args.evaluation_mode != "none"
@@ -1780,6 +2144,26 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "--density-parameter-response-predictor requires "
             "--analytic-relaxed-hvp"
+        )
+    if (
+        args.density_parameter_trust_region
+        or args.density_predictor_corrector_first
+    ) and not args.density_parameter_response_predictor:
+        raise ValueError(
+            "density predictor trust/corrector options require "
+            "--density-parameter-response-predictor"
+        )
+    if args.density_predictor_damping < 0:
+        raise ValueError("--density-predictor-damping must be nonnegative")
+    if args.density_parameter_trust_threshold <= 0:
+        raise ValueError("--density-parameter-trust-threshold must be positive")
+    if not 0.0 < args.density_parameter_trust_minimum_scale <= 1.0:
+        raise ValueError(
+            "--density-parameter-trust-minimum-scale must lie in (0, 1]"
+        )
+    if args.density_predictor_corrector_threshold <= 0:
+        raise ValueError(
+            "--density-predictor-corrector-threshold must be positive"
         )
     if args.integral_directional_second_step <= 0:
         raise ValueError("--integral-directional-second-step must be positive")
@@ -1820,6 +2204,58 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         != "unbiased_internal_hessian_frobenius_squared"
     ):
         raise ValueError("Hybrid rebuild Rademacher estimator protocol drift")
+    if args.evaluation_mode == "density_cost":
+        screen = protocol.get("density_cost_screen")
+        if not isinstance(screen, dict):
+            raise ValueError("density-cost audit requires a frozen protocol screen")
+        actual_replay_lr = (
+            args.replay_learning_rate
+            if args.replay_learning_rate is not None
+            else args.learning_rate
+        )
+        numeric_settings = {
+            "steps": args.max_steps,
+            "learning_rate": args.learning_rate,
+            "replay_learning_rate": actual_replay_lr,
+            "hvp_learning_rate": (
+                args.hvp_learning_rate
+                if args.hvp_learning_rate is not None
+                else args.learning_rate
+            ),
+            "weight_decay": args.weight_decay,
+            "replay_update_period": args.replay_update_period,
+            "gradient_clip_norm": args.gradient_clip_norm,
+            "checkpoint_interval": args.checkpoint_interval,
+            "density_predictor_damping": args.density_predictor_damping,
+            "density_parameter_trust_threshold": (
+                args.density_parameter_trust_threshold
+            ),
+            "density_parameter_trust_minimum_scale": (
+                args.density_parameter_trust_minimum_scale
+            ),
+            "density_predictor_corrector_threshold": (
+                args.density_predictor_corrector_threshold
+            ),
+        }
+        drift = [
+            key
+            for key, value in numeric_settings.items()
+            if key not in screen
+            or not math.isclose(
+                float(value), float(screen[key]), rel_tol=0.0, abs_tol=1.0e-15
+            )
+        ]
+        if (
+            screen.get("evaluation_mode") != args.evaluation_mode
+            or bool(screen.get("alternating_hvp_updates"))
+            != args.alternating_hvp_updates
+        ):
+            drift.append("categorical_settings")
+        if drift:
+            raise ValueError(
+                "density-cost screen settings drifted from protocol: "
+                + ", ".join(drift)
+            )
     frozen_asset_reuse = protocol.get("frozen_train_only_asset_reuse")
     if frozen_asset_reuse is not None:
         parent_binding_valid = (
@@ -2136,6 +2572,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     source_capacity_step = (
         int(capacity_state["step"]) if isinstance(capacity_state, dict) else 0
     )
+    restored_center_density_count = _restore_center_density_checkpoint_state(
+        molecules,
+        capacity_state if isinstance(capacity_state, dict) else None,
+        source_capacity_step,
+    )
     root_source_checkpoint_sha256 = (
         str(capacity_state["root_source_checkpoint_sha256"])
         if isinstance(capacity_state, dict)
@@ -2188,9 +2629,14 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             if parameter.requires_grad
         )
     parameters = [parameter for _, parameter in named_parameters]
+    replay_learning_rate = (
+        args.replay_learning_rate
+        if args.replay_learning_rate is not None
+        else args.learning_rate
+    )
     optimizer = torch.optim.AdamW(
         parameters,
-        lr=args.learning_rate,
+        lr=replay_learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.weight_decay,
     )
@@ -2213,7 +2659,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             )
         optimizer.load_state_dict(capacity_state["optimizer_state_dict"])
         for parameter_group in optimizer.param_groups:
-            parameter_group["lr"] = args.learning_rate
+            parameter_group["lr"] = replay_learning_rate
             parameter_group["betas"] = (args.adam_beta1, args.adam_beta2)
             parameter_group["weight_decay"] = args.weight_decay
         if hvp_optimizer is not None:
@@ -2303,6 +2749,28 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "density_parameter_response_predictor": (
             args.density_parameter_response_predictor
         ),
+        "density_predictor_damping": args.density_predictor_damping,
+        "density_parameter_trust_region": args.density_parameter_trust_region,
+        "density_parameter_trust_threshold": (
+            args.density_parameter_trust_threshold
+        ),
+        "density_parameter_trust_minimum_scale": (
+            args.density_parameter_trust_minimum_scale
+        ),
+        "density_predictor_corrector_first": (
+            args.density_predictor_corrector_first
+        ),
+        "density_predictor_corrector_threshold": (
+            args.density_predictor_corrector_threshold
+        ),
+        "replay_learning_rate": replay_learning_rate,
+        "hvp_learning_rate": (
+            args.hvp_learning_rate
+            if args.hvp_learning_rate is not None
+            else args.learning_rate
+        ),
+        "gradient_clip_norm": args.gradient_clip_norm,
+        "weight_decay": args.weight_decay,
         "egf_label_density_replay": args.egf_label_density_replay,
         "proxy_hvp_fallback_allowed": False,
         "validation_accessed": False,
@@ -2325,6 +2793,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             geometry_residual,
             definition=checkpoint_definition,
             provenance_update=checkpoint_provenance,
+            center_density_state=_center_density_checkpoint_state(
+                molecules,
+                source_capacity_step,
+                args.density_strict_threshold,
+            ),
         )
     loss_rows = []
     refresh_index = 0
@@ -2782,11 +3255,38 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         optimizer_seconds = time.perf_counter() - optimizer_started
+        total_loss_value = float(total_loss.detach().cpu())
+        component_loss_values = {
+            name: float(value.detach().cpu())
+            for name, value in components.items()
+        }
+        gradient_norm_value = float(gradient_norm.detach().cpu())
+
+        # The response predictor and trust trials build a fresh coefficient graph.
+        # Release the much larger relaxed-HVP training graph before doing so.
+        component_values.clear()
+        components.clear()
+        weighted.clear()
+        backward_terms = {}
+        diagnostic_terms = {}
+        replay = None
+        replay_envelope = None
+        base_envelope = None
+        hvp = None
+        target_hvp = None
+        total_loss = None
+        optimizer.zero_grad(set_to_none=True)
+        if hvp_optimizer is not None:
+            hvp_optimizer.zero_grad(set_to_none=True)
+        gc.collect()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
         density_predictor_seconds = 0.0
-        density_predictor_correction_norms: list[float] = []
+        density_predictor_diagnostics: list[dict[str, float | str]] = []
         if args.density_parameter_response_predictor:
             predictor_started = time.perf_counter()
-            density_predictor_correction_norms = (
+            density_predictor_diagnostics = (
                 _predict_next_parameter_step_densities(
                     context,
                     molecules,
@@ -2794,7 +3294,12 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     old_parameter_values,
                     [parameter.detach().clone() for parameter in parameters],
                     charge=args.charge,
-                    damping=args.analytic_response_damping,
+                    damping=args.density_predictor_damping,
+                    trust_region=args.density_parameter_trust_region,
+                    trust_threshold=args.density_parameter_trust_threshold,
+                    trust_minimum_scale=(
+                        args.density_parameter_trust_minimum_scale
+                    ),
                 )
             )
             if device.type == "cuda":
@@ -2802,8 +3307,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             density_predictor_seconds = time.perf_counter() - predictor_started
         row = {
             "step": reported_step,
-            "total_loss": float(total_loss.detach().cpu()),
-            "parameter_gradient_norm_before_clip": float(gradient_norm.detach().cpu()),
+            "total_loss": total_loss_value,
+            "parameter_gradient_norm_before_clip": gradient_norm_value,
             "max_cached_density_gradient_norm": max_density_norm,
             "max_label_density_projected_gradient_norm": (
                 max_label_density_gradient_norm
@@ -2902,13 +3407,53 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "optimizer_seconds": optimizer_seconds,
             "density_parameter_predictor_seconds": density_predictor_seconds,
             "density_parameter_predictor_mean_correction_norm": (
-                float(np.mean(density_predictor_correction_norms))
-                if density_predictor_correction_norms
+                float(
+                    np.mean(
+                        [
+                            float(item["raw_correction_norm"])
+                            for item in density_predictor_diagnostics
+                        ]
+                    )
+                )
+                if density_predictor_diagnostics
                 else 0.0
             ),
             "density_parameter_predictor_max_correction_norm": (
-                max(density_predictor_correction_norms)
-                if density_predictor_correction_norms
+                max(
+                    float(item["raw_correction_norm"])
+                    for item in density_predictor_diagnostics
+                )
+                if density_predictor_diagnostics
+                else 0.0
+            ),
+            "density_parameter_predictor_accepted_scale": (
+                min(
+                    float(item["accepted_scale"])
+                    for item in density_predictor_diagnostics
+                )
+                if density_predictor_diagnostics
+                else 1.0
+            ),
+            "density_parameter_predictor_max_projected_gradient_norm": (
+                max(
+                    float(item["projected_gradient_norm"])
+                    for item in density_predictor_diagnostics
+                )
+                if density_predictor_diagnostics
+                else 0.0
+            ),
+            "density_parameter_predictor_raw_parameter_step_norm": (
+                float(density_predictor_diagnostics[0]["raw_parameter_step_norm"])
+                if density_predictor_diagnostics
+                else 0.0
+            ),
+            "density_parameter_predictor_accepted_parameter_step_norm": (
+                float(
+                    density_predictor_diagnostics[0][
+                        "accepted_parameter_step_norm"
+                    ]
+                )
+                if density_predictor_diagnostics
                 else 0.0
             ),
             "step_seconds": time.perf_counter() - step_started,
@@ -2917,7 +3462,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 if device.type == "cuda"
                 else 0.0
             ),
-            **{f"loss/{name}": float(value.detach().cpu()) for name, value in components.items()},
+            **{
+                f"loss/{name}": value
+                for name, value in component_loss_values.items()
+            },
             **diagnostics,
             **balance_diagnostics,
         }
@@ -2964,6 +3512,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 geometry_residual,
                 definition=checkpoint_definition,
                 provenance_update=checkpoint_provenance,
+                center_density_state=_center_density_checkpoint_state(
+                    molecules,
+                    reported_step,
+                    args.density_strict_threshold,
+                ),
             )
         if evaluate_now:
             refresh_index += 1
@@ -3009,6 +3562,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 geometry_residual,
                 definition=checkpoint_definition,
                 provenance_update=checkpoint_provenance,
+                center_density_state=_center_density_checkpoint_state(
+                    molecules,
+                    reported_step,
+                    args.density_strict_threshold,
+                ),
             )
             if new_metrics:
                 median_relative = float(
@@ -3076,6 +3634,44 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         )
         for row in final_metrics
     )
+    transition_density_rows = [
+        row
+        for row in density_rows
+        if row.get("parameter_step") is not None
+        and int(row["parameter_step"]) > source_capacity_step
+        and row.get("kind") == "base"
+    ]
+    density_cost_audit = {
+        "transition_count": len(transition_density_rows),
+        "total_cycles": int(
+            sum(int(row.get("cycles", 0)) for row in transition_density_rows)
+        ),
+        "maximum_cycles": max(
+            (int(row.get("cycles", 0)) for row in transition_density_rows),
+            default=0,
+        ),
+        "fallback_cycles_total": int(
+            sum(
+                int(row.get("fallback_cycles", 0))
+                for row in transition_density_rows
+            )
+        ),
+        "full_fallback_count": sum(
+            int(row.get("fallback_cycles", 0))
+            >= int(args.density_fallback_max_cycles)
+            for row in transition_density_rows
+        ),
+        "fast_path_success_count": sum(
+            bool(row.get("response_predictor_fast_path_succeeded", False))
+            for row in transition_density_rows
+        ),
+        "all_strictly_converged": bool(transition_density_rows)
+        and all(
+            float(row.get("final_gradient_norm", math.inf))
+            < args.density_strict_threshold
+            for row in transition_density_rows
+        ),
+    }
     summary = {
         "definition": checkpoint_definition,
         "protocol_id": protocol["protocol_id"],
@@ -3086,6 +3682,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "source_checkpoint_sha256": source_checkpoint_sha256,
         "root_source_checkpoint_sha256": root_source_checkpoint_sha256,
         "source_capacity_step": source_capacity_step,
+        "restored_center_density_count": restored_center_density_count,
         "source_is_untouched_original_checkpoint": capacity_state is None,
         "direction_manifest": (
             str(args.direction_manifest)
@@ -3109,6 +3706,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "alternating_hvp_updates": args.alternating_hvp_updates,
         "hvp_update_period": args.hvp_update_period,
         "replay_update_period": args.replay_update_period,
+        "replay_learning_rate": replay_learning_rate,
         "hvp_learning_rate": (
             args.hvp_learning_rate
             if args.hvp_learning_rate is not None
@@ -3137,6 +3735,20 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "density_parameter_response_predictor": (
             args.density_parameter_response_predictor
         ),
+        "density_predictor_damping": args.density_predictor_damping,
+        "density_parameter_trust_region": args.density_parameter_trust_region,
+        "density_parameter_trust_threshold": (
+            args.density_parameter_trust_threshold
+        ),
+        "density_parameter_trust_minimum_scale": (
+            args.density_parameter_trust_minimum_scale
+        ),
+        "density_predictor_corrector_first": (
+            args.density_predictor_corrector_first
+        ),
+        "density_predictor_corrector_threshold": (
+            args.density_predictor_corrector_threshold
+        ),
         "egf_label_density_replay": args.egf_label_density_replay,
         "response_correction_fraction_max": (
             args.response_correction_fraction_max
@@ -3151,6 +3763,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "freeze_base_model": args.freeze_base_model,
         "adam_betas": [args.adam_beta1, args.adam_beta2],
+        "gradient_clip_norm": args.gradient_clip_norm,
+        "weight_decay": args.weight_decay,
         "test100_accessed": False,
         "test100_evaluations_used": 0,
         "validation_accessed": False,
@@ -3158,6 +3772,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "final_step": final_step,
         "stopped_early": stopped_early,
         "density_refresh_count": refresh_index + 1,
+        "density_cost_audit": density_cost_audit,
         "density_response_unroll_steps": args.density_response_unroll_steps,
         "density_response_unroll_lr": args.density_response_unroll_lr,
         "connect_lagrange_multiplier_response": (
@@ -3276,6 +3891,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260717)
     parser.add_argument("--max-steps", type=int, default=1000)
     parser.add_argument("--learning-rate", type=float, default=3.0e-5)
+    parser.add_argument(
+        "--replay-learning-rate",
+        type=float,
+        default=None,
+        help=(
+            "Independent E/G/F replay AdamW learning rate. Defaults to "
+            "--learning-rate; HVP updates remain controlled separately."
+        ),
+    )
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument(
         "--three-body-geometry-residual",
@@ -3369,11 +3993,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--displacement", type=float, default=1.0e-3)
     parser.add_argument(
         "--evaluation-mode",
-        choices=("full", "none"),
+        choices=("full", "density_cost", "none"),
         default="full",
         help=(
-            "Use 'none' only for a zero-learning-rate gradient smoke; formal "
-            "training must retain initial/final full internal-Hessian evaluation."
+            "Use 'density_cost' only for a bounded four-step trust/corrector "
+            "screen; formal training retains initial/final full-Hessian evaluation."
         ),
     )
     parser.add_argument(
@@ -3420,6 +4044,32 @@ def parse_args() -> argparse.Namespace:
             "Use the exact KKT response to the accepted model-parameter step "
             "as the next strict density-corrector initial guess."
         ),
+    )
+    parser.add_argument("--density-predictor-damping", type=float, default=0.0)
+    parser.add_argument(
+        "--density-parameter-trust-region",
+        action="store_true",
+        help=(
+            "Backtrack the accepted AdamW parameter step until the response-predicted "
+            "density satisfies the configured projected-gradient trust threshold."
+        ),
+    )
+    parser.add_argument(
+        "--density-parameter-trust-threshold", type=float, default=5.0e-6
+    )
+    parser.add_argument(
+        "--density-parameter-trust-minimum-scale", type=float, default=1.0 / 128.0
+    )
+    parser.add_argument(
+        "--density-predictor-corrector-first",
+        action="store_true",
+        help=(
+            "For a trusted response-predicted density, run LBFGS/Newton-PCG before "
+            "the legacy Adam chain; failure restarts the untouched legacy path."
+        ),
+    )
+    parser.add_argument(
+        "--density-predictor-corrector-threshold", type=float, default=5.0e-6
     )
     parser.add_argument(
         "--connect-lagrange-multiplier-response",

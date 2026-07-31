@@ -1,6 +1,6 @@
 # QM9 Force/Hessian Project Handoff
 
-Last updated: 2026-07-31 20:13 Asia/Shanghai
+Last updated: 2026-07-31 20:55 Asia/Shanghai
 
 ## Purpose
 
@@ -103,6 +103,70 @@ Protocol SHA256:
 `709a7e47a8a3f62e8577cadbf612ae153f681c8365a3d1ec82b51791e2ab7bd2`.
 Analytic vibration comparison:
 `vibrational_analytic_comparison/summary.json`.
+
+### Density-stationarity trust/corrector screen (2026-07-31)
+
+The registered four-HVP-update v3 density-cost screen is complete on the same
+train parent `0016298`, from the same released article checkpoint and with the
+same seed/probe sequence as v2. A post-hoc trajectory audit first ruled out
+replay LR as the cause of the density cost: all three `~10k` refreshes occurred
+after HVP updates, while the two replay transitions required only 13 and 16
+cycles. The v3 P0 therefore keeps replay and HVP LR at `1e-7` and changes only
+the density/parameter transition:
+
+1. compute the exact constrained parameter-response density prediction;
+2. backtrack the AdamW parameter step over powers of two until the predicted
+   density has projected KKT gradient below `5e-6` under the new model;
+3. send the trusted point directly to LBFGS and the existing eight-probe
+   Jacobi-preconditioned Newton-PCG corrector;
+4. restart the untouched legacy Adam chain if the fast corrector fails;
+5. persist per-stage solver counts and explicitly certified versus predicted
+   center-density checkpoint state.
+
+The screen passes every preregistered density-cost gate:
+
+| parameter step | v2 refresh cycles | v3 refresh cycles | trust scale | fallback cycles | final projected gradient |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 11 | 8 | 1.0 | 0 | 2.29e-10 |
+| 2 | 10,100 | 9 | 0.5 | 0 | 1.86e-10 |
+| 3 | 10,160 | 9 | 0.25 | 0 | 3.17e-9 |
+| 4 | 10,132 | 12 | 0.25 | 0 | 3.91e-9 |
+
+The four transition refreshes fall from 30,403 to 38 total cycles, an
+approximately 800-fold reduction. All four corrector-first attempts succeed;
+no fallback iteration runs, maximum cycles are 12, median trust scale is
+`0.375`, and every final density is below the strict `5e-9` solver target.
+Peak GPU allocation is `77.07 GiB`, below the v2 maximum, and wall time is
+773.1 s including the one-time article-checkpoint density solve and four HVP
+training graphs. The self-consistent energy absolute error improves from
+approximately `3.70e-4` to `3.57e-4 Ha` over the screen. No validation or
+Test100 data were accessed, and no full Hessian was computed in this cost-only
+screen.
+
+Decision: the recurring 10k refreshes were an optimizer-transition problem,
+not evidence that the scalar Graphformer could not sustain a self-consistent
+density. Promote the identical trust/corrector settings to one 10-step
+train-only run with initial/final full-39 evaluation. Keep replay LR unchanged
+for that causal comparison; assess lower replay LR only later as a one-update
+energy/Hessian ablation.
+
+Interpretation limit: this is not a fixed-parameter-step solver-only speedup.
+Trust scaling accepted only about 54.7% of the aggregate raw AdamW step-norm
+over the four updates (`1, 0.5, 0.25, 0.25`), so part of the density-cost gain
+comes from taking smaller model steps. The screen contains HVP updates only and
+does not evaluate a full Hessian, force regression, frequencies, or the two
+replay transitions. The 10-step full run must decide whether the cost control
+preserves useful Hessian learning; `energy_force_regression_gate_passed=false`
+in the screen summary means "not evaluated", not a measured physical failure.
+
+Screen directory:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3/0016298_hvp_trust_screen_s4_v3_20260731`.
+Final checkpoint SHA256:
+`8274bae8feae7704f57a8863d4d4172dd5680d89818c0b4b0131db060ff591c8`.
+Protocol SHA256:
+`05388f09d09121106c02fab28a7b0d21979fb9c2ea42633b170463c7a090d72b`.
+Summary/training/density CSV SHA256 values are respectively
+`0622a82c...538b661`, `f5f36998...564641`, and `d11c07fc...d2fb`.
 
 ### Six-direction Rademacher EGFH result (2026-07-31)
 

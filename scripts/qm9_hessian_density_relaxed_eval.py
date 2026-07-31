@@ -16,6 +16,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -263,6 +264,86 @@ def _optimize_density(
 ) -> tuple[Any, torch.Tensor, dict[str, Any], OptimizationTrace]:
     trace = OptimizationTrace()
     t0 = time.time()
+    fast_modes = {"parameter_response_prediction", "checkpoint_density_warm_start"}
+    fast_path_attempted = bool(
+        getattr(args, "response_predictor_fast_refine", False)
+        and initialization_mode in fast_modes
+        and isinstance(initialization, torch.Tensor)
+    )
+    fast_path_used = False
+    fast_path_fallback_reason = None
+    fast_path_initial_gradient_norm = None
+    if fast_path_attempted:
+        sample.coeffs = initialization.detach().clone()
+        normalization = sample.dual_basis_integrals.detach().to(sample.coeffs)
+        target = torch.as_tensor(
+            sample.mol.nelectron,
+            dtype=sample.coeffs.dtype,
+            device=sample.coeffs.device,
+        )
+        sample.coeffs = sample.coeffs + normalization * (
+            (target - torch.dot(normalization, sample.coeffs))
+            / torch.dot(normalization, normalization)
+        )
+        variable = sample.coeffs.detach().clone().requires_grad_(True)
+        sample.coeffs = variable
+        tensor_energies = context.functional_factory.evaluate_tensor_functional(
+            sample,
+            sample.coulomb_matrix,
+            sample.nuclear_attraction_vector,
+        )
+        gradient = torch.autograd.grad(tensor_energies.total_energy, variable)[0]
+        projected = gradient - normalization * (
+            torch.dot(normalization, gradient)
+            / torch.dot(normalization, normalization)
+        )
+        fast_path_initial_gradient_norm = float(
+            torch.linalg.vector_norm(projected).detach().cpu()
+        )
+        sample.coeffs = variable.detach()
+        fast_threshold = float(
+            getattr(args, "response_predictor_fast_refine_threshold", 1.0e-5)
+        )
+        if (
+            math.isfinite(fast_path_initial_gradient_norm)
+            and fast_path_initial_gradient_norm < fast_threshold
+        ):
+            fast_path_used = True
+            final_coeffs = transform_tensor_with_sample(
+                sample, sample.coeffs, Representation.VECTOR, invert=True
+            ).detach()
+            metadata = {
+                "converged": fast_path_initial_gradient_norm
+                < args.convergence_tolerance,
+                "cycles": 0,
+                "elapsed_s": time.time() - t0,
+                "final_total_energy": float(
+                    tensor_energies.total_energy.detach().cpu()
+                ),
+                "initialization_mode": initialization_mode,
+                "initial_gradient_norm": fast_path_initial_gradient_norm,
+                "final_gradient_norm": fast_path_initial_gradient_norm,
+                "first_stage_converged": False,
+                "first_stage_cycles": 0,
+                "first_stage_final_gradient_norm": None,
+                "used_fallback": False,
+                "fallback_converged": None,
+                "fallback_cycles": 0,
+                "fallback_final_gradient_norm": None,
+                "response_predictor_fast_path_attempted": True,
+                "response_predictor_fast_path_used": True,
+                "response_predictor_fast_path_succeeded": None,
+                "response_predictor_fast_path_fallback_reason": None,
+                "response_predictor_fast_path_initial_gradient_norm": (
+                    fast_path_initial_gradient_norm
+                ),
+            }
+            return tensor_energies.detached(), final_coeffs, metadata, trace
+        fast_path_fallback_reason = (
+            "initial_projected_gradient_not_within_fast_threshold: "
+            f"{fast_path_initial_gradient_norm:.6e} >= {fast_threshold:.6e}"
+        )
+
     energies, final_coeffs, first_stage_converged, _ = density_optimization(
         sample,
         sample.mol,
@@ -339,6 +420,13 @@ def _optimize_density(
         "fallback_converged": fallback_converged,
         "fallback_cycles": fallback_cycles,
         "fallback_final_gradient_norm": fallback_final_gradient_norm,
+        "response_predictor_fast_path_attempted": fast_path_attempted,
+        "response_predictor_fast_path_used": fast_path_used,
+        "response_predictor_fast_path_succeeded": False,
+        "response_predictor_fast_path_fallback_reason": fast_path_fallback_reason,
+        "response_predictor_fast_path_initial_gradient_norm": (
+            fast_path_initial_gradient_norm
+        ),
     }
     return energies, final_coeffs, metadata, trace
 

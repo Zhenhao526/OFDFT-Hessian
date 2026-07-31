@@ -12,15 +12,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from scripts.qm9_complete_total_capacity_train import (
     Direction,
     MoleculeState,
+    RelaxedPoint,
     _assert_training_density_stationarity,
+    _center_density_checkpoint_state,
     _density_refresh_scope,
     _hutchinson_direction,
     _label_density_replay_point,
     _response_cancellation_diagnostics,
+    _response_predictor_trial_scales,
+    _restore_center_density_checkpoint_state,
     _save_checkpoint,
     _training_density_stationarity_threshold,
     train,
 )
+from scripts import qm9_hessian_density_relaxed_eval as density_eval
+from mldft.ofdft.energies import TensorEnergies
 
 
 def test_strict_active_density_refresh_is_due_after_every_parameter_update():
@@ -182,6 +188,114 @@ def test_response_cancellation_diagnostics_detect_large_antiparallel_terms():
         9.0
     )
     assert diagnostics["cancellation_index"] == pytest.approx(19.0)
+
+
+def test_response_predictor_trust_scales_are_bounded_halvings():
+    assert _response_predictor_trial_scales(1.0 / 8.0) == [
+        1.0,
+        0.5,
+        0.25,
+        0.125,
+    ]
+    with pytest.raises(ValueError, match="minimum scale"):
+        _response_predictor_trial_scales(0.0)
+
+
+def test_checkpoint_density_state_preserves_certification_boundary():
+    strict = MoleculeState(
+        molecule_id="strict",
+        atomic_numbers=np.asarray([1]),
+        positions_bohr=np.asarray([[0.0, 0.0, 0.0]], dtype=np.float64),
+        pbe_total_energy=0.0,
+        pbe_force=np.zeros((1, 3)),
+        pbe_hessian=np.eye(3),
+        label_coefficients=torch.zeros(2),
+        directions=[],
+        base=RelaxedPoint(
+            positions_bohr=np.zeros((1, 3)),
+            coefficients=torch.tensor([0.4, 0.6]),
+            final_gradient_norm=1.0e-10,
+            cycles=7,
+            total_energy=-1.0,
+        ),
+    )
+    predicted = MoleculeState(
+        molecule_id="predicted",
+        atomic_numbers=np.asarray([1]),
+        positions_bohr=np.asarray([[0.1, 0.0, 0.0]], dtype=np.float64),
+        pbe_total_energy=0.0,
+        pbe_force=np.zeros((1, 3)),
+        pbe_hessian=np.eye(3),
+        label_coefficients=torch.zeros(2),
+        directions=[],
+        base=RelaxedPoint(
+            positions_bohr=np.asarray([[0.1, 0.0, 0.0]]),
+            coefficients=torch.tensor([0.3, 0.7]),
+            final_gradient_norm=1.0e-10,
+            cycles=0,
+            total_energy=-0.9,
+            initialization_mode="parameter_response_prediction",
+            predictor_projected_gradient_norm=2.0e-6,
+            predictor_total_energy=-0.95,
+            predictor_trust_scale=0.5,
+        ),
+    )
+    state = _center_density_checkpoint_state(
+        [strict, predicted], parameter_step=4, strict_threshold=5.0e-9
+    )
+    assert state["molecules"]["strict"]["certified_strict"] is True
+    assert state["molecules"]["predicted"]["certified_strict"] is False
+
+    strict.base = None
+    predicted.base = None
+    assert _restore_center_density_checkpoint_state(
+        [strict, predicted], {"center_density_state": state}, parameter_step=4
+    ) == 2
+    assert strict.base.initialization_mode == "checkpoint_density_warm_start"
+    assert predicted.base.initialization_mode == "parameter_response_prediction"
+    assert predicted.base.predictor_projected_gradient_norm == pytest.approx(2.0e-6)
+
+
+def test_response_predictor_fast_path_skips_legacy_adam(monkeypatch):
+    class QuadraticFactory:
+        @staticmethod
+        def evaluate_tensor_functional(sample, *_):
+            target = torch.tensor([0.5, 0.5], dtype=sample.coeffs.dtype)
+            return TensorEnergies(
+                quadratic=0.5 * torch.sum((sample.coeffs - target) ** 2),
+                nuclear_repulsion=torch.zeros((), dtype=sample.coeffs.dtype),
+            )
+
+    sample = SimpleNamespace(
+        coeffs=torch.tensor([0.5, 0.5], dtype=torch.float64),
+        dual_basis_integrals=torch.ones(2, dtype=torch.float64),
+        coulomb_matrix=torch.eye(2, dtype=torch.float64),
+        nuclear_attraction_vector=torch.zeros(2, dtype=torch.float64),
+        mol=SimpleNamespace(nelectron=1),
+    )
+    monkeypatch.setattr(
+        density_eval,
+        "transform_tensor_with_sample",
+        lambda _sample, tensor, *_args, **_kwargs: tensor,
+    )
+    _, final_coefficients, metadata, _ = density_eval._optimize_density(
+        SimpleNamespace(functional_factory=QuadraticFactory()),
+        sample,
+        SimpleNamespace(
+            response_predictor_fast_refine=True,
+            response_predictor_fast_refine_threshold=5.0e-6,
+            convergence_tolerance=1.0e-2,
+        ),
+        torch.tensor([0.5, 0.5], dtype=torch.float64),
+        "parameter_response_prediction",
+    )
+
+    torch.testing.assert_close(
+        final_coefficients, torch.tensor([0.5, 0.5], dtype=torch.float64)
+    )
+    assert metadata["response_predictor_fast_path_used"] is True
+    assert metadata["first_stage_cycles"] == 0
+    assert metadata["fallback_cycles"] == 0
 
 
 def test_checkpoint_records_analytic_definition_and_frozen_provenance(tmp_path):

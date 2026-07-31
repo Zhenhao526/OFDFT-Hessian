@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import resource
 import time
 from pathlib import Path
@@ -196,6 +197,48 @@ def _evaluate_point(
                 "newton_energy_evaluations": 0,
             }
         )
+    if metadata.get("response_predictor_fast_path_used"):
+        fast_path_succeeded = bool(metadata.get("converged")) and math.isfinite(
+            float(metadata.get("final_gradient_norm", math.inf))
+        )
+        metadata["response_predictor_fast_path_succeeded"] = fast_path_succeeded
+        if not fast_path_succeeded:
+            fallback_reason = (
+                "fast_refiners_failed_strict_stationarity: "
+                f"final_gradient_norm={metadata.get('final_gradient_norm')}"
+            )
+            fallback_args = argparse.Namespace(**vars(args))
+            fallback_args.response_predictor_fast_refine = False
+            fallback = _evaluate_point(
+                context,
+                atomic_numbers,
+                positions_bohr,
+                charge,
+                fallback_args,
+                base_coeffs=base_coeffs,
+                need_force=need_force,
+                initial_coeffs=initial_coeffs,
+                initialization_mode_override=initialization_mode_override,
+            )
+            fallback_metadata = fallback["optimization_metadata"]
+            fallback_metadata.update(
+                {
+                    "response_predictor_fast_path_attempted": True,
+                    "response_predictor_fast_path_used": True,
+                    "response_predictor_fast_path_succeeded": False,
+                    "response_predictor_fast_path_fallback_reason": fallback_reason,
+                    "response_predictor_fast_path_initial_gradient_norm": metadata.get(
+                        "response_predictor_fast_path_initial_gradient_norm"
+                    ),
+                    "response_predictor_fast_path_lbfgs_final_gradient_norm": metadata.get(
+                        "lbfgs_final_gradient_norm"
+                    ),
+                    "response_predictor_fast_path_newton_final_gradient_norm": metadata.get(
+                        "newton_final_gradient_norm"
+                    ),
+                }
+            )
+            return fallback
     density_optimization_elapsed_s = time.perf_counter() - optimization_started
     result: dict[str, Any] = {
         "legacy_total_energy": float(legacy_energies.total_energy),

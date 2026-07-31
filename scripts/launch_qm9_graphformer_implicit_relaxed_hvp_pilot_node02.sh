@@ -4,14 +4,22 @@ set -euo pipefail
 root=${QM9_NODE02_ROOT:-/home/shenwei01/xzh_node02_20260724}
 repo=${QM9_NODE02_REPO:-${root}/work/structures25}
 phase=${QM9_IMPLICIT_HVP_PHASE:-smoke}
-protocol=${QM9_IMPLICIT_HVP_PROTOCOL:-${repo}/configs/audit/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v1.yaml}
+default_protocol=${repo}/configs/audit/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v1.yaml
+if [[ "${phase}" == "trust_screen" || "${phase}" == "trust_formal" || "${phase}" == "trust_resume_formal" ]]; then
+  default_protocol=${repo}/configs/audit/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3.yaml
+fi
+protocol=${QM9_IMPLICIT_HVP_PROTOCOL:-${default_protocol}}
 manifest=${root}/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/manifests/train20_parent_manifest.json
 direction_manifest=${root}/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/directions/train20/manifest.json
 article_checkpoint=${root}/runtime_parent/_runtime/models/train/runs/trained-on-qm9/checkpoints/last.ckpt
 article_run_dir=${root}/models/train/runs/qm9_graphformer_egfh10_force_secant_article_warmstart_s100_v1
 run_spec="released_article_qm9_scalar_graphformer=${article_run_dir}=${article_checkpoint}"
 source_checkpoint_sha=9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
-output=${QM9_IMPLICIT_HVP_OUTPUT:-${root}/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v1/${phase}_$(date +%Y%m%d_%H%M%S)}
+output_family=qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v1
+if [[ "${phase}" == "trust_screen" || "${phase}" == "trust_formal" || "${phase}" == "trust_resume_formal" ]]; then
+  output_family=qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3
+fi
+output=${QM9_IMPLICIT_HVP_OUTPUT:-${root}/runs/${output_family}/${phase}_$(date +%Y%m%d_%H%M%S)}
 
 if [[ -e "${output}" ]]; then
   echo "Refusing to reuse output directory: ${output}" >&2
@@ -80,6 +88,7 @@ PY
     gradient_diagnostics_interval=5
     phase_args=(
       --alternating-hvp-updates
+      --replay-learning-rate 1e-7
       --hvp-learning-rate 1e-7
       --replay-update-period 5
     )
@@ -107,6 +116,7 @@ PY
     gradient_diagnostics_interval=5
     phase_args=(
       --alternating-hvp-updates
+      --replay-learning-rate 1e-7
       --hvp-learning-rate 1e-7
       --replay-update-period 5
       --resume-capacity-optimizer
@@ -125,9 +135,79 @@ PY
     gradient_diagnostics_interval=1
     phase_args=(
       --alternating-hvp-updates
+      --replay-learning-rate 1e-7
       --hvp-learning-rate 1e-7
       --replay-update-period 5
       --two-step-failure-reproduction
+    )
+    ;;
+  trust_screen)
+    lambda_h=1
+    max_steps=4
+    learning_rate=1e-7
+    evaluation_mode=density_cost
+    checkpoint_interval=1
+    eval_interval=4
+    gradient_diagnostics_interval=1
+    phase_args=(
+      --alternating-hvp-updates
+      --replay-learning-rate 1e-7
+      --hvp-learning-rate 1e-7
+      --replay-update-period 5
+      --density-predictor-damping 0
+      --density-parameter-trust-region
+      --density-parameter-trust-threshold 5e-6
+      --density-parameter-trust-minimum-scale 0.0078125
+      --density-predictor-corrector-first
+      --density-predictor-corrector-threshold 5e-6
+    )
+    ;;
+  trust_formal)
+    lambda_h=1
+    max_steps=10
+    learning_rate=1e-7
+    evaluation_mode=full
+    checkpoint_interval=5
+    eval_interval=10
+    gradient_diagnostics_interval=5
+    phase_args=(
+      --alternating-hvp-updates
+      --replay-learning-rate 1e-7
+      --hvp-learning-rate 1e-7
+      --replay-update-period 5
+      --density-predictor-damping 0
+      --density-parameter-trust-region
+      --density-parameter-trust-threshold 5e-6
+      --density-parameter-trust-minimum-scale 0.0078125
+      --density-predictor-corrector-first
+      --density-predictor-corrector-threshold 5e-6
+    )
+    ;;
+  trust_resume_formal)
+    resume_checkpoint=${QM9_IMPLICIT_HVP_RESUME_CHECKPOINT:?Set the v3 step-5 checkpoint}
+    source_checkpoint_sha=${QM9_IMPLICIT_HVP_RESUME_CHECKPOINT_SHA256:?Set the v3 step-5 checkpoint SHA256}
+    check_sha256 "${resume_checkpoint}" "${source_checkpoint_sha}"
+    run_spec="released_article_qm9_scalar_graphformer=${article_run_dir}=${resume_checkpoint}"
+    lambda_h=1
+    max_steps=5
+    learning_rate=1e-7
+    evaluation_mode=full
+    checkpoint_interval=5
+    eval_interval=10
+    gradient_diagnostics_interval=5
+    phase_args=(
+      --alternating-hvp-updates
+      --replay-learning-rate 1e-7
+      --hvp-learning-rate 1e-7
+      --replay-update-period 5
+      --density-predictor-damping 0
+      --density-parameter-trust-region
+      --density-parameter-trust-threshold 5e-6
+      --density-parameter-trust-minimum-scale 0.0078125
+      --density-predictor-corrector-first
+      --density-predictor-corrector-threshold 5e-6
+      --resume-capacity-optimizer
+      --skip-resume-initial-full-hessian
     )
     ;;
   *)

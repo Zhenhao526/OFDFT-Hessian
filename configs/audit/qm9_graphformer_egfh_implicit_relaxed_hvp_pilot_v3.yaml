@@ -1,0 +1,172 @@
+protocol_id: qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3
+branch_id: graphformer_egfh_density_trust_corrector_20260731
+frozen_at: 2026-07-31
+stage: one_parent_train_only_density_trust_corrector_screen
+method_name: "解析密度/KKT响应的hybrid relaxed-HVP"
+fully_analytic_libcint_second_integrals: false
+validation_access_allowed: false
+test100_access_allowed: false
+
+definitions:
+  scalar_owner: >-
+    E_total(R,c;theta)=E_Graphformer_kin_plus_xc(R,c;theta)+E_H(R,c)
+    +E_ext(R,c)+E_nn(R).
+  egf_replay: >-
+    E, projected G, and scalar-derived F use the frozen PBE/KS label density.
+  implicit_hvp: >-
+    H_relaxed v=E_RR v-E_Rc E_cc^-1 E_cR v at the strictly converged
+    model-self-consistent density, using one fresh unnormalized internal-space
+    Rademacher probe per step and an implicit parameter adjoint.
+  density_trust_region: >-
+    The exact parameter-response density prediction is evaluated under the
+    candidate new model. The AdamW step is backtracked by powers of two until
+    every train-parent projected density gradient is below 5e-6. The trusted
+    point enters LBFGS and Jacobi-preconditioned Newton-PCG first; the untouched
+    legacy Adam chain remains a fail-closed fallback.
+  optimizer: >-
+    Independent AdamW states alternate H-only and E/G/F replay updates. HVP and
+    replay learning rates, clipping, trust settings, and density-corrector
+    settings are recorded independently.
+
+identity:
+  old_original_a_identity_allowed: false
+  old_checkpoint_or_manifest_hash_reuse_allowed: false
+  baseline_name: released_article_qm9_scalar_graphformer
+  initialization: released_article_qm9_weight_checkpoint
+  source_checkpoint: /home/shenwei01/xzh_node02_20260724/runtime_parent/_runtime/models/train/runs/trained-on-qm9/checkpoints/last.ckpt
+  source_checkpoint_sha256: 9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+
+baseline:
+  model_class: Graphformer
+  parameter_count: 18692586
+  max_steps: 1656810
+  validation_enabled: false
+  test_enabled: false
+
+frozen_train_only_asset_reuse:
+  allowed: true
+  source_protocol_id: qm9_graphformer_hybrid_relaxed_hvp_rebuild_v1
+  source_protocol_sha256: 2b322ed75a0fa6669b79194067eaad76aea0e33e776c818e4e88ab11e7c698be
+  parent_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/manifests/train20_parent_manifest.json
+  parent_manifest_sha256: 4d2c8841d550951eb518021009e12c2b6a29862f28afb0d07d32fd4da8484d01
+  direction_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/directions/train20/manifest.json
+  direction_manifest_sha256: 1ea9fe04a971b5998620d49f5e68567938ab4f505f17636fb2065085b8c73804
+  molecule_ids: ["0016298"]
+  split_role: train_only
+
+training_semantics:
+  egf_branch: fixed_pbe_ks_density_complete_total_replay
+  h_branch: model_self_consistent_implicit_relaxed_hvp
+  one_scalar_energy_owner: true
+
+directions:
+  training_direction:
+    count_per_step: 1
+    distribution: internal_space_rademacher
+    resample_each_step: true
+    normalization: unnormalized_pm1_in_orthonormal_internal_coordinates
+    estimator: unbiased_internal_hessian_frobenius_squared
+  remove_translation_rotation: true
+  complete_basis_required: true
+
+loss:
+  formula: >-
+    Replay updates use 0.1*L_E+0.8*L_G+1.0*L_F. H updates use
+    1.0*L_implicit_relaxed_HVP. Only one update family is backpropagated per
+    step, while every loss is logged.
+  energy:
+    absolute_scale_hartree: 0.1
+  force:
+    absolute_relative_mix: 0.5
+    absolute_scale_hartree_per_bohr: 0.01
+    relative_rms_floor_hartree_per_bohr: 1.0e-3
+  density:
+    scale_hartree_per_density_coefficient: 1.0e-2
+  hvp:
+    absolute_relative_mix: 0.0
+    absolute_scale_hartree_per_bohr2: 0.1
+    relative_rms_floor_hartree_per_bohr2: 1.0e-2
+    norm: unbiased_internal_frobenius_squared
+  low_mode:
+    mode_count: 0
+    wrong_curvature_multiplier: 2.0
+  initial_weights:
+    lambda_E: 0.1
+    lambda_F: 1.0
+    lambda_rho: 0.8
+    lambda_H: 1.0
+    lambda_Q: 0.0
+    lambda_spec: 0.0
+
+parent_result:
+  protocol_id: qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v2
+  root_checkpoint_sha256: 9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+  final_checkpoint_sha256: 16936269d0f961af099cb1a23826446b657f6e81c78bd4b4a8ff5a5a335ea37f
+  observed_long_refresh_cycles: [10100, 10160, 10132]
+  diagnosis: legacy_adam_fallback_after_hvp_parameter_updates
+
+density_cost_screen:
+  steps: 4
+  learning_rate: 1.0e-7
+  replay_learning_rate: 1.0e-7
+  hvp_learning_rate: 1.0e-7
+  weight_decay: 0.0
+  alternating_hvp_updates: true
+  replay_update_period: 5
+  expected_hvp_updates: 4
+  expected_replay_updates: 0
+  gradient_clip_norm: 1.0
+  checkpoint_interval: 1
+  evaluation_mode: density_cost
+  density_predictor_damping: 0.0
+  density_parameter_trust_threshold: 5.0e-6
+  density_parameter_trust_minimum_scale: 0.0078125
+  density_predictor_corrector_threshold: 5.0e-6
+
+formal_training:
+  steps: 10
+  learning_rate: 1.0e-7
+  replay_learning_rate: 1.0e-7
+  hvp_learning_rate: 1.0e-7
+  weight_decay: 0.0
+  alternating_hvp_updates: true
+  replay_update_period: 5
+  expected_hvp_updates: 8
+  expected_replay_updates: 2
+  gradient_clip_norm: 1.0
+  checkpoint_interval: 5
+  evaluation_interval: 10
+  evaluation_mode: full
+  checkpoint_selection: final_step_without_validation
+
+gates:
+  density_solver_target: 5.0e-9
+  center_projected_density_gradient_max: 1.0e-8
+  predictor_projected_density_gradient_max: 5.0e-6
+  density_refresh_max_cycles: 500
+  density_fallback_full_count: 0
+  median_parameter_trust_scale_min: 0.25
+  analytic_response_residual_max: 1.0e-8
+  response_correction_fraction_max: 5.0
+  cancellation_index_max: 10.0
+  require_all_finite: true
+  require_nonzero_hvp_parameter_gradient: true
+  validation_accessed: false
+  test100_accessed: false
+
+stage1:
+  gate:
+    training_all_parent_relative_frobenius_max: 0.90
+    antisymmetric_over_symmetric_fro_max: 0.005
+    energy_force_relative_regression_max: 1.10
+    energy_error_floor_hartree: 1.0e-8
+    force_error_floor_hartree_per_bohr: 1.0e-8
+
+evaluation:
+  train_molecule: "0016298"
+  implicit_internal_full_hessian: true
+  p0_schur_decomposition: true
+  strict_cartesian_force_difference_hessian: true
+  vibration_metrics: true
+  validation_accessed: false
+  test100_accessed: false
