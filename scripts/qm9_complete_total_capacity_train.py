@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import csv
 import json
@@ -791,6 +792,17 @@ def _assert_training_density_stationarity(
         )
 
 
+def _training_density_stationarity_threshold(
+    args: argparse.Namespace,
+) -> float:
+    threshold = args.training_density_stationarity_threshold
+    return (
+        float(args.density_strict_threshold)
+        if threshold is None
+        else float(threshold)
+    )
+
+
 def _evaluate_point_graph(
     context: Any,
     cache: IntegralBundleCache,
@@ -891,6 +903,46 @@ def _evaluate_point_graph(
             )
         ),
     )
+
+
+def _label_density_replay_point(molecule: MoleculeState) -> RelaxedPoint:
+    """Return the fixed PBE/KS-density point used only by the E/G/F replay."""
+    return RelaxedPoint(
+        positions_bohr=np.asarray(molecule.positions_bohr, dtype=np.float64),
+        coefficients=molecule.label_coefficients,
+        final_gradient_norm=math.nan,
+        cycles=0,
+        total_energy=molecule.pbe_total_energy,
+    )
+
+
+def _response_cancellation_diagnostics(
+    partial_hvp: torch.Tensor,
+    response_correction: torch.Tensor,
+) -> dict[str, float]:
+    """Summarize whether the relaxed HVP is a fragile cancellation."""
+    partial = partial_hvp.detach()
+    correction = response_correction.detach()
+    relaxed = partial + correction
+    tiny = torch.finfo(partial.dtype).tiny
+    partial_norm = torch.linalg.vector_norm(partial)
+    correction_norm = torch.linalg.vector_norm(correction)
+    relaxed_norm = torch.linalg.vector_norm(relaxed)
+    cosine = torch.sum(partial * correction) / (
+        partial_norm * correction_norm
+    ).clamp_min(tiny)
+    return {
+        "partial_hvp_norm": float(partial_norm.cpu()),
+        "response_correction_norm": float(correction_norm.cpu()),
+        "relaxed_hvp_norm": float(relaxed_norm.cpu()),
+        "response_correction_fraction_of_relaxed_norm": float(
+            (correction_norm / relaxed_norm.clamp_min(tiny)).cpu()
+        ),
+        "partial_response_cosine": float(cosine.cpu()),
+        "cancellation_index": float(
+            ((partial_norm + correction_norm) / relaxed_norm.clamp_min(tiny)).cpu()
+        ),
+    }
 
 
 def _analytic_center_response(
@@ -1025,16 +1077,26 @@ def _analytic_relaxed_direction_prediction(
         create_graph=create_graph,
     )
     hvp_started = time.perf_counter()
-    hvp = response_system.relaxed_hvp(
-        position_direction,
-        response,
+    partial_hvp = response_system.partial_position_hvp(
+        position_direction, create_graph=create_graph
+    )
+    response_correction = response_system.response_correction(
+        response.density_response,
+        response.multiplier_response,
         create_graph=create_graph,
     )
+    hvp = partial_hvp + response_correction
     _synchronize(hvp)
     hvp_seconds = time.perf_counter() - hvp_started
     if not bool(torch.isfinite(hvp).all()):
         raise RuntimeError("analytic complete-total relaxed HVP is non-finite")
     diagnostics["relaxed_hvp_seconds"] = hvp_seconds
+    diagnostics["density_response_norm"] = float(
+        torch.linalg.vector_norm(response.density_response.detach()).cpu()
+    )
+    diagnostics.update(
+        _response_cancellation_diagnostics(partial_hvp, response_correction)
+    )
     return (
         hvp,
         [center.projected_density_gradient_norm],
@@ -1685,6 +1747,27 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--replay-update-period must be greater than one")
     if args.loss_balance_mode == "pcgrad" and args.alternating_hvp_updates:
         raise ValueError("PCGrad and alternating HVP updates are mutually exclusive")
+    if (
+        args.evaluation_mode == "none"
+        and args.learning_rate != 0.0
+        and not args.two_step_failure_reproduction
+    ):
+        raise ValueError(
+            "--evaluation-mode=none is restricted to zero-learning-rate smokes"
+        )
+    if args.two_step_failure_reproduction and (
+        args.evaluation_mode != "none"
+        or args.max_steps > 2
+        or args.checkpoint_interval != 1
+    ):
+        raise ValueError(
+            "--two-step-failure-reproduction requires evaluation-mode=none, "
+            "max-steps<=2, and checkpoint-interval=1"
+        )
+    if args.response_correction_fraction_max <= 0:
+        raise ValueError("--response-correction-fraction-max must be positive")
+    if args.cancellation_index_max < 1:
+        raise ValueError("--cancellation-index-max must be at least one")
     if args.analytic_relaxed_hvp and not args.require_complete_total_relaxed_hvp:
         raise ValueError(
             "--analytic-relaxed-hvp requires the fail-closed "
@@ -1737,12 +1820,27 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         != "unbiased_internal_hessian_frobenius_squared"
     ):
         raise ValueError("Hybrid rebuild Rademacher estimator protocol drift")
+    frozen_asset_reuse = protocol.get("frozen_train_only_asset_reuse")
+    if frozen_asset_reuse is not None:
+        parent_binding_valid = (
+            frozen_asset_reuse.get("allowed") is True
+            and frozen_asset_reuse.get("parent_manifest_sha256")
+            == manifest_sha256
+            and frozen_asset_reuse.get("source_protocol_id")
+            == manifest.get("protocol_id")
+            and frozen_asset_reuse.get("source_protocol_sha256")
+            == manifest.get("protocol_sha256")
+        )
+    else:
+        parent_binding_valid = (
+            manifest.get("protocol_id") == protocol["protocol_id"]
+            and manifest.get("protocol_sha256") == protocol_sha256
+        )
     if (
         manifest.get("validation_accessed") is not False
         or manifest.get("test100_accessed") is not False
         or manifest.get("old_original_a_identity_used") is not False
-        or manifest.get("protocol_id") != protocol["protocol_id"]
-        or manifest.get("protocol_sha256") != protocol_sha256
+        or not parent_binding_valid
     ):
         raise ValueError(
             "Capacity manifest does not certify the new frozen train-only branch"
@@ -1761,12 +1859,27 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 f"{direction_manifest_hash} != {args.direction_manifest_sha256}"
             )
         direction_manifest = json.loads(args.direction_manifest.read_text())
+        if frozen_asset_reuse is not None:
+            direction_binding_valid = (
+                frozen_asset_reuse.get("direction_manifest_sha256")
+                == direction_manifest_hash
+                and frozen_asset_reuse.get("source_protocol_id")
+                == direction_manifest.get("protocol_id")
+                and frozen_asset_reuse.get("source_protocol_sha256")
+                == direction_manifest.get("protocol_sha256")
+            )
+        else:
+            direction_binding_valid = (
+                direction_manifest.get("protocol_id")
+                == protocol["protocol_id"]
+                and direction_manifest.get("protocol_sha256")
+                == protocol_sha256
+            )
         if (
             direction_manifest.get("validation_accessed") is not False
             or direction_manifest.get("test100_accessed") is not False
             or direction_manifest.get("old_original_a_identity_used") is not False
-            or direction_manifest.get("protocol_id") != protocol["protocol_id"]
-            or direction_manifest.get("protocol_sha256") != protocol_sha256
+            or not direction_binding_valid
             or direction_manifest.get("parent_manifest_sha256")
             != manifest_sha256
         ):
@@ -1777,6 +1890,28 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             str(row["molecule_id"]): row
             for row in direction_manifest["parents"]
         }
+    expected_label_density_replay = (
+        protocol.get("training_semantics", {}).get("egf_branch")
+        == "fixed_pbe_ks_density_complete_total_replay"
+    )
+    if bool(args.egf_label_density_replay) != expected_label_density_replay:
+        raise ValueError(
+            "E/G/F replay branch does not match the frozen protocol: "
+            f"cli={args.egf_label_density_replay} "
+            f"protocol={expected_label_density_replay}"
+        )
+    expected_alternating = protocol.get("formal_training", {}).get(
+        "alternating_hvp_updates"
+    )
+    if (
+        expected_alternating is not None
+        and bool(args.alternating_hvp_updates) != bool(expected_alternating)
+    ):
+        raise ValueError(
+            "Alternating-update mode does not match the frozen protocol: "
+            f"cli={args.alternating_hvp_updates} "
+            f"protocol={expected_alternating}"
+        )
     requested_ids = set(args.molecules.split(",")) if args.molecules else None
     entries = [
         row
@@ -1859,6 +1994,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             weights[key] = float(override)
     if args.require_complete_total_relaxed_hvp:
         failures = []
+        training_density_threshold = _training_density_stationarity_threshold(args)
         if direction_manifest is None:
             failures.append("a frozen structured direction manifest is required")
         if not args.implicit_density_parameter_response:
@@ -1872,6 +2008,15 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             failures.append("density-response unrolling is forbidden")
         if args.density_strict_threshold > 1.0e-8:
             failures.append("density strict threshold must be <=1e-8")
+        if training_density_threshold > 1.0e-8:
+            failures.append(
+                "training density stationarity threshold must be <=1e-8"
+            )
+        if training_density_threshold < args.density_strict_threshold:
+            failures.append(
+                "training density stationarity threshold must be >= the "
+                "density solver target"
+            )
         if args.direction_limit is not None:
             failures.append("direction truncation is forbidden")
         if args.analytic_relaxed_hvp:
@@ -1949,6 +2094,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 if capacity_state.get("loss_weights") != weights:
                     failures.append("capacity checkpoint loss-weight mismatch")
+                if (
+                    bool(capacity_state.get("egf_label_density_replay", False))
+                    != args.egf_label_density_replay
+                ):
+                    failures.append("capacity checkpoint E/G/F replay-branch mismatch")
         elif args.resume_capacity_optimizer:
             failures.append(
                 "--resume-capacity-optimizer requires a bound capacity checkpoint"
@@ -1958,6 +2108,20 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             and args.root_source_checkpoint_sha256 != source_checkpoint_sha256
         ):
             failures.append("root source hash does not match untouched checkpoint")
+        if args.skip_resume_initial_full_hessian:
+            if not isinstance(capacity_state, dict) or not args.resume_capacity_optimizer:
+                failures.append(
+                    "skipping the resume initial Hessian requires a bound "
+                    "capacity checkpoint and optimizer resume"
+                )
+            elif not capacity_state.get("root_initial_full_hessian_metrics"):
+                failures.append(
+                    "skipping the resume initial Hessian requires frozen root metrics"
+                )
+            if args.evaluation_mode != "full":
+                failures.append(
+                    "skipping the resume initial Hessian requires final full evaluation"
+                )
         if args.three_body_geometry_residual or args.freeze_base_model:
             failures.append("the Graphformer-only branch forbids auxiliary residual heads")
         if context.model.net.__class__.__name__ != "Graphformer":
@@ -2075,6 +2239,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         if args.analytic_relaxed_hvp
         else "block-coordinate complete-total relaxed-force secant capacity fit"
     )
+    if args.egf_label_density_replay:
+        checkpoint_definition += (
+            " and fixed-PBE-density complete-total E/G/F replay"
+        )
 
     density_rows = (
         _refresh_base_densities(
@@ -2090,15 +2258,20 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
     _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
-    hessian_rows = (
-        _analytic_full_hessian_metrics(
-            context, bundle_cache, molecules, step=source_capacity_step
+    hessian_rows = []
+    if (
+        args.evaluation_mode == "full"
+        and not args.skip_resume_initial_full_hessian
+    ):
+        hessian_rows = (
+            _analytic_full_hessian_metrics(
+                context, bundle_cache, molecules, step=source_capacity_step
+            )
+            if args.analytic_relaxed_hvp
+            else _full_hessian_metrics(
+                context, bundle_cache, molecules, step=source_capacity_step
+            )
         )
-        if args.analytic_relaxed_hvp
-        else _full_hessian_metrics(
-            context, bundle_cache, molecules, step=source_capacity_step
-        )
-    )
     _write_csv(args.output_dir / "full_hessian_metrics.csv", hessian_rows)
     initial_metrics_for_checkpoint = [
         row for row in hessian_rows if row["step"] == source_capacity_step
@@ -2118,6 +2291,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "molecules": [molecule.molecule_id for molecule in molecules],
         "direction_role": args.direction_role,
         "strict_active_density_refresh": args.strict_active_density_refresh,
+        "density_solver_target": args.density_strict_threshold,
+        "training_density_stationarity_threshold": (
+            _training_density_stationarity_threshold(args)
+        ),
         "implicit_density_parameter_response": (
             args.implicit_density_parameter_response
         ),
@@ -2126,6 +2303,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "density_parameter_response_predictor": (
             args.density_parameter_response_predictor
         ),
+        "egf_label_density_replay": args.egf_label_density_replay,
         "proxy_hvp_fallback_allowed": False,
         "validation_accessed": False,
         "test100_accessed": False,
@@ -2236,6 +2414,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         active_directions = []
         analytic_response_rows: list[dict[str, float | int | str | bool]] = []
         max_density_norm = 0.0
+        max_label_density_gradient_norm = 0.0
         response_enabled = (
             args.implicit_density_parameter_response
             or args.density_response_unroll_steps > 0
@@ -2245,22 +2424,48 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             or float(weights["lambda_Q"]) != 0.0
         )
         for molecule_offset, molecule in enumerate(molecules):
-            base = _evaluate_point_graph(
-                context, bundle_cache, molecule, molecule.base, create_graph=True
-            )
-            base_envelope = base
-            if response_enabled and needs_envelope_energy:
-                base_envelope = _evaluate_point_graph(
+            if args.egf_label_density_replay:
+                replay = _evaluate_point_graph(
                     context,
                     bundle_cache,
                     molecule,
-                    molecule.base,
+                    _label_density_replay_point(molecule),
                     create_graph=True,
                     attach_density_parameter_response=False,
                 )
+                replay_envelope = replay
+                if molecule.base is None:
+                    raise RuntimeError("implicit HVP training requires a center density")
+                max_density_norm = max(
+                    max_density_norm, float(molecule.base.final_gradient_norm)
+                )
+                max_label_density_gradient_norm = max(
+                    max_label_density_gradient_norm,
+                    float(replay.projected_density_gradient_norm.detach().cpu()),
+                )
+            else:
+                replay = _evaluate_point_graph(
+                    context, bundle_cache, molecule, molecule.base, create_graph=True
+                )
+                replay_envelope = replay
+                if response_enabled and needs_envelope_energy:
+                    replay_envelope = _evaluate_point_graph(
+                        context,
+                        bundle_cache,
+                        molecule,
+                        molecule.base,
+                        create_graph=True,
+                        attach_density_parameter_response=False,
+                    )
+                max_density_norm = max(
+                    max_density_norm,
+                    float(
+                        replay.projected_density_gradient_norm.detach().cpu()
+                    ),
+                )
             component_values["energy"].append(
                 normalized_energy_l1(
-                    base_envelope.energies.total_energy,
+                    replay_envelope.energies.total_energy,
                     molecule.pbe_total_energy,
                     absolute_scale_hartree=float(
                         loss_config["energy"]["absolute_scale_hartree"]
@@ -2269,8 +2474,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             )
             component_values["force"].append(
                 mixed_absolute_relative_l1(
-                    base.force,
-                    torch.as_tensor(molecule.pbe_force, dtype=base.force.dtype),
+                    replay.force,
+                    torch.as_tensor(
+                        molecule.pbe_force, dtype=replay.force.dtype
+                    ),
                     absolute_scale=float(
                         loss_config["force"]["absolute_scale_hartree_per_bohr"]
                     ),
@@ -2283,11 +2490,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 )
             )
             component_values["density"].append(
-                (base.projected_density_gradient_norm / args.density_loss_scale) ** 2
-            )
-            max_density_norm = max(
-                max_density_norm,
-                float(base.projected_density_gradient_norm.detach().cpu()),
+                (
+                    replay.projected_density_gradient_norm
+                    / args.density_loss_scale
+                )
+                ** 2
             )
             selected = selected_by_molecule[molecule.molecule_id]
             for direction in selected:
@@ -2439,9 +2646,38 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     f"{molecule.molecule_id}:{direction.kind}:{direction.index}"
                 )
 
+        maximum_response_correction_fraction = max(
+            (
+                float(item["response_correction_fraction_of_relaxed_norm"])
+                for item in analytic_response_rows
+            ),
+            default=0.0,
+        )
+        maximum_cancellation_index = max(
+            (
+                float(item["cancellation_index"])
+                for item in analytic_response_rows
+            ),
+            default=0.0,
+        )
+        if (
+            maximum_response_correction_fraction
+            > args.response_correction_fraction_max
+        ):
+            raise RuntimeError(
+                "Density-response correction fraction exceeds fail-closed "
+                f"threshold: {maximum_response_correction_fraction:.6g} > "
+                f"{args.response_correction_fraction_max:.6g}"
+            )
+        if maximum_cancellation_index > args.cancellation_index_max:
+            raise RuntimeError(
+                "Partial/response cancellation index exceeds fail-closed "
+                f"threshold: {maximum_cancellation_index:.6g} > "
+                f"{args.cancellation_index_max:.6g}"
+            )
         _assert_training_density_stationarity(
             max_density_norm,
-            args.density_strict_threshold,
+            _training_density_stationarity_threshold(args),
             enabled=args.strict_active_density_refresh,
         )
         components = {}
@@ -2569,6 +2805,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "total_loss": float(total_loss.detach().cpu()),
             "parameter_gradient_norm_before_clip": float(gradient_norm.detach().cpu()),
             "max_cached_density_gradient_norm": max_density_norm,
+            "max_label_density_projected_gradient_norm": (
+                max_label_density_gradient_norm
+            ),
             "density_parameter_step": density_parameter_step,
             "strict_active_density_refresh": args.strict_active_density_refresh,
             "active_directions": ";".join(active_directions),
@@ -2631,6 +2870,34 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 default=0.0,
             ),
+            "analytic_density_response_norm_mean": (
+                float(
+                    np.mean(
+                        [
+                            float(item["density_response_norm"])
+                            for item in analytic_response_rows
+                        ]
+                    )
+                )
+                if analytic_response_rows
+                else 0.0
+            ),
+            "analytic_response_correction_fraction_max": (
+                maximum_response_correction_fraction
+            ),
+            "analytic_cancellation_index_max": maximum_cancellation_index,
+            "analytic_partial_response_cosine_mean": (
+                float(
+                    np.mean(
+                        [
+                            float(item["partial_response_cosine"])
+                            for item in analytic_response_rows
+                        ]
+                    )
+                )
+                if analytic_response_rows
+                else 0.0
+            ),
             "backward_seconds": backward_seconds,
             "optimizer_seconds": optimizer_seconds,
             "density_parameter_predictor_seconds": density_predictor_seconds,
@@ -2656,6 +2923,28 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         }
         loss_rows.append(row)
         _write_csv(args.output_dir / "training_curve.csv", loss_rows)
+
+        # Higher-order autograd tensors otherwise survive in loop-local containers
+        # until the next iteration (or final full-Hessian evaluation) has already
+        # constructed another E_cc graph. Drop them before either operation.
+        component_values.clear()
+        components.clear()
+        weighted.clear()
+        backward_terms = {}
+        diagnostic_terms = {}
+        replay = None
+        replay_envelope = None
+        base_envelope = None
+        hvp = None
+        target_hvp = None
+        total_loss = None
+        old_parameter_values = []
+        optimizer.zero_grad(set_to_none=True)
+        if hvp_optimizer is not None:
+            hvp_optimizer.zero_grad(set_to_none=True)
+        gc.collect()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
         evaluate_now = step == args.max_steps or step % args.eval_interval == 0
         checkpoint_now = (
@@ -2697,15 +2986,17 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             density_rows.extend(refreshed)
             _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
             density_parameter_step = reported_step
-            new_metrics = (
-                _analytic_full_hessian_metrics(
-                    context, bundle_cache, molecules, step=reported_step
+            new_metrics = []
+            if args.evaluation_mode == "full":
+                new_metrics = (
+                    _analytic_full_hessian_metrics(
+                        context, bundle_cache, molecules, step=reported_step
+                    )
+                    if args.analytic_relaxed_hvp
+                    else _full_hessian_metrics(
+                        context, bundle_cache, molecules, step=reported_step
+                    )
                 )
-                if args.analytic_relaxed_hvp
-                else _full_hessian_metrics(
-                    context, bundle_cache, molecules, step=reported_step
-                )
-            )
             hessian_rows.extend(new_metrics)
             _write_csv(args.output_dir / "full_hessian_metrics.csv", hessian_rows)
             _save_checkpoint(
@@ -2719,21 +3010,25 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 definition=checkpoint_definition,
                 provenance_update=checkpoint_provenance,
             )
-            median_relative = float(
-                np.median([row["relative_frobenius"] for row in new_metrics])
-            )
-            all_below_gate = all(
-                row["relative_frobenius"]
-                <= float(
-                    protocol["stage1"]["gate"][
-                        "training_all_parent_relative_frobenius_max"
-                    ]
+            if new_metrics:
+                median_relative = float(
+                    np.median([row["relative_frobenius"] for row in new_metrics])
                 )
-                for row in new_metrics
-            )
-            if median_relative <= args.early_stop_relative_frobenius and all_below_gate:
-                stopped_early = True
-                break
+                all_below_gate = all(
+                    row["relative_frobenius"]
+                    <= float(
+                        protocol["stage1"]["gate"][
+                            "training_all_parent_relative_frobenius_max"
+                        ]
+                    )
+                    for row in new_metrics
+                )
+                if (
+                    median_relative <= args.early_stop_relative_frobenius
+                    and all_below_gate
+                ):
+                    stopped_early = True
+                    break
         elif (
             not args.strict_active_density_refresh
             and max_density_norm > args.density_drift_trigger
@@ -2782,8 +3077,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         for row in final_metrics
     )
     summary = {
-        "definition": "block-coordinate complete-total relaxed scalar-energy capacity fit",
+        "definition": checkpoint_definition,
         "protocol_id": protocol["protocol_id"],
+        "protocol_sha256": protocol_sha256,
         "source_run_name": run_spec.name,
         "source_run_dir": str(run_spec.run_dir),
         "source_checkpoint": str(run_spec.ckpt),
@@ -2803,6 +3099,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "proxy_hvp_fallback_allowed": False,
         "additional_training_steps": args.max_steps,
+        "evaluation_mode": args.evaluation_mode,
+        "skipped_resume_initial_full_hessian": (
+            args.skip_resume_initial_full_hessian
+        ),
+        "two_step_failure_reproduction": args.two_step_failure_reproduction,
         "checkpoint_interval": args.checkpoint_interval,
         "resumed_capacity_optimizer": args.resume_capacity_optimizer,
         "alternating_hvp_updates": args.alternating_hvp_updates,
@@ -2836,6 +3137,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "density_parameter_response_predictor": (
             args.density_parameter_response_predictor
         ),
+        "egf_label_density_replay": args.egf_label_density_replay,
+        "response_correction_fraction_max": (
+            args.response_correction_fraction_max
+        ),
+        "cancellation_index_max": args.cancellation_index_max,
         "loss_balance_mode": args.loss_balance_mode,
         "three_body_geometry_residual": args.three_body_geometry_residual,
         "three_body_initial_coefficients": (
@@ -2869,10 +3175,14 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "implicit_response_solver": args.implicit_response_solver,
         "implicit_response_warm_start": args.implicit_response_warm_start,
         "strict_active_density_refresh": args.strict_active_density_refresh,
+        "density_solver_target": args.density_strict_threshold,
+        "training_density_stationarity_threshold": (
+            _training_density_stationarity_threshold(args)
+        ),
         "training_density_stationarity_gate_passed": bool(loss_rows)
         and all(
             row["max_cached_density_gradient_norm"]
-            < args.density_strict_threshold
+            < _training_density_stationarity_threshold(args)
             for row in loss_rows
         ),
         "loss_weights": weights,
@@ -2887,7 +3197,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             not args.strict_active_density_refresh
             or all(
                 row["max_cached_density_gradient_norm"]
-                < args.density_strict_threshold
+                < _training_density_stationarity_threshold(args)
                 for row in loss_rows
             )
         )
@@ -2991,6 +3301,14 @@ def parse_args() -> argparse.Namespace:
         help="Restore AdamW state and cumulative step from a capacity-fit checkpoint.",
     )
     parser.add_argument(
+        "--skip-resume-initial-full-hessian",
+        action="store_true",
+        help=(
+            "On a provenance-bound optimizer resume, reuse the frozen root "
+            "initial metrics and avoid recomputing an intermediate full Hessian."
+        ),
+    )
+    parser.add_argument(
         "--alternating-hvp-updates",
         action="store_true",
         help="Use independent AdamW states for replay and direct-HVP update steps.",
@@ -3021,10 +3339,51 @@ def parse_args() -> argparse.Namespace:
             "HVP/curvature/spectrum losses."
         ),
     )
+    parser.add_argument(
+        "--egf-label-density-replay",
+        action="store_true",
+        help=(
+            "Evaluate E/G/F at the fixed PBE/KS label density while keeping "
+            "the analytic HVP on the model-self-consistent density branch."
+        ),
+    )
+    parser.add_argument(
+        "--response-correction-fraction-max",
+        type=float,
+        default=math.inf,
+        help="Fail before an update if ||response correction||/||relaxed HVP|| exceeds this.",
+    )
+    parser.add_argument(
+        "--cancellation-index-max",
+        type=float,
+        default=math.inf,
+        help=(
+            "Fail before an update if "
+            "(||partial HVP||+||response correction||)/||relaxed HVP|| "
+            "exceeds this."
+        ),
+    )
     parser.add_argument("--directions-per-step", type=int, default=2)
     parser.add_argument("--direction-repeat-steps", type=int, default=8)
     parser.add_argument("--direction-limit", type=int, default=None)
     parser.add_argument("--displacement", type=float, default=1.0e-3)
+    parser.add_argument(
+        "--evaluation-mode",
+        choices=("full", "none"),
+        default="full",
+        help=(
+            "Use 'none' only for a zero-learning-rate gradient smoke; formal "
+            "training must retain initial/final full internal-Hessian evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--two-step-failure-reproduction",
+        action="store_true",
+        help=(
+            "Allow at most two nonzero-LR steps without matrix evaluation, "
+            "with a checkpoint every step, solely to reproduce a registered failure."
+        ),
+    )
     parser.add_argument("--eval-interval", type=int, default=100)
     parser.add_argument("--checkpoint-interval", type=int, default=0)
     parser.add_argument("--early-stop-relative-frobenius", type=float, default=0.01)
@@ -3098,6 +3457,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--density-fallback-max-cycles", type=int, default=10000)
     parser.add_argument("--density-fallback-threshold", type=float, default=1.0e-5)
     parser.add_argument("--density-strict-threshold", type=float, default=1.0e-8)
+    parser.add_argument(
+        "--training-density-stationarity-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Independent fail-closed gate for the density gradient recomputed "
+            "on the training graph. Defaults to --density-strict-threshold; "
+            "set the solver target tighter to leave numerical verification margin."
+        ),
+    )
     parser.add_argument("--lbfgs-max-iterations", type=int, default=500)
     parser.add_argument("--newton-max-iterations", type=int, default=6)
     parser.add_argument("--integral-derivative-step", type=float, default=1.0e-4)

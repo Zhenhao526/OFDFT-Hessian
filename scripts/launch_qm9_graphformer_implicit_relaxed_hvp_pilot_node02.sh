@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=${QM9_NODE02_ROOT:-/home/shenwei01/xzh_node02_20260724}
+repo=${QM9_NODE02_REPO:-${root}/work/structures25}
+phase=${QM9_IMPLICIT_HVP_PHASE:-smoke}
+protocol=${QM9_IMPLICIT_HVP_PROTOCOL:-${repo}/configs/audit/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v1.yaml}
+manifest=${root}/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/manifests/train20_parent_manifest.json
+direction_manifest=${root}/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/directions/train20/manifest.json
+article_checkpoint=${root}/runtime_parent/_runtime/models/train/runs/trained-on-qm9/checkpoints/last.ckpt
+article_run_dir=${root}/models/train/runs/qm9_graphformer_egfh10_force_secant_article_warmstart_s100_v1
+run_spec="released_article_qm9_scalar_graphformer=${article_run_dir}=${article_checkpoint}"
+source_checkpoint_sha=9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+output=${QM9_IMPLICIT_HVP_OUTPUT:-${root}/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v1/${phase}_$(date +%Y%m%d_%H%M%S)}
+
+if [[ -e "${output}" ]]; then
+  echo "Refusing to reuse output directory: ${output}" >&2
+  exit 2
+fi
+mkdir -p "$(dirname "${output}")"
+
+check_sha256() {
+  local path=$1
+  local expected=$2
+  local actual
+  actual=$(sha256sum "${path}" | awk '{print $1}')
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "SHA256 mismatch for ${path}: ${actual} != ${expected}" >&2
+    exit 3
+  fi
+}
+
+check_sha256 "${manifest}" 4d2c8841d550951eb518021009e12c2b6a29862f28afb0d07d32fd4da8484d01
+check_sha256 "${direction_manifest}" 1ea9fe04a971b5998620d49f5e68567938ab4f505f17636fb2065085b8c73804
+check_sha256 "${article_checkpoint}" 9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+
+gpu=${QM9_IMPLICIT_HVP_GPU:-$(
+  nvidia-smi --query-gpu=index,memory.used,utilization.gpu \
+    --format=csv,noheader,nounits |
+    awk -F, '
+      $2 + 0 < 100 && $3 + 0 < 5 && first == "" {
+        gsub(/ /, "", $1)
+        first = $1
+      }
+      END {print first}
+    '
+)}
+if [[ -z "${gpu}" ]]; then
+  echo "No idle GPU satisfies memory<100 MiB and utilization<5%." >&2
+  exit 4
+fi
+
+case "${phase}" in
+  smoke)
+    max_steps=1
+    learning_rate=0
+    evaluation_mode=none
+    checkpoint_interval=1
+    eval_interval=1
+    gradient_diagnostics_interval=1
+    lambda_h=0.01
+    phase_args=()
+    ;;
+  formal)
+    calibration=${QM9_IMPLICIT_HVP_CALIBRATION:?Set QM9_IMPLICIT_HVP_CALIBRATION for formal phase}
+    check_sha256 "${calibration}" "${QM9_IMPLICIT_HVP_CALIBRATION_SHA256:?Set calibration SHA256}"
+    lambda_h=$(
+      python3 - "${calibration}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1]))["formal_lambda_h"])
+PY
+    )
+    max_steps=10
+    learning_rate=1e-7
+    evaluation_mode=full
+    checkpoint_interval=5
+    eval_interval=10
+    gradient_diagnostics_interval=5
+    phase_args=(
+      --alternating-hvp-updates
+      --hvp-learning-rate 1e-7
+      --replay-update-period 5
+    )
+    ;;
+  resume_formal)
+    calibration=${QM9_IMPLICIT_HVP_CALIBRATION:?Set QM9_IMPLICIT_HVP_CALIBRATION for resume}
+    check_sha256 "${calibration}" "${QM9_IMPLICIT_HVP_CALIBRATION_SHA256:?Set calibration SHA256}"
+    resume_checkpoint=${QM9_IMPLICIT_HVP_RESUME_CHECKPOINT:?Set the step-5 checkpoint}
+    source_checkpoint_sha=${QM9_IMPLICIT_HVP_RESUME_CHECKPOINT_SHA256:?Set the step-5 checkpoint SHA256}
+    check_sha256 "${resume_checkpoint}" "${source_checkpoint_sha}"
+    run_spec="released_article_qm9_scalar_graphformer=${article_run_dir}=${resume_checkpoint}"
+    lambda_h=$(
+      python3 - "${calibration}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1]))["formal_lambda_h"])
+PY
+    )
+    max_steps=5
+    learning_rate=1e-7
+    evaluation_mode=full
+    checkpoint_interval=5
+    eval_interval=10
+    gradient_diagnostics_interval=5
+    phase_args=(
+      --alternating-hvp-updates
+      --hvp-learning-rate 1e-7
+      --replay-update-period 5
+      --resume-capacity-optimizer
+      --skip-resume-initial-full-hessian
+    )
+    ;;
+  reproduce)
+    calibration=${QM9_IMPLICIT_HVP_CALIBRATION:?Set QM9_IMPLICIT_HVP_CALIBRATION for reproduce phase}
+    check_sha256 "${calibration}" "${QM9_IMPLICIT_HVP_CALIBRATION_SHA256:?Set calibration SHA256}"
+    lambda_h=1
+    max_steps=2
+    learning_rate=1e-7
+    evaluation_mode=none
+    checkpoint_interval=1
+    eval_interval=2
+    gradient_diagnostics_interval=1
+    phase_args=(
+      --alternating-hvp-updates
+      --hvp-learning-rate 1e-7
+      --replay-update-period 5
+      --two-step-failure-reproduction
+    )
+    ;;
+  *)
+    echo "Unsupported QM9_IMPLICIT_HVP_PHASE=${phase}" >&2
+    exit 5
+    ;;
+esac
+
+source "${repo}/scripts/activate_qm9_node02_local.sh"
+cd "${repo}"
+export CUDA_VISIBLE_DEVICES="${gpu}"
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
+export MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}
+export MLDFT_SYMMETRIC_MATRIX_POWER_MODE=eigh_second_order_audit
+
+/usr/bin/time -v -o "${output}.resource.time" \
+  python scripts/qm9_complete_total_capacity_train.py \
+    --protocol "${protocol}" \
+    --manifest "${manifest}" \
+    --direction-manifest "${direction_manifest}" \
+    --direction-manifest-sha256 1ea9fe04a971b5998620d49f5e68567938ab4f505f17636fb2065085b8c73804 \
+    --direction-role all \
+    --run "${run_spec}" \
+    --source-checkpoint-sha256 "${source_checkpoint_sha}" \
+    --root-source-checkpoint-sha256 9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09 \
+    --require-complete-total-relaxed-hvp \
+    --analytic-relaxed-hvp \
+    --symmetric-matrix-power-mode eigh_second_order_audit \
+    --egf-label-density-replay \
+    --output-dir "${output}" \
+    --molecules 0016298 \
+    --device cuda:0 \
+    --transform-device cpu \
+    --seed 20260731 \
+    --max-steps "${max_steps}" \
+    --learning-rate "${learning_rate}" \
+    --weight-decay 0 \
+    --adam-beta1 0.9 \
+    --adam-beta2 0.999 \
+    --directions-per-step 1 \
+    --evaluation-mode "${evaluation_mode}" \
+    --eval-interval "${eval_interval}" \
+    --checkpoint-interval "${checkpoint_interval}" \
+    --early-stop-relative-frobenius 0 \
+    --gradient-clip-norm 1 \
+    --gradient-diagnostics-interval "${gradient_diagnostics_interval}" \
+    --lambda-e 0.1 \
+    --lambda-rho 0.8 \
+    --lambda-f 1 \
+    --lambda-h "${lambda_h}" \
+    --lambda-q 0 \
+    --lambda-spec 0 \
+    --density-loss-scale 1e-2 \
+    --strict-active-density-refresh \
+    --density-response-unroll-steps 0 \
+    --density-parameter-response-predictor \
+    --connect-lagrange-multiplier-response \
+    --implicit-density-parameter-response \
+    --implicit-response-tolerance 3e-5 \
+    --implicit-response-max-iterations 2500 \
+    --implicit-response-damping 1e-8 \
+    --implicit-response-diagonal-probes 0 \
+    --implicit-response-solver direct \
+    --implicit-response-warm-start \
+    --base-initialization label_reference \
+    --density-lr 1e-3 \
+    --density-max-cycles 1000 \
+    --density-first-threshold 1e-2 \
+    --density-fallback-lr 3e-4 \
+    --density-fallback-max-cycles 10000 \
+    --density-fallback-threshold 1e-5 \
+    --density-strict-threshold 5e-9 \
+    --training-density-stationarity-threshold 1e-8 \
+    --lbfgs-max-iterations 500 \
+    --newton-max-iterations 6 \
+    --integral-derivative-step 1e-4 \
+    --integral-directional-second-step 1e-4 \
+    --integral-derivative-workers 8 \
+    --integral-cache-entries 48 \
+    --analytic-response-damping 0 \
+    --analytic-response-residual-tolerance 1e-8 \
+    --response-correction-fraction-max 5 \
+    --cancellation-index-max 10 \
+    "${phase_args[@]}" \
+    2>&1 | tee "${output}.console.log"
+
+if [[ "${phase}" == "smoke" ]]; then
+  python scripts/calibrate_qm9_implicit_hvp_weight.py \
+    --protocol "${protocol}" \
+    --training-curve "${output}/training_curve.csv" \
+    --output "${output}/calibration.json"
+elif [[ "${phase}" == "formal" ]]; then
+  cp "${calibration}" "${output}/source_calibration.json"
+fi
+
+echo "implicit_hvp_output=${output}"

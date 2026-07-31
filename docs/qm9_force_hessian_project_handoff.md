@@ -1,12 +1,200 @@
 # QM9 Force/Hessian Project Handoff
 
-Last updated: 2026-07-31 11:56 Asia/Shanghai
+Last updated: 2026-07-31 20:13 Asia/Shanghai
 
 ## Purpose
 
 This is the handoff and continuity document for the QM9 P1-410 and random1000 force/Hessian work. Update this file after every major code change, experiment milestone, evaluator change, model checkpoint, or conclusion change.
 
 Detailed reports remain in separate files under `docs/`; this document is the first file a new maintainer should read.
+
+### Model-self-consistent implicit relaxed-HVP pilot (2026-07-31)
+
+The first train-only implicit relaxed-HVP pilot is complete on node02 for
+train parent `0016298`. It keeps the released, unmodified
+18,692,586-parameter scalar Graphformer and initializes from the released
+article checkpoint. No force or Hessian output head was added. E/G/F replay
+uses the frozen PBE/KS label density, while H supervision uses the model's own
+strictly self-consistent density:
+
+`H_relaxed v = E_RR v - E_Rc E_cc^-1 E_cR v`.
+
+Each H step samples one fresh, unnormalized Rademacher probe in the complete
+39-dimensional internal orthonormal basis. Two independent AdamW states
+alternate eight H-only updates and two E/G/F replay updates at learning rate
+`1e-7`. The density solver target is `5e-9`; the independently recomputed
+training-graph stationarity gate remains `1e-8`. Response residual,
+response/relaxed norm fraction, and partial/response cancellation are
+fail-closed at `1e-8`, `5`, and `10`, respectively. Validation and Test100
+were not accessed.
+
+The preliminary zero-learning-rate gradient audit showed why joint updates
+were rejected. At `lambda_H=0.01`, the weighted H gradient norm was `7.096`,
+versus `52041.8` for aggregate E/G/F. Matching 25% of the E/G/F norm would
+require `lambda_H=18.34`, beyond the frozen cap of 1.0. The same audit
+verified a well-behaved model-self-consistent response: density-response norm
+`17.229`, correction/relaxed fraction `0.401`, cancellation index `1.752`,
+partial/response cosine `-0.910`, and response residual `1.51e-12`.
+
+The formal run completed 10 optimizer steps, with a step-5 checkpoint/resume.
+The first process exhausted the 79.25 GiB GPU while constructing step 6 after
+the initial full 39-direction Hessian and five higher-order training graphs.
+No training data were lost. The resume path restores both optimizer states,
+reuses the frozen step-0 metrics, and explicitly releases higher-order
+autograd graphs before the next step or final Hessian. Fourteen focused tests
+pass. Peak per-step memory after the fix is `76.7--77.3 GiB`.
+
+All density and implicit-response numerical gates pass over the full
+trajectory:
+
+- maximum training-graph density gradient: `4.48e-9`;
+- maximum strict-refresh gradient: `3.76e-9`;
+- maximum strict-refresh cost: 10,270 cycles;
+- maximum response residual: `2.74e-12`;
+- maximum response/relaxed norm fraction: `0.848`;
+- maximum cancellation index: `2.570`;
+- all recorded training values are finite.
+
+The complete internal-Hessian comparison is:
+
+| metric | step 0 | step 10 | relative change |
+| --- | ---: | ---: | ---: |
+| Relative Frobenius | 1.81813482 | 1.78874982 | -1.616% |
+| symmetric Relative Frobenius | 1.81813482 | 1.78874982 | -1.616% |
+| MAE (Ha/Bohr^2) | 0.05864775 | 0.05840789 | -0.409% |
+| RMSE (Ha/Bohr^2) | 0.15435100 | 0.15185635 | -1.616% |
+| direction-HVP median relative error | 1.860450 | 1.827301 | -1.782% |
+| direction-HVP P90 relative error | 2.617930 | 2.592008 | -0.990% |
+| direction-HVP maximum relative error | 5.206214 | 5.212822 | +0.127% |
+| complete-total force MAE (Ha/Bohr) | 0.07749919 | 0.07747370 | -0.033% |
+| total-energy absolute error (Ha) | 0.00036958 | 0.00041337 | +11.848% |
+
+The frequency diagnostic uses the analytic complete relaxed Hessians at both
+steps, symmetrizes them numerically, mass weights, removes translation and
+rotation, and matches modes to PBE by maximum absolute overlap:
+
+| metric | step 0 | step 10 | change |
+| --- | ---: | ---: | ---: |
+| frequency MAE (cm^-1) | 959.535 | 936.711 | -2.38% |
+| frequency RMSE (cm^-1) | 1306.385 | 1295.790 | -0.81% |
+| maximum frequency error (cm^-1) | 3465.189 | 3429.364 | -1.03% |
+| mean mode overlap | 0.594695 | 0.586853 | -1.32% |
+| model/PBE imaginary modes | 12 / 2 | 11 / 2 | one fewer model imaginary mode |
+
+Decision: the implicit self-consistent branch is numerically valid and moves
+Hessian/frequency metrics in the desired direction, but the effect after
+eight H updates is only `1--2%`, absolute errors remain unacceptable, mode
+overlap worsens, and energy error exceeds the frozen 10% regression allowance
+at `+11.85%`. Therefore `stage1_gate_passed=false`. Freeze this as a
+proof-of-semantics/cost pilot; do not immediately scale molecule count or run
+the expensive Cartesian force-difference closure. The next small ablation
+should reduce the density-solve cost and energy-gradient domination before
+more data: preserve alternating optimizers, test a smaller replay learning
+rate or replay trust-region, and evaluate whether response-solver
+preconditioning can avoid the recurring 10k-cycle refreshes.
+
+Formal resumed run:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v2/0016298_alternating_resume_s5to10_tightsolve_cleanup_v2_20260731`.
+Final checkpoint SHA256:
+`16936269d0f961af099cb1a23826446b657f6e81c78bd4b4a8ff5a5a335ea37f`.
+Combined audit summary:
+`combined_audit_summary.json`.
+Protocol SHA256:
+`709a7e47a8a3f62e8577cadbf612ae153f681c8365a3d1ec82b51791e2ab7bd2`.
+Analytic vibration comparison:
+`vibrational_analytic_comparison/summary.json`.
+
+### Six-direction Rademacher EGFH result (2026-07-31)
+
+The ten-parent, six-direction Rademacher EGFH experiment and its one-molecule
+full-Hessian audit are complete on node02. The run used the unmodified
+18.7M-parameter scalar Graphformer and was initialized from the released
+article weights; it was not a scratch run. Validation and Test100 were not
+accessed.
+
+The dataset is
+`/home/shenwei01/xzh_node02_20260724/data/QM9PBEForceEGFH10Rademacher6V1`.
+Each parent has one center and six symmetric displacement pairs, for 13
+geometries per parent and 130 geometries total. The displacement is
+coordinatewise i.i.d. Rademacher,
+`delta_R[i,alpha] = 0.01 Angstrom * xi[i,alpha]`,
+`xi[i,alpha] in {-1,+1}`, without translation removal. All 130 Kohn-Sham
+checkpoints and all 130 label archives completed successfully.
+
+Training used the four conservative objectives:
+
+- `E`: learned `kin_plus_xc` energy;
+- `G`: particle-number-projected density-coefficient gradient;
+- `F`: complete PBE force target versus the scalar-derived model force;
+- `H`: normalized central force secant against the complete-PBE force secant.
+
+The E/G/F/H weights were `0.1/0.8/1.0/0.01`. Physical batch size was 12,
+containing three complete displacement pairs per optimizer step, with no
+gradient accumulation. The article-warm-start trajectory reached optimizer
+step 2000 and met the frozen convergence rule: the last two adjacent 50-step
+mean-total-loss changes were `-0.001348` and `-0.008557`, both below the 2%
+absolute-relative-change threshold. Final 50-step means were:
+
+| loss | mean over steps 1950--1999 |
+| --- | ---: |
+| weighted total | 0.00383380 |
+| E | 0.00586487 |
+| G | 0.00214408 |
+| F | 0.00063810 |
+| H | 0.08939497 |
+
+Final checkpoint:
+`/home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_article_warmstart_convergence_s2000_v1/checkpoints/last.ckpt`.
+SHA256:
+`1efe4746c815989499ebe0ad82a386e2cff56d8f2019309ca1284770d0988fe8`.
+The dataset manifest SHA256 is
+`1c228592c7c1ba0674cddf34fe208e3b3b6919391956dc25a1ece30a66131d5e`.
+
+The final physical audit evaluated train parent `0016298`, sample 0. It
+independently optimized the learned density at the base and at both sides of
+all 45 Cartesian coordinates, used transform autograd for the complete
+scalar-derived force, and formed the density-relaxed total-OFDFT Hessian by
+centered force differences at `1e-4 Bohr`. The 45/45 calculation completed
+successfully in `1:50:49` wall time.
+
+| metric | six-direction step-2000 result |
+| --- | ---: |
+| Hessian relative Frobenius | 0.90693667 |
+| symmetrized relative Frobenius | 0.90693667 |
+| Hessian MAE (Ha/Bohr^2) | 0.03318204 |
+| Hessian RMSE (Ha/Bohr^2) | 0.07699469 |
+| maximum absolute Hessian error | 0.95983654 |
+| antisymmetric/symmetric Frobenius | 3.9416e-5 |
+| frequency MAE (cm^-1) | 1304.8024 |
+| frequency RMSE (cm^-1) | 1558.9091 |
+| mean mode overlap | 0.594750 |
+| model/PBE imaginary modes | 22 / 2 |
+
+Relative to the earlier one-direction article-warm-start step-100 control,
+relative Frobenius improved by `27.75%`, frequency MAE by `19.28%`, and
+frequency RMSE by `17.31%`. These are trend improvements only: the absolute
+Hessian and vibrational errors remain unacceptable.
+
+The formal strict-density caveat is material. Only `40/90` displaced points
+met projected density gradient `<1e-8`; the maximum displaced gradient was
+`3.48e-7` and mean displaced optimization cost was 2772 cycles. The Hessian
+is finite and nearly symmetric, but this run does not pass the strict
+self-consistency gate.
+
+Decision: freeze this checkpoint and result as the multi-direction
+fixed-KS-endpoint control. Do not infer that the low training `H` loss is a
+physical Hessian error and do not scale the same objective. The force-secant
+training branch uses displaced KS-density configurations, whereas physical
+evaluation differentiates after minimizing the learned scalar functional
+with respect to its own density coefficients. The next small experiment
+should supervise randomized internal-space relaxed HVPs on the model's own
+self-consistent density branch and explicitly gate `E_cc` conditioning,
+response residual/norm, cancellation, and endpoint density convergence.
+
+Audit directory:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_total_hessian_vibration_converged_s2000_v1`.
+Per-molecule summary:
+`per_molecule/0016298/summary.json`.
 
 ### EGFH P0 density-response audit (2026-07-31)
 
@@ -4045,6 +4233,12 @@ tests/test_qm9_complete_total_compare_geometry_mlp_runs.py
 
 ## Known Limits
 
+- The six-direction Rademacher EGFH step-2000 result is a train-parent
+  diagnostic, not a promotable Hessian model. Its `0.90694` relative
+  Frobenius and `1304.8 cm^-1` frequency MAE remain poor, and only 40/90
+  displaced density optimizations meet the strict `1e-8` gate. Its
+  fixed-KS-density force-secant training target is not the same branch as the
+  model-density-relaxed Hessian used for physical evaluation.
 - P1-410 is an early pilot only.
 - Historical density-relaxed Hessian metrics use finite difference of the incomplete learned-energy
   force. New `qm9_total_ofdft_hessian_audit.py` results use strict finite difference of the complete
@@ -4184,6 +4378,11 @@ tests/test_qm9_complete_total_compare_geometry_mlp_runs.py
 15. A density-response successor must expose the pre-summation density branch or
    coefficient-level response tokens and preserve one scalar-energy owner. Do not treat more
    attention width or more steps on the final invariant atom state as a response model.
+16. Freeze the six-direction Rademacher step-2000 checkpoint as the
+   fixed-KS-endpoint control. The next EGFH-scale pilot must replace its H
+   objective with model-density-relaxed internal-space HVP supervision and
+   must pass endpoint projected-gradient, response-residual, conditioning,
+   and cancellation gates before adding parents or directions.
 
 ## Update Rule
 

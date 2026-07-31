@@ -103,6 +103,27 @@ def _parse_result(item: str) -> tuple[str, Path]:
     return name, Path(path).resolve()
 
 
+def _parse_hessian_npz_result(
+    item: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    name, molecule_id, path = item.split("=", maxsplit=2)
+    resolved = Path(path).resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    return (
+        name,
+        [
+            {
+                "run": name,
+                "molecule_id": molecule_id,
+                "sample_id": 0,
+                "success": True,
+                "hessian_npz": resolved.as_posix(),
+            }
+        ],
+    )
+
+
 def _result_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     for key in ("rows", "metric_rows", "fixed_density_full_hessian"):
         if key in result:
@@ -166,6 +187,41 @@ def _baseline_result_rows(result_name: str, manifest_path: Path) -> list[dict[st
     return rows
 
 
+def _implicit_hvp_result_rows(
+    result_name: str, run_dir: Path
+) -> list[dict[str, Any]]:
+    """Adapt a completed implicit relaxed-HVP training directory."""
+    summary = json.loads((run_dir / "summary.json").read_text())
+    if summary.get("test100_accessed") is not False:
+        raise ValueError(f"{run_dir} does not certify frozen Test100")
+    if int(summary.get("test100_evaluations_used", 0)) != 0:
+        raise ValueError(f"{run_dir} records Test100 evaluations")
+    final_step = int(summary["final_step"])
+    final_metrics = summary.get("final_full_hessian_metrics", [])
+    rows = []
+    for metric in final_metrics:
+        molecule_id = str(metric["molecule_id"])
+        hessian_path = (
+            run_dir
+            / "hessian_arrays"
+            / f"step_{final_step:07d}_{molecule_id}.npz"
+        ).resolve()
+        if not hessian_path.is_file():
+            raise FileNotFoundError(hessian_path)
+        rows.append(
+            {
+                "run": result_name,
+                "molecule_id": molecule_id,
+                "sample_id": 0,
+                "success": True,
+                "hessian_npz": hessian_path.as_posix(),
+            }
+        )
+    if not rows:
+        raise ValueError(f"{run_dir} lacks final implicit-HVP Hessian metrics")
+    return rows
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = sorted({key for row in rows for key in row})
@@ -213,6 +269,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         result_groups.append(
             (result_name, _baseline_result_rows(result_name, manifest_path))
         )
+    for result_name, run_dir in map(_parse_result, args.implicit_hvp_result or []):
+        result_groups.append(
+            (result_name, _implicit_hvp_result_rows(result_name, run_dir))
+        )
+    for item in args.hessian_npz_result or []:
+        result_groups.append(_parse_hessian_npz_result(item))
     if not result_groups:
         raise ValueError("At least one --result-json or --capacity-result is required")
     for result_name, model_rows in result_groups:
@@ -370,6 +432,21 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="NAME=MANIFEST for a frozen baseline manifest containing capacity_array paths",
+    )
+    parser.add_argument(
+        "--implicit-hvp-result",
+        action="append",
+        default=[],
+        help=(
+            "NAME=DIR for a completed implicit relaxed-HVP training output "
+            "with final_full_hessian_metrics and hessian_arrays."
+        ),
+    )
+    parser.add_argument(
+        "--hessian-npz-result",
+        action="append",
+        default=[],
+        help="NAME=MOLECULE_ID=NPZ for a directly bound train-only Hessian artifact.",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--imaginary-threshold-cm", type=float, default=1.0)

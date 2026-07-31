@@ -15,7 +15,10 @@ from scripts.qm9_complete_total_capacity_train import (
     _assert_training_density_stationarity,
     _density_refresh_scope,
     _hutchinson_direction,
+    _label_density_replay_point,
+    _response_cancellation_diagnostics,
     _save_checkpoint,
+    _training_density_stationarity_threshold,
     train,
 )
 
@@ -74,6 +77,14 @@ def test_strict_training_graph_rejects_nonstationary_density(value):
 
 def test_strict_training_graph_accepts_density_below_threshold():
     _assert_training_density_stationarity(9.9e-9, 1.0e-8, enabled=True)
+
+
+def test_training_density_gate_can_leave_solver_verification_margin():
+    args = SimpleNamespace(
+        density_strict_threshold=5.0e-9,
+        training_density_stationarity_threshold=1.0e-8,
+    )
+    assert _training_density_stationarity_threshold(args) == pytest.approx(1.0e-8)
 
 
 def test_analytic_training_rejects_first_order_only_matrix_power():
@@ -138,6 +149,39 @@ def test_hutchinson_direction_is_fresh_internal_and_has_matching_target():
         first.vector,
         _hutchinson_direction(molecule, step=1, seed=17).vector,
     )
+
+
+def test_label_density_replay_point_preserves_frozen_ks_density():
+    molecule = MoleculeState(
+        molecule_id="synthetic",
+        atomic_numbers=np.asarray([1]),
+        positions_bohr=np.asarray([[0.1, 0.2, 0.3]], dtype=np.float64),
+        pbe_total_energy=-1.25,
+        pbe_force=np.zeros((1, 3), dtype=np.float64),
+        pbe_hessian=np.eye(3, dtype=np.float64),
+        label_coefficients=torch.tensor([0.4, 0.6], dtype=torch.float64),
+        directions=[],
+    )
+
+    point = _label_density_replay_point(molecule)
+
+    np.testing.assert_array_equal(point.positions_bohr, molecule.positions_bohr)
+    torch.testing.assert_close(point.coefficients, molecule.label_coefficients)
+    assert point.total_energy == molecule.pbe_total_energy
+    assert point.cycles == 0
+
+
+def test_response_cancellation_diagnostics_detect_large_antiparallel_terms():
+    diagnostics = _response_cancellation_diagnostics(
+        torch.tensor([1.0], dtype=torch.float64),
+        torch.tensor([-0.9], dtype=torch.float64),
+    )
+
+    assert diagnostics["partial_response_cosine"] == pytest.approx(-1.0)
+    assert diagnostics["response_correction_fraction_of_relaxed_norm"] == pytest.approx(
+        9.0
+    )
+    assert diagnostics["cancellation_index"] == pytest.approx(19.0)
 
 
 def test_checkpoint_records_analytic_definition_and_frozen_provenance(tmp_path):
