@@ -25,6 +25,9 @@ def main() -> None:
     parser.add_argument("--liquid-pair-model", type=Path)
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--csvr-tau", type=float, default=20.0)
+    parser.add_argument("--element-symbol", default="Al")
+    parser.add_argument("--element-config", type=Path, default=ROOT / "config" / "al.json")
+    parser.add_argument("--ranks", type=int)
     parser.add_argument(
         "--config",
         type=Path,
@@ -73,7 +76,9 @@ def main() -> None:
                 seed=51000 + 1000 * phase_index,
                 pair_model=pair_models[phase],
                 config=args.config,
-                ranks=None,
+                ranks=args.ranks,
+                element_symbol=args.element_symbol,
+                element_config=args.element_config,
             )
         )
         prepared.append(
@@ -88,6 +93,8 @@ def main() -> None:
     manifest = {
         "schema": "kedf-pair-ti-pilot-v1",
         "target_kedf": target_kedf,
+        "element": args.element_symbol,
+        "element_config": str(args.element_config.resolve()),
         "temperature_K": endpoint_manifest["temperature_K"],
         "steps": args.steps,
         "csvr_tau_fs": args.csvr_tau,

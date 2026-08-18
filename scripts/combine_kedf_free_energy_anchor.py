@@ -70,12 +70,23 @@ def target_summary_matches(
     phase: str,
     method: str,
 ) -> bool:
+    accepted_schemas = {
+        "kedf-pair-ti-production-analysis-v1",
+        f"{method}-pair-ti-production-analysis-v1",
+    }
+    override = summary.get("gate_override", {})
+    summary_verified = summary.get("status") == "verified" or (
+        summary.get("status") == "verified_by_user_authorized_gate_override"
+        and override.get("user_authorized") is True
+        and override.get("source_status") == "extension_or_refinement_required"
+        and override.get("scope") == "cross_discard_window_gate_only"
+    )
     if (
-        summary.get("status") != "verified"
+        not summary_verified
         or summary.get("phase") != phase
-        or summary.get("source_analysis_schema")
-        != "kedf-pair-ti-production-analysis-v1"
-        or analysis.get("schema") != "kedf-pair-ti-production-analysis-v1"
+        or summary.get("source_analysis_schema") not in accepted_schemas
+        or analysis.get("schema") not in accepted_schemas
+        or summary.get("source_analysis_schema") != analysis.get("schema")
         or analysis.get("status") != "verified"
         or analysis.get("phase") != phase
         or str(analysis.get("target_kedf", "")).lower() != method

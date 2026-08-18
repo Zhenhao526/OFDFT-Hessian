@@ -1,0 +1,105 @@
+{
+  "schema": "mg-three-method-melting-protocol-v1",
+  "element": "Mg",
+  "solid_structure": "hcp",
+  "target_system_atoms": 128,
+  "target_supercell": [4, 4, 4],
+  "rejected_diagnostic_system": {
+    "atoms": 96,
+    "supercell": [4, 4, 3],
+    "reason": "KSDFT Gamma sampling produced a large axial/in-plane stress anisotropy; results are diagnostic only"
+  },
+  "rejected_ks_sampling": {
+    "natoms": 128,
+    "kmesh": [1, 1, 1],
+    "reason": "The fixed-volume hcp c/a energy remained unbracketed through 1.690 and retained large axial stress; a single half-grid twist also failed"
+  },
+  "anchor_temperature_k": 900.0,
+  "enthalpy_temperatures_k": [850.0, 900.0, 950.0, 1000.0, 1050.0],
+  "common_hamiltonian": {
+    "pseudopotential": "mg.lda.lps",
+    "pseudopotential_sha256": "4b964580cfbd798708299bb0e0baef2f437983d29e6d7040f63b7532038b4259",
+    "pseudopotential_xc": "Perdew-Zunger LDA",
+    "dft_functional": "XC_LDA_X+XC_LDA_C_PZ",
+    "ks_smearing_method": "fd",
+    "ks_smearing_sigma_ry_at_900k": 0.005700116,
+    "kpoint_sampling": {
+      "ofdft": [1, 1, 1],
+      "ksdft_target": [2, 2, 2],
+      "ksdft_shift": [0, 0, 0]
+    }
+  },
+  "methods": {
+    "ksdft": {
+      "trajectory_engine": "finite-temperature KSDFT",
+      "kinetic_energy": "Kohn-Sham orbitals",
+      "target_system_atoms": 128,
+      "target_kmesh": [2, 2, 2],
+      "static_hcp_c_over_a": 1.623275723708568,
+      "static_zero_pressure_volume_A3_per_atom": 21.11823378078493,
+      "anchor": "independent KSDFT free-energy path",
+      "enthalpy": "independent KSMD trajectories"
+    },
+    "wt_ks_corrected": {
+      "trajectory_engine": "WT OFDFT",
+      "kinetic_energy": "WT",
+      "anchor": "independent WT anchor plus phase-resolved KSDFT correction",
+      "enthalpy": "independent WT trajectories"
+    },
+    "xwm_ks_corrected": {
+      "trajectory_engine": "XWM OFDFT",
+      "kinetic_energy": "XWM",
+      "anchor": "independent XWM anchor plus phase-resolved KSDFT correction",
+      "enthalpy": "independent XWM trajectories"
+    }
+  },
+  "independence_requirements": [
+    "method-specific zero-pressure volumes",
+    "method-specific solid and liquid trajectories",
+    "method-specific reference potential fits",
+    "method-specific 900 K free-energy anchors",
+    "method-specific enthalpy curves",
+    "method-specific statistical and conservative uncertainty"
+  ],
+  "shared_900k_snapshot_panel": {
+    "phases": ["solid", "liquid"],
+    "selection": "decorrelated, stratified union of WT and XWM equilibrium frames",
+    "minimum_frames_per_source_per_phase": 24,
+    "evaluate_each_frame_with": ["ksdft", "wt", "xwm"],
+    "corrections": {
+      "wt": "phase-resolved BAR/MBAR estimate of F_KSDFT-F_WT",
+      "xwm": "phase-resolved BAR/MBAR estimate of F_KSDFT-F_XWM"
+    },
+    "prohibited_use": [
+      "arithmetic mean correction without ensemble weights",
+      "reuse of the WT correction for XWM",
+      "reuse of the XWM correction for WT",
+      "claiming a free-energy correction when overlap gates fail"
+    ]
+  },
+  "gates": {
+    "phase": "solid_verified or liquid_verified",
+    "nearest_neighbor_angstrom_min": 2.0,
+    "temperature_tolerance_k": 20.0,
+    "pressure_abs_kbar_max": 2.5,
+    "free_energy_overlap_ess_fraction_min": 0.05,
+    "forward_reverse_closure_mev_per_atom_max": 2.0,
+    "enthalpy_discard_spread_mev_per_atom_max": 2.0,
+    "enthalpy_block_se_mev_per_atom_max": 3.0,
+    "enthalpy_half_drift_mev_per_atom_max": 5.0
+  },
+  "melting_definition": {
+    "delta_g": "G_liquid-G_solid",
+    "delta_h": "H_liquid-H_solid",
+    "gibbs_helmholtz": "d(DeltaG/T)/dT=-DeltaH/T^2",
+    "root": "DeltaG(Tm)=0"
+  },
+  "required_outputs": [
+    "verified JSON",
+    "statistical uncertainty",
+    "conservative uncertainty",
+    "DeltaG and DeltaH curves",
+    "SHA256SUMS",
+    "method and cost comparison report"
+  ]
+}

@@ -99,7 +99,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "mpirun_np": args.ranks,
         }
     )
-    element = load_json(ROOT / "config" / "al.json")
+    element_symbol = str(getattr(args, "element_symbol", "Al"))
+    element_config = Path(
+        getattr(args, "element_config", ROOT / "config" / "al.json")
+    )
+    element = load_json(element_config)
+    if str(element.get("element")) != element_symbol:
+        raise ValueError(
+            f"element config declares {element.get('element')!r}, "
+            f"expected {element_symbol!r}"
+        )
     tau_overrides = parse_tau_overrides(args.tau_override)
     known_keys: set[tuple[str, str]] = set()
     pair_models_by_phase: dict[str, Path] = {}
@@ -132,7 +141,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             phase_pair_models.add(pair_model)
 
             source = load_atom_source(
-                source_run.as_posix(), "last", "Al", include_velocities=True
+                source_run.as_posix(),
+                "last",
+                element_symbol,
+                include_velocities=True,
             )
             atoms = source["atoms"]
             if atoms.velocities is None:
@@ -155,13 +167,14 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 point_config,
                 job_type=f"{target_kedf}_pair_formal_thermodynamic_integration",
                 suffix=(
-                    f"al{atoms.natoms}_{phase}_T"
+                    f"{element_symbol.lower()}{atoms.natoms}_{phase}_T"
                     f"{int(source_metadata['target_temperature_K']):04d}_"
                     f"{label}_formal"
                 ),
                 calculation="md",
                 extra_metadata={
                     "phase": phase,
+                    "element": element_symbol,
                     "target_kedf": target_kedf,
                     "lambda": row["lambda"],
                     "target_temperature_K": source_metadata[
@@ -224,6 +237,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         manifest = {
             "schema": "kedf-pair-ti-formal-production-v1",
             "phase": phase,
+            "element": element_symbol,
+            "element_config": str(element_config.resolve()),
             "target_kedf": target_kedf,
             "target_temperature_K": first_metadata["target_temperature_K"],
             "volume_per_atom_A3": first_metadata["volume_per_atom_A3"],
@@ -267,6 +282,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "status": "prepared",
         "launch_authorized": False,
+        "element": element_symbol,
+        "element_config": str(element_config.resolve()),
         "target_kedf": target_kedf,
         "merged_pilot_analysis": str(merged_path),
         "merged_pilot_analysis_sha256": sha256(merged_path),
@@ -297,6 +314,10 @@ def main() -> None:
     parser.add_argument("--restartfreq", type=int, default=100)
     parser.add_argument("--seed", type=int, default=202610000)
     parser.add_argument("--ranks", type=int, default=12)
+    parser.add_argument("--element-symbol", default="Al")
+    parser.add_argument(
+        "--element-config", type=Path, default=ROOT / "config" / "al.json"
+    )
     parser.add_argument("--tau-override", action="append", default=[])
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()

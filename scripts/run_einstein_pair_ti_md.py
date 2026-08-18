@@ -8,7 +8,20 @@ from pathlib import Path
 
 import torch
 
-from run_pair_reference_md import (
+try:
+    from scripts.run_pair_reference_md import (
+        ACCELERATION_FACTOR,
+        AL_MASS_AMU,
+        KB_EV_PER_K,
+        evaluate_model,
+        kinetic_energy,
+        random_velocities,
+        remove_center_of_mass_velocity,
+        temperature,
+        wrap_positions,
+    )
+except ModuleNotFoundError:
+    from run_pair_reference_md import (
     ACCELERATION_FACTOR,
     AL_MASS_AMU,
     KB_EV_PER_K,
@@ -31,6 +44,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--lambda-value", type=float, required=True)
     parser.add_argument("--temperature", type=float, required=True)
+    parser.add_argument("--mass-amu", type=float, default=AL_MASS_AMU)
     parser.add_argument("--steps", type=int, default=20000)
     parser.add_argument("--dt-fs", type=float, default=1.0)
     parser.add_argument("--gamma-per-fs", type=float, default=0.02)
@@ -44,6 +58,8 @@ def main() -> None:
 
     if not 0.0 <= args.lambda_value <= 1.0:
         parser.error("--lambda-value must be between zero and one")
+    if args.mass_amu <= 0.0:
+        parser.error("--mass-amu must be positive")
     torch.set_num_threads(args.threads)
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -67,7 +83,7 @@ def main() -> None:
     if positions.shape != anchors.shape:
         raise ValueError("restart and Einstein reference atom counts differ")
     velocities = random_velocities(
-        positions.shape[0], args.temperature, args.seed, device
+        positions.shape[0], args.temperature, args.seed, device, args.mass_amu
     )
     inverse = torch.linalg.inv(lattice)
 
@@ -101,14 +117,14 @@ def main() -> None:
         return mixed_energy, mixed_forces, pair_energy, harmonic_energy, nearest
 
     generator = torch.Generator(device=device).manual_seed(args.seed + 1)
-    acceleration_scale = ACCELERATION_FACTOR / AL_MASS_AMU
+    acceleration_scale = ACCELERATION_FACTOR / args.mass_amu
     thermostat_decay = math.exp(-args.gamma_per_fs * args.dt_fs)
     thermostat_sigma = math.sqrt(
         (1.0 - thermostat_decay**2)
         * KB_EV_PER_K
         * args.temperature
         * ACCELERATION_FACTOR
-        / AL_MASS_AMU
+        / args.mass_amu
     )
     energy, forces, pair_energy, harmonic_energy, nearest = evaluate()
     args.out.mkdir(parents=True, exist_ok=False)
@@ -125,7 +141,7 @@ def main() -> None:
                     "step": step,
                     "time_fs": step * args.dt_fs,
                     "lambda": args.lambda_value,
-                    "temperature_k": temperature(velocities),
+                    "temperature_k": temperature(velocities, args.mass_amu),
                     "potential_energy_ev_per_atom": float(energy) / positions.shape[0],
                     "pair_energy_ev_per_atom": float(pair_energy) / positions.shape[0],
                     "harmonic_energy_ev_per_atom": float(harmonic_energy)
@@ -134,7 +150,9 @@ def main() -> None:
                         pair_energy - harmonic_energy
                     )
                     / positions.shape[0],
-                    "kinetic_energy_ev_per_atom": kinetic_energy(velocities)
+                    "kinetic_energy_ev_per_atom": kinetic_energy(
+                        velocities, args.mass_amu
+                    )
                     / positions.shape[0],
                     "nearest_neighbor_angstrom": float(nearest),
                     "msd_angstrom2": float(
@@ -171,6 +189,7 @@ def main() -> None:
         "model": str(args.model.resolve()),
         "lambda": args.lambda_value,
         "target_temperature_k": args.temperature,
+        "mass_amu": args.mass_amu,
         "dt_fs": args.dt_fs,
         "steps": args.steps,
         "positions_angstrom": positions.tolist(),
@@ -185,10 +204,11 @@ def main() -> None:
         "natoms": positions.shape[0],
         "lambda": args.lambda_value,
         "target_temperature_k": args.temperature,
+        "mass_amu": args.mass_amu,
         "spring_constant_ev_per_angstrom2": spring,
         "steps": args.steps,
         "minimum_distance_angstrom": minimum_distance,
-        "temperature_last_k": temperature(velocities),
+        "temperature_last_k": temperature(velocities, args.mass_amu),
         "stable": minimum_distance >= args.minimum_distance,
     }
     (args.out / "summary.json").write_text(

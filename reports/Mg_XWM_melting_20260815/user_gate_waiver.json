@@ -1,0 +1,55 @@
+{
+  "authorization": {
+    "date_cst": "2026-08-15",
+    "user_message": "\u8c41\u514d\u672a\u901a\u8fc7\u7684\u95e8\u63a7\uff0c\u8fdb\u884c\u4e0b\u4e00\u6b65"
+  },
+  "not_authorized": [
+    "global threshold changes",
+    "unlisted failures",
+    "silent replacement of raw reports",
+    "claiming strict all-gates-passed"
+  ],
+  "previous_pressure_waiver": {
+    "source": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/multitemp_enthalpy_v1/pressure_gate_user_waiver_20260814_v1/pressure_gate_waiver.json",
+    "source_sha256": "b4dba76b28472b5046e4b191ea886c06d4b5ac8dffb4f8721b775d4265e1e770",
+    "status": "retained unchanged"
+  },
+  "reporting_requirement": "All downstream anchor and Tm results must be labeled preliminary and computed with user-authorized gate waivers.",
+  "schema": "xwm-user-authorized-specific-gate-waiver-v1",
+  "scope": "only the enumerated failed gates; global thresholds remain unchanged",
+  "status": "user_authorized_specific_gate_waivers_recorded",
+  "waived_items": [
+    {
+      "ess_fraction": 0.2674795015033911,
+      "id": "classical_reference_solid_d75_terminal_bridge_closure",
+      "metric": "maximum_adjacent_closure_mev_per_atom",
+      "source": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/solid_bridge2_d75.json",
+      "source_sha256": "91b60cfe1adc1bec75c3c75a2f536bdbaf212a8f9de1615e6365224ed4cca86f",
+      "source_status": "overlap_gate_failed",
+      "threshold": 2.0,
+      "value": 2.384342521407623
+    },
+    {
+      "id": "multitemp_1000K_primary_d50_half_drift",
+      "metric": "half_drift_mev_per_atom",
+      "source": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/multitemp_enthalpy_v1/preliminary_enthalpy_with_pressure_waiver_v1/enthalpy_window_convergence_summary.json",
+      "source_sha256": "48428356c5dbea4384fe9d9966cfbb88410f2f5c6aaa87ac796b28d5b82c25de",
+      "source_status": "gate_failed",
+      "threshold": 5.0,
+      "value": 11.583143063560897
+    },
+    {
+      "id": "multitemp_950K_d75_half_drift_and_temperature",
+      "metrics": {
+        "half_drift_mev_per_atom": 31.345306030257092,
+        "half_drift_threshold": 5.0,
+        "solid_temperature_mean_k": 927.2891716,
+        "target_temperature_k": 950.0,
+        "temperature_tolerance_k": 20.0
+      },
+      "source": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/multitemp_enthalpy_v1/preliminary_enthalpy_with_pressure_waiver_v1/enthalpy_window_convergence_summary.json",
+      "source_sha256": "48428356c5dbea4384fe9d9966cfbb88410f2f5c6aaa87ac796b28d5b82c25de",
+      "source_status": "gate_failed"
+    }
+  ]
+}

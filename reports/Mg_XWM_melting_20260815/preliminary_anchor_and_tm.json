@@ -1,0 +1,352 @@
+{
+  "anchor_variants_ev_per_atom": {
+    "d25": {
+      "liquid": -24.981601717144233,
+      "liquid_minus_solid": 0.006262908220357133,
+      "solid": -24.98786462536459
+    },
+    "d50": {
+      "liquid": -24.980196795442335,
+      "liquid_minus_solid": 0.00874644110209033,
+      "solid": -24.988943236544426
+    },
+    "d75": {
+      "liquid": -24.979637811170775,
+      "liquid_minus_solid": 0.010165236956279244,
+      "solid": -24.989803048127055
+    }
+  },
+  "checks": {
+    "classical_quadrature_within_2_mev": true,
+    "liquid_classical_reports_verified": true,
+    "liquid_zero_pressure_root_consistent": true,
+    "required_waivers_present": true,
+    "solid_d50_bridge_verified": true,
+    "solid_d75_bridge_failure_is_waived": true,
+    "solid_zero_pressure_confirmed": true,
+    "solid_zero_pressure_root_consistent": true,
+    "target_ti_verified": true,
+    "waiver_status": true
+  },
+  "conservative_anchor_shift_roots_k": {
+    "anchor_minus": 917.8338777273893,
+    "anchor_plus": null
+  },
+  "discard_window_tm_spread_k": 45.33275365829468,
+  "free_energy_path_ev_per_atom": {
+    "analytic_reference": {
+      "liquid": 0.04552196600454683,
+      "solid": -0.39382226820656746
+    },
+    "pair_minus_reference_d50": {
+      "liquid": -25.0276408384886,
+      "solid": -24.59604420549367
+    },
+    "xwm_minus_pair": {
+      "liquid": 0.0019220770417200776,
+      "solid": 0.0009232371558083807
+    }
+  },
+  "gate_waiver": {
+    "authorization": {
+      "date_cst": "2026-08-15",
+      "user_message": "\u8c41\u514d\u672a\u901a\u8fc7\u7684\u95e8\u63a7\uff0c\u8fdb\u884c\u4e0b\u4e00\u6b65"
+    },
+    "not_authorized": [
+      "global threshold changes",
+      "unlisted failures",
+      "silent replacement of raw reports",
+      "claiming strict all-gates-passed"
+    ],
+    "previous_pressure_waiver": {
+      "source": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/multitemp_enthalpy_v1/pressure_gate_user_waiver_20260814_v1/pressure_gate_waiver.json",
+      "source_sha256": "b4dba76b28472b5046e4b191ea886c06d4b5ac8dffb4f8721b775d4265e1e770",
+      "status": "retained unchanged"
+    },
+    "reporting_requirement": "All downstream anchor and Tm results must be labeled preliminary and computed with user-authorized gate waivers.",
+    "schema": "xwm-user-authorized-specific-gate-waiver-v1",
+    "scope": "only the enumerated failed gates; global thresholds remain unchanged",
+    "status": "user_authorized_specific_gate_waivers_recorded",
+    "waived_items": [
+      {
+        "ess_fraction": 0.2674795015033911,
+        "id": "classical_reference_solid_d75_terminal_bridge_closure",
+        "metric": "maximum_adjacent_closure_mev_per_atom",
+        "source": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/solid_bridge2_d75.json",
+        "source_sha256": "91b60cfe1adc1bec75c3c75a2f536bdbaf212a8f9de1615e6365224ed4cca86f",
+        "source_status": "overlap_gate_failed",
+        "threshold": 2.0,
+        "value": 2.384342521407623
+      },
+      {
+        "id": "multitemp_1000K_primary_d50_half_drift",
+        "metric": "half_drift_mev_per_atom",
+        "source": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/multitemp_enthalpy_v1/preliminary_enthalpy_with_pressure_waiver_v1/enthalpy_window_convergence_summary.json",
+        "source_sha256": "48428356c5dbea4384fe9d9966cfbb88410f2f5c6aaa87ac796b28d5b82c25de",
+        "source_status": "gate_failed",
+        "threshold": 5.0,
+        "value": 11.583143063560897
+      },
+      {
+        "id": "multitemp_950K_d75_half_drift_and_temperature",
+        "metrics": {
+          "half_drift_mev_per_atom": 31.345306030257092,
+          "half_drift_threshold": 5.0,
+          "solid_temperature_mean_k": 927.2891716,
+          "target_temperature_k": 950.0,
+          "temperature_tolerance_k": 20.0
+        },
+        "source": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/multitemp_enthalpy_v1/preliminary_enthalpy_with_pressure_waiver_v1/enthalpy_window_convergence_summary.json",
+        "source_sha256": "48428356c5dbea4384fe9d9966cfbb88410f2f5c6aaa87ac796b28d5b82c25de",
+        "source_status": "gate_failed"
+      }
+    ]
+  },
+  "melting_results": {
+    "d25": {
+      "delta_g_grid": [
+        {
+          "delta_g_ev_per_atom": 0.010544042022066278,
+          "temperature_k": 850.0
+        },
+        {
+          "delta_g_ev_per_atom": 0.006262908220357133,
+          "temperature_k": 900.0
+        },
+        {
+          "delta_g_ev_per_atom": 0.0018277850759569488,
+          "temperature_k": 950.0
+        },
+        {
+          "delta_g_ev_per_atom": -0.002820470667913176,
+          "temperature_k": 1000.0
+        },
+        {
+          "delta_g_ev_per_atom": -0.007561540416856289,
+          "temperature_k": 1050.0
+        }
+      ],
+      "enthalpy_points_ev_per_atom": [
+        {
+          "liquid_minus_solid": 0.0819645148878081,
+          "temperature_k": 850.0
+        },
+        {
+          "liquid_minus_solid": 0.08473489620068975,
+          "temperature_k": 900.0
+        },
+        {
+          "liquid_minus_solid": 0.0875052775135714,
+          "temperature_k": 950.0
+        },
+        {
+          "liquid_minus_solid": 0.09287582724936527,
+          "temperature_k": 1000.0
+        },
+        {
+          "liquid_minus_solid": 0.09109709546247302,
+          "temperature_k": 1050.0
+        }
+      ],
+      "melting_temperature_k": 970.0172308832407
+    },
+    "d50": {
+      "delta_g_grid": [
+        {
+          "delta_g_ev_per_atom": 0.012796083288945359,
+          "temperature_k": 850.0
+        },
+        {
+          "delta_g_ev_per_atom": 0.00874644110209033,
+          "temperature_k": 900.0
+        },
+        {
+          "delta_g_ev_per_atom": 0.0045524827237099835,
+          "temperature_k": 950.0
+        },
+        {
+          "delta_g_ev_per_atom": 0.0001013521446059797,
+          "temperature_k": 1000.0
+        },
+        {
+          "delta_g_ev_per_atom": -0.004592801010528708,
+          "temperature_k": 1050.0
+        }
+      ],
+      "enthalpy_points_ev_per_atom": [
+        {
+          "liquid_minus_solid": 0.08036655457570419,
+          "temperature_k": 850.0
+        },
+        {
+          "liquid_minus_solid": 0.08296290879841273,
+          "temperature_k": 900.0
+        },
+        {
+          "liquid_minus_solid": 0.08555926302112127,
+          "temperature_k": 950.0
+        },
+        {
+          "liquid_minus_solid": 0.09281267061395937,
+          "temperature_k": 1000.0
+        },
+        {
+          "liquid_minus_solid": 0.09519489992640828,
+          "temperature_k": 1050.0
+        }
+      ],
+      "melting_temperature_k": 1001.0928947478533
+    },
+    "d75": {
+      "delta_g_grid": [
+        {
+          "delta_g_ev_per_atom": 0.01416189777458965,
+          "temperature_k": 850.0
+        },
+        {
+          "delta_g_ev_per_atom": 0.010165236956279244,
+          "temperature_k": 900.0
+        },
+        {
+          "delta_g_ev_per_atom": 0.006017932463067245,
+          "temperature_k": 950.0
+        },
+        {
+          "delta_g_ev_per_atom": 0.0014770777453413846,
+          "temperature_k": 1000.0
+        },
+        {
+          "delta_g_ev_per_atom": -0.0032342674300966604,
+          "temperature_k": 1050.0
+        }
+      ],
+      "enthalpy_points_ev_per_atom": [
+        {
+          "liquid_minus_solid": 0.0807758520908557,
+          "temperature_k": 850.0
+        },
+        {
+          "liquid_minus_solid": 0.08348604238427448,
+          "temperature_k": 900.0
+        },
+        {
+          "liquid_minus_solid": 0.08619623267769327,
+          "temperature_k": 950.0
+        },
+        {
+          "liquid_minus_solid": 0.09860424214573982,
+          "temperature_k": 1000.0
+        },
+        {
+          "liquid_minus_solid": 0.09270783237075975,
+          "temperature_k": 1050.0
+        }
+      ],
+      "melting_temperature_k": 1015.3499845415354
+    }
+  },
+  "parametric_bootstrap": {
+    "bracketed_samples": 20000,
+    "ci95_k": [
+      985.4660367593169,
+      1017.4963679164648
+    ],
+    "mean_k": 1001.1006211706251,
+    "median_k": 1001.0939002037048,
+    "requested_samples": 20000,
+    "sampling_model": "independent Gaussian block-SE errors for d50 anchor and enthalpy points",
+    "seed": 20260815
+  },
+  "primary_anchor": {
+    "delta_g_liquid_minus_solid_ev_per_atom": 0.00874644110209033,
+    "delta_g_liquid_minus_solid_mev_per_atom": 8.74644110209033,
+    "discard_window": "d50"
+  },
+  "primary_d50_melting_temperature_k": 1001.0928947478533,
+  "provenance": {
+    "analytic": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/formal_anchor_with_user_gate_waivers_20260815_v1/analytic_reference_free_energies.json",
+      "sha256": "8b551887a79d958adeb5dc28441cbaf8c59dc7d797c8f5c6bc9e8f84533f6c2b"
+    },
+    "classical_liquid_d25": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/liquid_d25.json",
+      "sha256": "77f393c406bb1372731ddabbdfed37c0cba3ff41b25cf38911becaf9a9cc38c7"
+    },
+    "classical_liquid_d50": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/liquid_d50.json",
+      "sha256": "4f646648677dc7e85ef046eaea9bf1aa59c982b9fba3de59976c1c12f2201f3e"
+    },
+    "classical_liquid_d75": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/liquid_d75.json",
+      "sha256": "c53542424ae0a87c32a0400743484719f430ffc07b57cf5b65c6f4769e1b192c"
+    },
+    "classical_solid_d25": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/solid_d25.json",
+      "sha256": "34c4847ec8311d061a590d2280ced74b4fbfa5cec0baa94752e3e200329bbc0d"
+    },
+    "classical_solid_d50": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/solid_d50.json",
+      "sha256": "86cccf5c78dd73051b5acb92fcfcb3e7f7bdc32dfaf5faeb34361af7cc3aa4d0"
+    },
+    "classical_solid_d75": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/solid_d75.json",
+      "sha256": "70ff6bafc775cbaa6e083043908a802c12211a867dc4aa8de7470ca6c7556a65"
+    },
+    "enthalpy_convergence": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/multitemp_enthalpy_v1/preliminary_enthalpy_with_pressure_waiver_v1/enthalpy_window_convergence_summary.json",
+      "sha256": "48428356c5dbea4384fe9d9966cfbb88410f2f5c6aaa87ac796b28d5b82c25de"
+    },
+    "solid_bridge2_d25": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/solid_bridge2_d25.json",
+      "sha256": "19a1df2b45157f1b1b1fddf793387557e506d1d180b87337492234dc78d0c3d4"
+    },
+    "solid_bridge2_d50": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/solid_bridge2_d50.json",
+      "sha256": "8e19b8e90e58708578c23b8f24f4a5dedbbc1fe36b751aad4a8d76810b78e555"
+    },
+    "solid_bridge2_d75": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/CLASSICAL_REFERENCE_GRID33_ANALYSIS_20260815_v2/reports/solid_bridge2_d75.json",
+      "sha256": "91b60cfe1adc1bec75c3c75a2f536bdbaf212a8f9de1615e6365224ed4cca86f"
+    },
+    "target_diagnostics": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/free_energy_T0900/ti_formal_lambda9_steps1000_v3/FORMAL_ANALYSIS_20260815/strict_formal_diagnostics.json",
+      "sha256": "e77a4322dca72af4c1b6d1cd1086be1b62e3027bff46b5115dc11a8d72a2bfda"
+    },
+    "waiver": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/user_gate_waiver_all_remaining_20260815_v1/user_gate_waiver.json",
+      "sha256": "c22c0da70d22581db4a290e70588176d3d5b44b840baed5c85f63854c7e0a943"
+    },
+    "zero_pressure_eps003": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/numerical_virial_T0900_eps003_v1/analysis/numerical_pressure_summary.json",
+      "sha256": "40827a990d34d43af43154a518952543aa9d35671602152abc0eb757c9268dea"
+    },
+    "zero_pressure_eps005": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/numerical_virial_T0900_v1/analysis/numerical_pressure_summary.json",
+      "sha256": "e49d16d4609ed593a1fe3872195cc2deb80d83ed5f52948c03c0c206a75d793c"
+    },
+    "zero_pressure_solid": {
+      "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/zero_pressure_confirmation_T0900_v1/ZERO_PRESSURE_CONFIRMATION.json",
+      "sha256": "dacd266601868be6c0ceb68548b4621c909f46b50cb4fe4bb1471018615ad24e"
+    }
+  },
+  "reporting_label": "preliminary XWM analysis with user-authorized gate waivers",
+  "schema": "xwm-preliminary-waived-anchor-and-melting-v1",
+  "status": "preliminary_computed_with_user_authorized_gate_waivers",
+  "temperature_anchor_k": 900.0,
+  "thermodynamic_convention": "DeltaG = G_liquid - G_solid; root at DeltaG=0",
+  "uncertainty_budget_mev_per_atom": {
+    "classical_discard_spreads": {
+      "liquid": 1.9639059734581679,
+      "solid": 1.938422762461414
+    },
+    "combined_conservative": 7.125500715775862,
+    "discard_spread_rss": 2.759421946461471,
+    "exact_finite_n_ideal_sensitivity": 2.027122784349714,
+    "finite_size_systematic_allowance": 2.939875437811549,
+    "polson_kbt_ln_n_over_n": 2.939875437811549,
+    "quadrature_rss": 2.2958989620013877,
+    "statistical_rss": 0.5919514720999921,
+    "temporal_drift_rss": 2.0696596096653734,
+    "ti_combined_conservative": 4.185625277964314
+  }
+}

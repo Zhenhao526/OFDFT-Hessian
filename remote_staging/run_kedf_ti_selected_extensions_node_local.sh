@@ -12,6 +12,7 @@ pair_dat=$3
 shift 3
 phase_roots=("$@")
 log=$batch_root/extension_pipeline.log
+python=${KEDF_TI_PYTHON:-python3}
 if [[ -n ${KEDF_TI_CPU_RANGES:-} ]]; then
   read -r -a cpu_ranges <<<"$KEDF_TI_CPU_RANGES"
 else
@@ -19,12 +20,13 @@ else
 fi
 
 [[ -f "$pair_dat" ]]
+command -v "$python" >/dev/null 2>&1 || [[ -x "$python" ]]
 for root in "${phase_roots[@]}"; do
   [[ -f "$root/manifest.json" ]]
 done
 
 mapfile -t points < <(
-  python3 - "${phase_roots[@]}" <<'PY'
+  "$python" - "${phase_roots[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -37,7 +39,7 @@ for argument in sys.argv[1:]:
 PY
 )
 mapfile -t lambdas < <(
-  python3 - "${phase_roots[@]}" <<'PY'
+  "$python" - "${phase_roots[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -124,7 +126,7 @@ done
 
 cd "$repository"
 for root in "${phase_roots[@]}"; do
-  env PYTHONPATH=. python3 scripts/prepare_al108_ti_windows.py \
+  env PYTHONPATH=. "$python" scripts/prepare_al108_ti_windows.py \
     analyze "$root" >>"$log" 2>&1
 done
 find "$batch_root" -type f \

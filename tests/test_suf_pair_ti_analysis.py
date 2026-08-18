@@ -15,6 +15,7 @@ def write_window(
     minimum_distance: float,
     du_offset: float,
     include_msd: bool = True,
+    final_msd: float = 2.0,
 ) -> None:
     window = root / f"lambda_{coupling:.12f}".replace(".", "p")
     window.mkdir(parents=True)
@@ -30,7 +31,7 @@ def write_window(
             else 2.3,
         }
         if include_msd:
-            row["msd_angstrom2"] = 2.0 * index / 39.0
+            row["msd_angstrom2"] = final_msd * index / 39.0
         rows.append(row)
     (window / "trajectory.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
@@ -112,6 +113,35 @@ def test_missing_liquid_msd_fails_when_diffusion_is_required(tmp_path: Path):
     assert result["checks"]["liquid_diffusion"] is False
 
 
+def test_liquid_diffusion_gate_only_applies_to_target_windows(tmp_path: Path):
+    write_window(
+        tmp_path,
+        0.0,
+        minimum_distance=1.8,
+        du_offset=-0.0570,
+        final_msd=0.2,
+    )
+    write_window(
+        tmp_path,
+        0.5,
+        minimum_distance=1.9,
+        du_offset=-0.0571,
+        final_msd=0.4,
+    )
+    write_window(
+        tmp_path,
+        1.0,
+        minimum_distance=2.1,
+        du_offset=-0.0572,
+        final_msd=2.0,
+    )
+
+    result = analyze(tmp_path, blocks=5, target_lambda_threshold=1.0)
+
+    assert result["status"] == "verified"
+    assert result["checks"]["liquid_diffusion"] is True
+
+
 def test_power_transformed_coordinate_integrates_nonuniform_lambda_grid(
     tmp_path: Path,
 ):
@@ -166,6 +196,37 @@ def test_power_grid_accepts_serialized_lambda_rounding(tmp_path: Path):
         "lambda_equals_x_to_power": 4.0,
         "spacing": 0.0625,
     }
+
+
+def test_exact_constant_offset_is_stripped_before_power_grid_quadrature(
+    tmp_path: Path,
+):
+    offset = -23.56223309915548
+    for index in range(17):
+        coordinate = index / 16
+        write_window(
+            tmp_path,
+            round(coordinate**4, 12),
+            minimum_distance=2.1,
+            du_offset=offset,
+        )
+
+    result = analyze(
+        tmp_path,
+        blocks=5,
+        integration_coordinate_power=4.0,
+        analytic_constant_offset_ev_per_atom=offset,
+    )
+
+    assert result["status"] == "verified"
+    assert result["delta_f_pair_minus_suf_simpson_ev_per_atom"] == pytest.approx(
+        offset, abs=1.0e-4
+    )
+    assert result["quadrature_difference_mev_per_atom"] < 1.0e-6
+    assert result["raw_unstripped_quadrature_difference_mev_per_atom"] > 90.0
+    assert result["integration_coordinate"]["constant_offset_treatment"] == (
+        "subtracted_before_quadrature_and_added_back_exactly"
+    )
 
 
 def test_nonuniform_lambda_grid_requires_matching_coordinate_power(tmp_path: Path):

@@ -9,7 +9,20 @@ from pathlib import Path
 import torch
 
 from mpn_melting.suf_reference import SUFParameters, evaluate_suf
-from run_pair_reference_md import (
+try:
+    from scripts.run_pair_reference_md import (
+        ACCELERATION_FACTOR,
+        AL_MASS_AMU,
+        KB_EV_PER_K,
+        evaluate_model,
+        kinetic_energy,
+        random_velocities,
+        remove_center_of_mass_velocity,
+        temperature,
+        wrap_positions,
+    )
+except ModuleNotFoundError:
+    from run_pair_reference_md import (
     ACCELERATION_FACTOR,
     AL_MASS_AMU,
     KB_EV_PER_K,
@@ -31,6 +44,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--lambda-value", type=float, required=True)
     parser.add_argument("--temperature", type=float, required=True)
+    parser.add_argument("--mass-amu", type=float, default=AL_MASS_AMU)
     parser.add_argument("--suf-p", type=int, default=50)
     parser.add_argument("--suf-sigma", type=float, required=True)
     parser.add_argument("--suf-cutoff-sigma", type=float, default=5.0)
@@ -46,6 +60,8 @@ def main() -> None:
 
     if not 0.0 <= args.lambda_value <= 1.0:
         parser.error("--lambda-value must be between zero and one")
+    if args.mass_amu <= 0.0:
+        parser.error("--mass-amu must be positive")
     torch.set_num_threads(args.threads)
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -63,7 +79,7 @@ def main() -> None:
         restart["lattice_angstrom"], dtype=torch.float64, device=device
     )
     velocities = random_velocities(
-        positions.shape[0], args.temperature, args.seed, device
+        positions.shape[0], args.temperature, args.seed, device, args.mass_amu
     )
     initial_positions = positions.clone()
     unwrapped = positions.clone()
@@ -96,14 +112,14 @@ def main() -> None:
         )
 
     generator = torch.Generator(device=device).manual_seed(args.seed + 1)
-    acceleration_scale = ACCELERATION_FACTOR / AL_MASS_AMU
+    acceleration_scale = ACCELERATION_FACTOR / args.mass_amu
     thermostat_decay = math.exp(-args.gamma_per_fs * args.dt_fs)
     thermostat_sigma = math.sqrt(
         (1.0 - thermostat_decay**2)
         * KB_EV_PER_K
         * args.temperature
         * ACCELERATION_FACTOR
-        / AL_MASS_AMU
+        / args.mass_amu
     )
     energy, forces, pair_energy, suf_energy, nearest = evaluate()
     args.out.mkdir(parents=True, exist_ok=False)
@@ -117,9 +133,11 @@ def main() -> None:
                     "step": step,
                     "time_fs": step * args.dt_fs,
                     "lambda": args.lambda_value,
-                    "temperature_k": temperature(velocities),
+                    "temperature_k": temperature(velocities, args.mass_amu),
                     "potential_energy_ev_per_atom": float(energy) / positions.shape[0],
-                    "kinetic_energy_ev_per_atom": kinetic_energy(velocities) / positions.shape[0],
+                    "kinetic_energy_ev_per_atom": kinetic_energy(
+                        velocities, args.mass_amu
+                    ) / positions.shape[0],
                     "pair_energy_ev_per_atom": float(pair_energy) / positions.shape[0],
                     "suf_energy_ev_per_atom": float(suf_energy) / positions.shape[0],
                     "du_pair_minus_suf_ev_per_atom": float(pair_energy - suf_energy)
@@ -164,6 +182,7 @@ def main() -> None:
         "lambda": args.lambda_value,
         "temperature_k": args.temperature,
         "target_temperature_k": args.temperature,
+        "mass_amu": args.mass_amu,
         "suf_p": args.suf_p,
         "suf_sigma_angstrom": args.suf_sigma,
         "steps": args.steps,
@@ -184,6 +203,7 @@ def main() -> None:
         "natoms": positions.shape[0],
         "lambda": args.lambda_value,
         "target_temperature_k": args.temperature,
+        "mass_amu": args.mass_amu,
         "steps": args.steps,
         "samples": len(samples),
         "minimum_distance_angstrom": minimum_distance,

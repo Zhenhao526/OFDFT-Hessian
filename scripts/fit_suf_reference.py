@@ -10,7 +10,10 @@ from typing import Dict, List
 import torch
 
 from mpn_melting.suf_reference import SUFParameters, evaluate_suf, suf_reduced_density
-from run_pair_reference_md import evaluate_model
+try:
+    from scripts.run_pair_reference_md import evaluate_model
+except ModuleNotFoundError:
+    from run_pair_reference_md import evaluate_model
 
 
 def mean(values: List[float]) -> float:
@@ -26,6 +29,16 @@ def lattice_volume(lattice: torch.Tensor) -> float:
     return abs(float(torch.linalg.det(lattice)))
 
 
+def select_phase_frames(frames: List[Dict[str, object]], phase: str) -> List[Dict[str, object]]:
+    selected = [frame for frame in frames if str(frame.get("phase", "")) == phase]
+    if not selected:
+        available = sorted({str(frame.get("phase", "")) for frame in frames})
+        raise ValueError(
+            f"dataset contains no {phase!r} frames; available phases: {available}"
+        )
+    return selected
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Select a scaled Uhlenbeck-Ford reference for a fitted liquid pair model"
@@ -34,6 +47,7 @@ def main() -> None:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--temperature", type=float, required=True)
+    parser.add_argument("--phase", default="liquid")
     parser.add_argument("--p", type=int, default=50)
     parser.add_argument("--sigma-min", type=float, default=0.8)
     parser.add_argument("--sigma-max", type=float, default=1.8)
@@ -52,13 +66,14 @@ def main() -> None:
     if not model_document.get("reference_gate_passed"):
         raise ValueError("pair model has not passed the static reference gate")
     model = model_document["model"]
-    frames = [
+    all_frames = [
         json.loads(line)
         for line in args.dataset.read_text(encoding="utf-8").splitlines()
         if line
     ]
-    if not frames:
+    if not all_frames:
         raise ValueError("dataset contains no frames")
+    frames = select_phase_frames(all_frames, args.phase)
 
     prepared: List[Dict[str, object]] = []
     for record in frames:
@@ -117,6 +132,8 @@ def main() -> None:
         "target_kedf": model_document.get("target_kedf"),
         "dataset": str(args.dataset.resolve()),
         "pair_model": str(args.model.resolve()),
+        "reference_phase": args.phase,
+        "dataset_frames": len(all_frames),
         "frames": len(prepared),
         "natoms": prepared[0]["natoms"],
         "temperature_k": args.temperature,

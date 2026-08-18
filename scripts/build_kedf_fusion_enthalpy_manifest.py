@@ -35,9 +35,34 @@ def load_document_chain(
     documents = []
     parent = manifest.get("parent_confirmation")
     if parent is not None:
-        documents.extend(
-            load_document_chain(Path(parent), seen=visited)
-        )
+        parent_root = Path(parent).resolve()
+        parent_manifest = parent_root / "confirmation_manifest.json"
+        if parent_manifest.is_file():
+            documents.extend(load_document_chain(parent_root, seen=visited))
+        else:
+            source = manifest.get("source_zero_pressure_confirmation")
+            if not isinstance(source, dict) or not source.get("path"):
+                raise ValueError(
+                    "enthalpy parent has no confirmation manifest or "
+                    "zero-pressure provenance"
+                )
+            source_path = Path(source["path"]).resolve()
+            expected_path = (
+                parent_root / "zero_pressure_confirmation_summary.json"
+            )
+            if source_path != expected_path or not source_path.is_file():
+                raise ValueError(
+                    "enthalpy zero-pressure parent path is inconsistent"
+                )
+            if source.get("sha256") != sha256(source_path):
+                raise ValueError(
+                    "enthalpy zero-pressure parent SHA256 does not match"
+                )
+            source_report = json.loads(source_path.read_text(encoding="utf-8"))
+            if source_report.get("status") != "all_confirmations_passed":
+                raise ValueError(
+                    "enthalpy zero-pressure parent is not verified"
+                )
     documents.append(
         {
             "root": root,

@@ -1,0 +1,143 @@
+{
+  "checks": {
+    "all_highest_band_indices_eq_192": true,
+    "all_highest_band_occupations_le_1e-8": true,
+    "all_iterations_le_150": true,
+    "all_output_manifests_verified": true,
+    "expected_job_count": true
+  },
+  "jobs": [
+    {
+      "delta_internal_ks_minus_xwm_eV": -1.9638067468913505,
+      "delta_mermin_ks_minus_xwm_eV": -2.928854038791542,
+      "electronic_entropy_minus_ts_eV": -0.9650472919,
+      "electronic_iterations": 16,
+      "final_etot_is_mermin_eV": -3139.335001860365,
+      "highest_band_index": 192,
+      "job": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T0950/solid/step0775",
+      "maximum_highest_band_occupation": 1.182435182930429e-12,
+      "metadata_sha256": "85c428834973bc8139aaa4ad0bd84095c7769f1b9ba7c93aff88eb1e7d7dd69d",
+      "output_manifest": {
+        "checked_files": 20,
+        "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T0950/solid/step0775/OUTPUT_SHA256SUMS",
+        "sha256": "3ad536feaf3ed5092456e5069e8d9097cf9107cd450458811a2843e3b96d270a"
+      },
+      "phase": "solid",
+      "source_step": 775,
+      "temperature_K": 950,
+      "u_ks_eV": -3138.369954568465,
+      "xwm_potential_energy_eV": -3136.4061478215735
+    },
+    {
+      "delta_internal_ks_minus_xwm_eV": -1.6250212695867958,
+      "delta_mermin_ks_minus_xwm_eV": -2.852776629687014,
+      "electronic_entropy_minus_ts_eV": -1.2277553601,
+      "electronic_iterations": 19,
+      "final_etot_is_mermin_eV": -3130.48774226566,
+      "highest_band_index": 192,
+      "job": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T0950/liquid/step0775",
+      "maximum_highest_band_occupation": 1.500673350670902e-12,
+      "metadata_sha256": "80ea6a05db15da9dabb145b153458e544071454f5ef6628eafde2e975625f4f9",
+      "output_manifest": {
+        "checked_files": 20,
+        "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T0950/liquid/step0775/OUTPUT_SHA256SUMS",
+        "sha256": "56ee74798ca533222c9d9abfd77128e2154c233bfd91226a423033cbb8547ca1"
+      },
+      "phase": "liquid",
+      "source_step": 775,
+      "temperature_K": 950,
+      "u_ks_eV": -3129.25998690556,
+      "xwm_potential_energy_eV": -3127.634965635973
+    },
+    {
+      "delta_internal_ks_minus_xwm_eV": -1.9346833998924922,
+      "delta_mermin_ks_minus_xwm_eV": -2.990340035092686,
+      "electronic_entropy_minus_ts_eV": -1.0556566352,
+      "electronic_iterations": 17,
+      "final_etot_is_mermin_eV": -3141.368497017913,
+      "highest_band_index": 192,
+      "job": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T1000/solid/step0775",
+      "maximum_highest_band_occupation": 5.5692578739657e-12,
+      "metadata_sha256": "9dc9aa26013cdaad77db8f67af7dd4907122a69733fea460f526940b5874c545",
+      "output_manifest": {
+        "checked_files": 20,
+        "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T1000/solid/step0775/OUTPUT_SHA256SUMS",
+        "sha256": "6aa1473d3487a27edea3d360554180f16455b23608823d44e082f22019a46017"
+      },
+      "phase": "solid",
+      "source_step": 775,
+      "temperature_K": 1000,
+      "u_ks_eV": -3140.3128403827127,
+      "xwm_potential_energy_eV": -3138.37815698282
+    },
+    {
+      "delta_internal_ks_minus_xwm_eV": -1.5702350754454528,
+      "delta_mermin_ks_minus_xwm_eV": -2.9621558503454253,
+      "electronic_entropy_minus_ts_eV": -1.3919207749,
+      "electronic_iterations": 18,
+      "final_etot_is_mermin_eV": -3129.641185487497,
+      "highest_band_index": 192,
+      "job": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T1000/liquid/step0775",
+      "maximum_highest_band_occupation": 5.392346618510246e-12,
+      "metadata_sha256": "0a6d3d1f2bee6ccf04fcf7f2175ac428d97d648f95495be59b1829f829cb0108",
+      "output_manifest": {
+        "checked_files": 20,
+        "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T1000/liquid/step0775/OUTPUT_SHA256SUMS",
+        "sha256": "a4c8e11eb83808eddd8e830adeef523aee26b7879bc543b35d0c713449977bb3"
+      },
+      "phase": "liquid",
+      "source_step": 775,
+      "temperature_K": 1000,
+      "u_ks_eV": -3128.249264712597,
+      "xwm_potential_energy_eV": -3126.6790296371514
+    },
+    {
+      "delta_internal_ks_minus_xwm_eV": -1.9636592592514717,
+      "delta_mermin_ks_minus_xwm_eV": -3.173216298751413,
+      "electronic_entropy_minus_ts_eV": -1.2095570395,
+      "electronic_iterations": 18,
+      "final_etot_is_mermin_eV": -3138.680708089551,
+      "highest_band_index": 192,
+      "job": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T1050/solid/step0775",
+      "maximum_highest_band_occupation": 1.95014232064353e-11,
+      "metadata_sha256": "0a1552edb5216e0a05d009cbfa9956bbadd080da7b98db20935db79fa01a79a7",
+      "output_manifest": {
+        "checked_files": 20,
+        "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T1050/solid/step0775/OUTPUT_SHA256SUMS",
+        "sha256": "341d6811c69f6c05a26b1a13a4cfebee5c8f8eee1f6bc6a72fa60987d30f3322"
+      },
+      "phase": "solid",
+      "source_step": 775,
+      "temperature_K": 1050,
+      "u_ks_eV": -3137.471151050051,
+      "xwm_potential_energy_eV": -3135.5074917907996
+    },
+    {
+      "delta_internal_ks_minus_xwm_eV": -1.5676553053394855,
+      "delta_mermin_ks_minus_xwm_eV": -3.076829986239318,
+      "electronic_entropy_minus_ts_eV": -1.5091746809,
+      "electronic_iterations": 18,
+      "final_etot_is_mermin_eV": -3125.085841515854,
+      "highest_band_index": 192,
+      "job": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T1050/liquid/step0775",
+      "maximum_highest_band_occupation": 2.170758766552949e-11,
+      "metadata_sha256": "09a61c664f305011eb6e5277eed214cbdb63648b71f2f7d4407bec2e4076e0f5",
+      "output_manifest": {
+        "checked_files": 20,
+        "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1/jobs/T1050/liquid/step0775/OUTPUT_SHA256SUMS",
+        "sha256": "722a08a6a9701879158ee4fbd063071d2b54b97761cbc2f6eddb6edb35124cf9"
+      },
+      "phase": "liquid",
+      "source_step": 775,
+      "temperature_K": 1050,
+      "u_ks_eV": -3123.5766668349543,
+      "xwm_potential_energy_eV": -3122.009011529615
+    }
+  ],
+  "maximum_electronic_iterations": 19,
+  "maximum_highest_band_occupation": 2.170758766552949e-11,
+  "root": "/home/shenwei01/WT_Mg_melting_workspace_20260804/runs/mg_three_method_20260804/xwm/ksdft_multitemperature_oneway_diagnostic_v1",
+  "schema": "mg-xwm-ksdft-multitemperature-pilot-validation-v1",
+  "scope": "one-way diagnostic; no reverse KS ensemble",
+  "status": "pilot_verified"
+}

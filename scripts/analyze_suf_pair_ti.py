@@ -52,6 +52,7 @@ def analyze(
     minimum_overlap_ess: float = 0.05,
     max_overlap_closure: float = 2.0,
     integration_coordinate_power: float = 1.0,
+    analytic_constant_offset_ev_per_atom: float = 0.0,
 ) -> Dict[str, Any]:
     if integration_coordinate_power < 1.0:
         raise ValueError("integration coordinate power must be at least one")
@@ -150,32 +151,54 @@ def analyze(
         window["integration_coordinate"] = coordinate
         window["integration_jacobian"] = jacobian
 
-    means = [
+    raw_means = [
         window["du_mean_ev_per_atom"] * jacobian
         for window, jacobian in zip(windows, jacobians)
     ]
+    means = [
+        (window["du_mean_ev_per_atom"] - analytic_constant_offset_ev_per_atom)
+        * jacobian
+        for window, jacobian in zip(windows, jacobians)
+    ]
     first = [
-        window["du_first_half_ev_per_atom"] * jacobian
+        (window["du_first_half_ev_per_atom"] - analytic_constant_offset_ev_per_atom)
+        * jacobian
         for window, jacobian in zip(windows, jacobians)
     ]
     second = [
-        window["du_second_half_ev_per_atom"] * jacobian
+        (window["du_second_half_ev_per_atom"] - analytic_constant_offset_ev_per_atom)
+        * jacobian
         for window, jacobian in zip(windows, jacobians)
     ]
     block_integrals = [
         integrate_simpson(
             [
-                window["block_means"][block] * jacobian
+                (
+                    window["block_means"][block]
+                    - analytic_constant_offset_ev_per_atom
+                )
+                * jacobian
                 for window, jacobian in zip(windows, jacobians)
             ],
             spacing,
         )
+        + analytic_constant_offset_ev_per_atom
         for block in range(blocks)
     ]
-    simpson = integrate_simpson(means, spacing)
-    trapezoid = integrate_trapezoid(means, spacing)
-    first_integral = integrate_simpson(first, spacing)
-    second_integral = integrate_simpson(second, spacing)
+    raw_simpson = integrate_simpson(raw_means, spacing)
+    raw_trapezoid = integrate_trapezoid(raw_means, spacing)
+    simpson = (
+        integrate_simpson(means, spacing) + analytic_constant_offset_ev_per_atom
+    )
+    trapezoid = (
+        integrate_trapezoid(means, spacing) + analytic_constant_offset_ev_per_atom
+    )
+    first_integral = (
+        integrate_simpson(first, spacing) + analytic_constant_offset_ev_per_atom
+    )
+    second_integral = (
+        integrate_simpson(second, spacing) + analytic_constant_offset_ev_per_atom
+    )
     block_se = 1000.0 * standard_deviation(block_integrals) / math.sqrt(len(block_integrals))
     quadrature_difference = 1000.0 * abs(simpson - trapezoid)
     half_drift = 1000.0 * abs(second_integral - first_integral)
@@ -247,7 +270,7 @@ def analyze(
         or all(
             window["msd_last_angstrom2"] is not None
             and window["msd_last_angstrom2"] >= minimum_liquid_msd
-            for window in windows
+            for window in target_windows
         ),
         "block_standard_error": block_se <= max_block_se,
         "half_drift": half_drift <= max_half_drift,
@@ -268,6 +291,18 @@ def analyze(
         "integration_coordinate": {
             "lambda_equals_x_to_power": integration_coordinate_power,
             "spacing": spacing,
+            **(
+                {
+                    "analytic_constant_offset_ev_per_atom": (
+                        analytic_constant_offset_ev_per_atom
+                    ),
+                    "constant_offset_treatment": (
+                        "subtracted_before_quadrature_and_added_back_exactly"
+                    ),
+                }
+                if analytic_constant_offset_ev_per_atom != 0.0
+                else {}
+            ),
         },
         "blocks": blocks,
         "windows": windows,
@@ -276,6 +311,10 @@ def analyze(
         "delta_f_pair_minus_suf_simpson_mev_per_atom": 1000.0 * simpson,
         "delta_f_pair_minus_suf_trapezoid_ev_per_atom": trapezoid,
         "quadrature_difference_mev_per_atom": quadrature_difference,
+        "raw_unstripped_simpson_ev_per_atom": raw_simpson,
+        "raw_unstripped_trapezoid_ev_per_atom": raw_trapezoid,
+        "raw_unstripped_quadrature_difference_mev_per_atom": 1000.0
+        * abs(raw_simpson - raw_trapezoid),
         "block_standard_error_mev_per_atom": block_se,
         "first_half_integral_ev_per_atom": first_integral,
         "second_half_integral_ev_per_atom": second_integral,
@@ -323,6 +362,9 @@ def main() -> None:
     parser.add_argument("--minimum-overlap-ess", type=float, default=0.05)
     parser.add_argument("--max-overlap-closure", type=float, default=2.0)
     parser.add_argument("--integration-coordinate-power", type=float, default=1.0)
+    parser.add_argument(
+        "--analytic-constant-offset-ev-per-atom", type=float, default=0.0
+    )
     args = parser.parse_args()
 
     result = analyze(
@@ -342,6 +384,9 @@ def main() -> None:
         minimum_overlap_ess=args.minimum_overlap_ess,
         max_overlap_closure=args.max_overlap_closure,
         integration_coordinate_power=args.integration_coordinate_power,
+        analytic_constant_offset_ev_per_atom=(
+            args.analytic_constant_offset_ev_per_atom
+        ),
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

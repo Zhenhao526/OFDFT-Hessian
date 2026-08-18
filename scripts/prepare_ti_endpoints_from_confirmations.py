@@ -24,6 +24,9 @@ def main() -> None:
     parser.add_argument("--solid-pair-model", type=Path)
     parser.add_argument("--liquid-pair-model", type=Path)
     parser.add_argument("--steps", type=int, default=10)
+    parser.add_argument("--element-symbol", default="Al")
+    parser.add_argument("--element-config", type=Path, default=ROOT / "config" / "al.json")
+    parser.add_argument("--ranks", type=int)
     parser.add_argument(
         "--config",
         type=Path,
@@ -80,7 +83,9 @@ def main() -> None:
             "restartfreq": args.steps,
             "pair_model": pair_models[phase],
             "config": args.config,
-            "ranks": None,
+            "ranks": args.ranks,
+            "element_symbol": args.element_symbol,
+            "element_config": args.element_config,
         }
         seed = 81000 + 1000 * phase_index
         prepare(Namespace(out=args.out / phase / "baseline", lambdas=[1.0], seed=seed + 1, **common))
@@ -100,6 +105,8 @@ def main() -> None:
     manifest = {
         "schema": "kedf-pair-ti-endpoints-from-confirmations-v1",
         "target_kedf": target_kedf,
+        "element": args.element_symbol,
+        "element_config": str(args.element_config.resolve()),
         "temperature_K": summary["temperature_K"],
         "steps": args.steps,
         "phases": phases,

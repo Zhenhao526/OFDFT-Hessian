@@ -10,7 +10,7 @@ from typing import Dict, List
 from mpn_melting.free_energy import exponential_free_energy_difference
 from scripts.analyze_phase_run import analyze as analyze_phase
 from scripts.analyze_two_phase_run import RY_TO_EV, parse_md_log
-from scripts.prepare_al108_ti_windows import parse_components
+from scripts.prepare_al108_ti_windows import apply_element_phase_model, parse_components
 
 
 def mean(values: List[float]) -> float:
@@ -115,7 +115,10 @@ def main() -> None:
         if len(production) < args.blocks:
             windows.append({**item, "status": "insufficient_samples", "max_step": max_step})
             continue
-        phase = analyze_phase(run, manifest["phase"], thermalized_initial=True)
+        phase = apply_element_phase_model(
+            analyze_phase(run, manifest["phase"], thermalized_initial=True),
+            manifest,
+        )
         (run / "phase_analysis.json").write_text(
             json.dumps(phase, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -166,7 +169,9 @@ def main() -> None:
                 "component_samples": len(components),
                 "production_samples": len(values),
                 "phase_status": phase["status"],
-                "phase_gate_checks": phase["phase_gate"],
+                "phase_gate_checks": phase.get(
+                    "hcp_phase_gate", phase["phase_gate"]
+                ),
                 "phase_metrics": {
                     "final_non_affine_msd_A2": phase["trajectory"][
                         "non_affine_MSD_A2"

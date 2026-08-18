@@ -1,0 +1,30 @@
+{
+  "einstein": {
+    "center_of_mass_correction_ev_per_atom": -0.0071718113757039195,
+    "corrected_free_energy_ev_per_atom": -0.39382226820656746,
+    "solid_volume_per_atom_angstrom3": 22.959,
+    "spring_constant_ev_per_angstrom2": 1.2598013860466055,
+    "uncorrected_free_energy_ev_per_atom": -0.3866504568308635
+  },
+  "mass_amu": 24.305,
+  "natoms": 128,
+  "schema": "mpn-analytic-reference-free-energies-v1",
+  "suf": {
+    "beta_excess_free_energy": 11.1790613093447,
+    "excess_free_energy_ev_per_atom": 0.8670032717451689,
+    "ideal_gas_free_energy_ev_per_atom": -0.8214813057406221,
+    "liquid_volume_per_atom_angstrom3": 24.093,
+    "number_density_angstrom_minus3": 0.04150583156933549,
+    "p": 50,
+    "reduced_density_x": 0.5286012634913728,
+    "sigma_angstrom": 1.66,
+    "thermal_wavelength_angstrom": 0.1180404449134947,
+    "total_free_energy_ev_per_atom": 0.04552196600454683
+  },
+  "suf_spline_source": {
+    "implementation": "Calphy spline tables derived from Leite et al. supplementary material",
+    "path": "/home/shenwei01/WT_Mg_melting_workspace_20260804/repository/third_party/calphy_suf_splines/splines.py",
+    "sha256": "046c14573fea5d0c54ce9502b99a3a0ac10b71de4954d5b323e4ed733db61bf1"
+  },
+  "temperature_k": 900.0
+}

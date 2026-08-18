@@ -126,6 +126,13 @@ def main() -> None:
     parser.add_argument("--restartfreq", type=int, default=100)
     parser.add_argument("--seed", type=int, default=202608000)
     parser.add_argument("--ranks", type=int, default=12)
+    parser.add_argument("--mpirun-bind-to", choices=("core", "none"))
+    parser.add_argument("--element-symbol", default="Al")
+    parser.add_argument(
+        "--element-config",
+        type=Path,
+        default=ROOT / "config" / "al.json",
+    )
     parser.add_argument(
         "--phases", nargs="+", choices=("solid", "liquid"), default=("solid", "liquid")
     )
@@ -190,7 +197,14 @@ def main() -> None:
             "mpirun_np": args.ranks,
         }
     )
-    element = load_json(ROOT / "config" / "al.json")
+    if args.mpirun_bind_to:
+        config["mpirun_extra_args"] = ["--bind-to", args.mpirun_bind_to]
+    element = load_json(args.element_config)
+    if str(element.get("element")) != args.element_symbol:
+        raise ValueError(
+            f"element config declares {element.get('element')!r}, "
+            f"expected {args.element_symbol!r}"
+        )
 
     prepared = {}
     for phase_index, (phase, parent_phase) in enumerate(phase_roots.items()):
@@ -235,7 +249,10 @@ def main() -> None:
         for window_index, window in enumerate(selected_windows):
             source_dir = source_run_override or parent_phase / window["label"]
             source = load_atom_source(
-                source_dir.as_posix(), "last", "Al", include_velocities=True
+                source_dir.as_posix(),
+                "last",
+                args.element_symbol,
+                include_velocities=True,
             )
             atoms = source["atoms"]
             if atoms.velocities is None:
@@ -258,12 +275,14 @@ def main() -> None:
                     f"{target_kedf}_pair_thermodynamic_integration_continuation"
                 ),
                 suffix=(
-                    f"al{atoms.natoms}_{phase}_T{int(temperature):04d}_"
+                    f"{args.element_symbol.lower()}{atoms.natoms}_{phase}_"
+                    f"T{int(temperature):04d}_"
                     f"{window['label']}_continuation"
                 ),
                 calculation="md",
                 extra_metadata={
                     "phase": phase,
+                    "element": args.element_symbol,
                     "target_kedf": target_kedf,
                     "lambda": window["lambda"],
                     "target_temperature_K": temperature,
@@ -298,6 +317,8 @@ def main() -> None:
                 else "kedf-pair-ti-window-continuations-v1"
             ),
             "phase": phase,
+            "element": args.element_symbol,
+            "element_config": str(args.element_config.resolve()),
             "target_kedf": target_kedf,
             "target_temperature_K": temperature,
             "volume_per_atom_A3": parent_manifest["volume_per_atom_A3"],

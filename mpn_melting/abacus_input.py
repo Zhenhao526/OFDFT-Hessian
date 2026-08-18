@@ -57,6 +57,7 @@ def input_text(params: Dict[str, object], suffix: str, calculation: str | None =
     local_only = {
         "abacus_executable",
         "kmesh",
+        "kshift",
         "mpirun_executable",
         "mpirun_extra_args",
         "mpirun_np",
@@ -117,11 +118,27 @@ def stru_text(atoms: AtomSet, species_configs: Sequence[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def kpt_text(kmesh: Iterable[int]) -> str:
+def kpt_text(
+    kmesh: Iterable[int], kshift: Iterable[int] = (0, 0, 0)
+) -> str:
     mesh = list(kmesh)
     if len(mesh) != 3:
         raise ValueError("kmesh must have three integers")
-    return "\n".join(["K_POINTS", "0", "Gamma", f"{mesh[0]} {mesh[1]} {mesh[2]} 0 0 0"]) + "\n"
+    shift = list(kshift)
+    if len(shift) != 3 or any(value not in (0, 1) for value in shift):
+        raise ValueError("kshift must have three values chosen from 0 or 1")
+    return (
+        "\n".join(
+            [
+                "K_POINTS",
+                "0",
+                "Gamma",
+                f"{mesh[0]} {mesh[1]} {mesh[2]} "
+                f"{shift[0]} {shift[1]} {shift[2]}",
+            ]
+        )
+        + "\n"
+    )
 
 
 def run_script_text(
@@ -159,7 +176,13 @@ def write_job(
         input_config["pseudo_dir"] = relative_path_for_input(Path(str(input_config["pseudo_dir"])), out_dir)
     (out_dir / "INPUT").write_text(input_text(input_config, suffix=suffix, calculation=calculation), encoding="utf-8")
     (out_dir / "STRU").write_text(stru_text(atoms, [element_config]), encoding="utf-8")
-    (out_dir / "KPT").write_text(kpt_text(abacus_config.get("kmesh", [1, 1, 1])), encoding="utf-8")
+    (out_dir / "KPT").write_text(
+        kpt_text(
+            abacus_config.get("kmesh", [1, 1, 1]),
+            abacus_config.get("kshift", [0, 0, 0]),
+        ),
+        encoding="utf-8",
+    )
     run_script = out_dir / "run_local.sh"
     run_script.write_text(
         run_script_text(

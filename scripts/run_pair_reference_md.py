@@ -102,26 +102,30 @@ def remove_center_of_mass_velocity(velocities: torch.Tensor) -> torch.Tensor:
     return velocities - velocities.mean(dim=0, keepdim=True)
 
 
-def temperature(velocities: torch.Tensor) -> float:
-    kinetic = 0.5 * AL_MASS_AMU / ACCELERATION_FACTOR * float((velocities * velocities).sum())
+def temperature(velocities: torch.Tensor, mass_amu: float = AL_MASS_AMU) -> float:
+    kinetic = 0.5 * mass_amu / ACCELERATION_FACTOR * float((velocities * velocities).sum())
     dof = 3 * velocities.shape[0] - 3
     return 2.0 * kinetic / (dof * KB_EV_PER_K)
 
 
-def kinetic_energy(velocities: torch.Tensor) -> float:
-    return 0.5 * AL_MASS_AMU / ACCELERATION_FACTOR * float((velocities * velocities).sum())
+def kinetic_energy(velocities: torch.Tensor, mass_amu: float = AL_MASS_AMU) -> float:
+    return 0.5 * mass_amu / ACCELERATION_FACTOR * float((velocities * velocities).sum())
 
 
 def random_velocities(
-    natoms: int, target_temperature: float, seed: int, device: torch.device
+    natoms: int,
+    target_temperature: float,
+    seed: int,
+    device: torch.device,
+    mass_amu: float = AL_MASS_AMU,
 ) -> torch.Tensor:
     generator = torch.Generator(device=device).manual_seed(seed)
-    sigma = math.sqrt(KB_EV_PER_K * target_temperature * ACCELERATION_FACTOR / AL_MASS_AMU)
+    sigma = math.sqrt(KB_EV_PER_K * target_temperature * ACCELERATION_FACTOR / mass_amu)
     velocities = torch.randn(
         (natoms, 3), generator=generator, dtype=torch.float64, device=device
     ) * sigma
     velocities = remove_center_of_mass_velocity(velocities)
-    velocities *= math.sqrt(target_temperature / temperature(velocities))
+    velocities *= math.sqrt(target_temperature / temperature(velocities, mass_amu))
     return velocities
 
 
@@ -152,6 +156,7 @@ def main() -> None:
     parser.add_argument("--cells", type=int, default=3)
     parser.add_argument("--lattice-constant", type=float, default=4.05)
     parser.add_argument("--temperature", type=float, required=True)
+    parser.add_argument("--mass-amu", type=float, default=AL_MASS_AMU)
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--dt-fs", type=float, default=1.0)
     parser.add_argument("--gamma-per-fs", type=float, default=0.02)
@@ -161,6 +166,9 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--store-positions", action="store_true")
     args = parser.parse_args()
+
+    if args.mass_amu <= 0.0:
+        parser.error("--mass-amu must be positive")
 
     if args.restart and args.dataset_frame:
         parser.error("--restart and --dataset-frame are mutually exclusive")
@@ -183,28 +191,30 @@ def main() -> None:
         velocities = torch.tensor(
             restart["velocities_angstrom_per_fs"], dtype=torch.float64, device=device
         )
-        velocities *= math.sqrt(args.temperature / temperature(velocities))
+        velocities *= math.sqrt(
+            args.temperature / temperature(velocities, args.mass_amu)
+        )
     elif args.dataset_frame:
         positions, lattice = load_dataset_frame(args.dataset_frame, args.frame_index, device)
         velocities = random_velocities(
-            positions.shape[0], args.temperature, args.seed, device
+            positions.shape[0], args.temperature, args.seed, device, args.mass_amu
         )
     else:
         positions, lattice = fcc_structure(args.cells, args.lattice_constant, device)
         velocities = random_velocities(
-            positions.shape[0], args.temperature, args.seed, device
+            positions.shape[0], args.temperature, args.seed, device, args.mass_amu
         )
     initial_positions = positions.clone()
     unwrapped = positions.clone()
     generator = torch.Generator(device=device).manual_seed(args.seed + 1)
-    acceleration_scale = ACCELERATION_FACTOR / AL_MASS_AMU
+    acceleration_scale = ACCELERATION_FACTOR / args.mass_amu
     thermostat_decay = math.exp(-args.gamma_per_fs * args.dt_fs)
     thermostat_sigma = math.sqrt(
         (1.0 - thermostat_decay**2)
         * KB_EV_PER_K
         * args.temperature
         * ACCELERATION_FACTOR
-        / AL_MASS_AMU
+        / args.mass_amu
     )
     energy, forces, nearest = evaluate_model(positions, lattice, model)
     args.out.mkdir(parents=True, exist_ok=False)
@@ -218,9 +228,11 @@ def main() -> None:
                 record = {
                     "step": step,
                     "time_fs": step * args.dt_fs,
-                    "temperature_k": temperature(velocities),
+                    "temperature_k": temperature(velocities, args.mass_amu),
                     "potential_energy_ev_per_atom": float(energy) / positions.shape[0],
-                    "kinetic_energy_ev_per_atom": kinetic_energy(velocities) / positions.shape[0],
+                    "kinetic_energy_ev_per_atom": kinetic_energy(
+                        velocities, args.mass_amu
+                    ) / positions.shape[0],
                     "nearest_neighbor_angstrom": float(nearest),
                     "msd_angstrom2": msd,
                 }
@@ -255,6 +267,7 @@ def main() -> None:
         "schema": "mpn-pair-reference-md-checkpoint-v1",
         "model": str(args.model.resolve()),
         "target_temperature_k": args.temperature,
+        "mass_amu": args.mass_amu,
         "device": str(device),
         "steps": args.steps,
         "dt_fs": args.dt_fs,
@@ -270,6 +283,7 @@ def main() -> None:
         "schema": "mpn-pair-reference-md-summary-v1",
         "natoms": positions.shape[0],
         "target_temperature_k": args.temperature,
+        "mass_amu": args.mass_amu,
         "steps": args.steps,
         "minimum_distance_angstrom": minimum_distance,
         "temperature_mean_k": sum(row["temperature_k"] for row in samples) / len(samples),

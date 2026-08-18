@@ -2,11 +2,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mpn_melting.abacus_input import run_script_text, write_job
+from mpn_melting.abacus_input import kpt_text, run_script_text, write_job
 from mpn_melting.structures import AtomSet, build_fcc
 
 
 class AbacusInputTests(unittest.TestCase):
+    def test_shifted_kpoint_text(self):
+        text = kpt_text((1, 1, 1), (1, 1, 1))
+        self.assertIn("1 1 1 1 1 1", text)
+
+        with self.assertRaises(ValueError):
+            kpt_text((1, 1, 1), (0, 2, 0))
+
     def test_gpu_single_rank_runs_through_mpirun(self):
         text = run_script_text(
             "/tmp/abacus-gpu",

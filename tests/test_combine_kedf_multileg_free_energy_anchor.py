@@ -30,8 +30,13 @@ def classical(phase: str, value: float) -> tuple[dict, dict]:
 
 
 def target(method: str, phase: str, value: float) -> tuple[dict, dict]:
+    schema = (
+        "wt-pair-ti-production-analysis-v1"
+        if method == "wt"
+        else "kedf-pair-ti-production-analysis-v1"
+    )
     analysis = {
-        "schema": "kedf-pair-ti-production-analysis-v1",
+        "schema": schema,
         "status": "verified",
         "target_kedf": method,
         "phase": phase,
@@ -45,7 +50,7 @@ def target(method: str, phase: str, value: float) -> tuple[dict, dict]:
     }
     summary = {
         "status": "verified",
-        "source_analysis_schema": "kedf-pair-ti-production-analysis-v1",
+        "source_analysis_schema": schema,
         "phase": phase,
         "integral_consensus_mev_per_atom": value,
         "integral_discard_spread_mev_per_atom": 0.8,
@@ -116,6 +121,54 @@ def test_combines_multileg_xwm_anchor() -> None:
     assert result["uncertainty_budget_mev_per_atom"][
         "finite_size_systematic_allowance"
     ] == 3.0
+
+
+def test_combines_multileg_wt_anchor() -> None:
+    documents = inputs("wt")
+    documents["reference_audit"].update(
+        {
+            "status": "computed_by_user_authorized_gate_override",
+            "checks": {"solid_anchor_half_drift_below_2_mev": False},
+            "gate_override": {
+                "user_authorized": True,
+                "source_status": "gate_failed",
+                "scope": "reference_anchor_half_drift_gate_only",
+            },
+        }
+    )
+    documents["liquid_target_summary"].update(
+        {
+            "status": "verified_by_user_authorized_gate_override",
+            "gate_override": {
+                "user_authorized": True,
+                "source_status": "extension_or_refinement_required",
+                "scope": "cross_discard_window_gate_only",
+            },
+        }
+    )
+    result = combine_multileg(**documents)
+
+    assert result["target_kedf"] == "wt"
+    assert result["status"] == (
+        "anchor_temperature_free_energy_computed_with_user_authorized_gate_overrides"
+    )
+    assert set(result["gate_overrides"]) == {
+        "reference_audit",
+        "liquid_target",
+    }
+    assert result["free_energy_mev_per_atom"]["liquid_minus_solid"] == pytest.approx(
+        21.0
+    )
+
+
+def test_rejects_incomplete_user_gate_override() -> None:
+    documents = inputs("wt")
+    documents["liquid_target_summary"]["status"] = (
+        "verified_by_user_authorized_gate_override"
+    )
+
+    with pytest.raises(RuntimeError, match="liquid_target_converged"):
+        combine_multileg(**documents)
 
 
 def test_rejects_unverified_middle_leg() -> None:

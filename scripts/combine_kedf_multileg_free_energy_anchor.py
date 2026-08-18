@@ -73,6 +73,17 @@ def _discard_spread(summary: dict[str, Any]) -> float:
     return float(summary["discard_spread_mev_per_atom"])
 
 
+def _user_gate_override_matches(
+    document: dict[str, Any], *, source_status: str, scope: str
+) -> bool:
+    override = document.get("gate_override", {})
+    return (
+        override.get("user_authorized") is True
+        and override.get("source_status") == source_status
+        and override.get("scope") == scope
+    )
+
+
 def combine_multileg(
     *,
     method: str,
@@ -89,7 +100,7 @@ def combine_multileg(
     liquid_target_summary: dict[str, Any],
 ) -> dict[str, Any]:
     method = method.lower()
-    if method not in {"xwm", "lkt"}:
+    if method not in {"wt", "xwm", "lkt"}:
         raise ValueError(f"unsupported KEDF method {method!r}")
     if not liquid_reference_legs:
         raise ValueError("at least one liquid classical reference leg is required")
@@ -102,12 +113,21 @@ def combine_multileg(
     zero_phases = {
         str(row["phase"]): row for row in zero_pressure.get("phase_results", [])
     }
+    reference_audit_verified = reference_audit.get("status") == (
+        "verified_with_finite_size_sensitivity"
+    ) and all(reference_audit.get("checks", {}).values())
+    reference_audit_overridden = reference_audit.get("status") == (
+        "computed_by_user_authorized_gate_override"
+    ) and _user_gate_override_matches(
+        reference_audit,
+        source_status="gate_failed",
+        scope="reference_anchor_half_drift_gate_only",
+    )
     checks = {
         "analytic_reference_schema": analytic.get("schema")
         == "mpn-analytic-reference-free-energies-v1",
-        "reference_audit_verified": reference_audit.get("status")
-        == "verified_with_finite_size_sensitivity"
-        and all(reference_audit.get("checks", {}).values()),
+        "reference_audit_verified": reference_audit_verified
+        or reference_audit_overridden,
         "reference_temperature_matches": math.isclose(
             float(reference_audit.get("temperature_k", math.nan)), temperature
         ),
@@ -224,9 +244,24 @@ def combine_multileg(
     ti_conservative = rss(statistical, quadrature, temporal, discard_rss)
     finite_size = finite_size_allowance_mev_per_atom(reference_audit)
 
+    gate_overrides = {}
+    if reference_audit_overridden:
+        gate_overrides["reference_audit"] = reference_audit["gate_override"]
+    for label, summary in (
+        ("solid_target", solid_target_summary),
+        ("liquid_target", liquid_target_summary),
+    ):
+        if summary.get("status") == "verified_by_user_authorized_gate_override":
+            gate_overrides[label] = summary["gate_override"]
+
     return {
         "schema": "kedf-melting-multileg-free-energy-anchor-v1",
-        "status": "anchor_temperature_free_energy_verified",
+        "status": (
+            "anchor_temperature_free_energy_computed_with_user_authorized_gate_overrides"
+            if gate_overrides
+            else "anchor_temperature_free_energy_verified"
+        ),
+        "gate_overrides": gate_overrides,
         "target_kedf": method,
         "temperature_k": temperature,
         "natoms": natoms,
@@ -280,9 +315,9 @@ def parse_liquid_leg(values: list[str]) -> tuple[str, Path, Path]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build a verified multileg XWM or LKT 900 K free-energy anchor"
+        description="Build a verified multileg WT, XWM, or LKT 900 K free-energy anchor"
     )
-    parser.add_argument("--method", choices=("xwm", "lkt"), required=True)
+    parser.add_argument("--method", choices=("wt", "xwm", "lkt"), required=True)
     parser.add_argument("--analytic", type=Path, required=True)
     parser.add_argument("--reference-audit", type=Path, required=True)
     parser.add_argument("--zero-pressure", type=Path, required=True)

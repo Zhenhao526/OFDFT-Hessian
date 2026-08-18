@@ -35,8 +35,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Gate a stored pair-reference MD trajectory")
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--expected", choices=("solid", "liquid"), required=True)
+    parser.add_argument("--structure-model", choices=("fcc", "hcp"), default="fcc")
+    parser.add_argument("--minimum-neighbor", type=float, default=2.0)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
+    if args.minimum_neighbor <= 0.0:
+        parser.error("--minimum-neighbor must be positive")
 
     trajectory_path = args.run_dir / "trajectory.jsonl"
     checkpoint_path = args.run_dir / "checkpoint.json"
@@ -65,14 +69,24 @@ def main() -> None:
     minimum_distance = float(summary["minimum_distance_angstrom"])
 
     common_gates = {
-        "nearest_neighbor_gt_2_A": minimum_distance > 2.0,
+        "nearest_neighbor_gt_minimum": minimum_distance > args.minimum_neighbor,
         "late_temperature_within_15_percent": (
             0.85 * target_temperature
             <= statistics.fmean(late_temperature)
             <= 1.15 * target_temperature
         ),
     }
-    if args.expected == "solid":
+    if args.structure_model == "hcp" and args.expected == "solid":
+        phase_gates = {
+            "final_MSD_lt_0_5_A2": float(rows[-1]["msd_angstrom2"]) < 0.5,
+            "late_MSD_slope_lt_0_001_A2_per_step": msd_slope < 0.001,
+        }
+    elif args.structure_model == "hcp" and args.expected == "liquid":
+        phase_gates = {
+            "final_MSD_gt_1_A2": float(rows[-1]["msd_angstrom2"]) > 1.0,
+            "late_MSD_slope_gt_0_0001_A2_per_step": msd_slope > 0.0001,
+        }
+    elif args.expected == "solid":
         phase_gates = {
             "final_median_CSP_lt_6_A2": final_csp["median_A2"] < 6.0,
             "final_ordered_fraction_gt_0_1": (
@@ -95,6 +109,7 @@ def main() -> None:
         "schema": "mpn-pair-reference-phase-analysis-v1",
         "run_dir": str(args.run_dir.resolve()),
         "expected_phase": args.expected,
+        "structure_model": args.structure_model,
         "status": f"{args.expected}_{'verified' if verified else 'not_verified'}",
         "samples": len(rows),
         "steps": int(rows[-1]["step"]),
@@ -104,6 +119,7 @@ def main() -> None:
             "last": float(rows[-1]["temperature_k"]),
         },
         "minimum_nearest_neighbor_A": minimum_distance,
+        "minimum_neighbor_gate_A": args.minimum_neighbor,
         "MSD_A2": {
             "last": float(rows[-1]["msd_angstrom2"]),
             "late_slope_per_step": msd_slope,

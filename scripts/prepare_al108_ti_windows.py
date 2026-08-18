@@ -12,9 +12,11 @@ from pathlib import Path
 from mpn_melting.abacus_input import load_json, write_job
 from mpn_melting.cli import load_atom_source
 from mpn_melting.free_energy import exponential_free_energy_difference
+from mpn_melting.structures import AtomSet
+from mpn_melting.trajectory import lattice_volume
 from scripts.analyze_phase_run import analyze as analyze_phase
+from scripts.analyze_mg_phase_md import hcp_phase_checks
 from scripts.analyze_two_phase_run import parse_md_log, series_stats
-from scripts.prepare_al108_volume_scan import scaled_to_volume
 
 ROOT = Path(__file__).resolve().parents[1]
 SUPPORTED_KEDFS = {"wt", "xwm", "lkt", "ext-wt"}
@@ -26,6 +28,18 @@ COMPONENT_RE = re.compile(
 )
 
 
+def scaled_to_volume(atoms: AtomSet, target_volume_A3: float) -> AtomSet:
+    current = lattice_volume(tuple(atoms.lattice_vectors))
+    factor = (target_volume_A3 / current) ** (1.0 / 3.0)
+    return AtomSet(
+        list(atoms.symbols),
+        list(atoms.scaled_positions),
+        [tuple(value * factor for value in vector) for vector in atoms.lattice_vectors],
+        velocities=list(atoms.velocities) if atoms.velocities is not None else None,
+        movements=list(atoms.movements) if atoms.movements is not None else None,
+    )
+
+
 def lambda_label(value: float) -> str:
     return f"lambda_{value:.3f}".replace(".", "p")
 
@@ -35,7 +49,16 @@ def prepare(args: argparse.Namespace) -> None:
     if out.exists():
         raise FileExistsError(f"refusing to overwrite {out}")
     out.mkdir(parents=True)
-    source = load_atom_source(args.source, args.source_frame, "Al", include_velocities=False)
+    element_symbol = str(getattr(args, "element_symbol", "Al"))
+    element_config = Path(
+        getattr(args, "element_config", ROOT / "config" / "al.json")
+    )
+    source = load_atom_source(
+        args.source,
+        args.source_frame,
+        element_symbol,
+        include_velocities=False,
+    )
     atoms = source["atoms"]
     atoms = scaled_to_volume(atoms, args.volume_per_atom * atoms.natoms)
     config = load_json(args.config)
@@ -65,7 +88,12 @@ def prepare(args: argparse.Namespace) -> None:
     ranks = getattr(args, "ranks", None)
     if ranks is not None:
         config["mpirun_np"] = ranks
-    element = load_json(ROOT / "config" / "al.json")
+    element = load_json(element_config)
+    if str(element.get("element")) != element_symbol:
+        raise ValueError(
+            f"element config declares {element.get('element')!r}, "
+            f"expected {element_symbol!r}"
+        )
     windows = []
     for index, lambda_value in enumerate(sorted(set(args.lambdas))):
         if not 0.0 <= lambda_value <= 1.0:
@@ -80,12 +108,13 @@ def prepare(args: argparse.Namespace) -> None:
             point_config,
             job_type=f"{target_kedf}_pair_thermodynamic_integration",
             suffix=(
-                f"al108_{target_kedf}_{args.phase}_"
+                f"{element_symbol.lower()}{atoms.natoms}_{target_kedf}_{args.phase}_"
                 f"T{int(args.temperature):04d}_{label}"
             ),
             calculation="md",
             extra_metadata={
                 "phase": args.phase,
+                "element": element_symbol,
                 "target_kedf": target_kedf,
                 "lambda": lambda_value,
                 "target_temperature_K": args.temperature,
@@ -107,6 +136,8 @@ def prepare(args: argparse.Namespace) -> None:
             else "kedf-pair-ti-windows-v1"
         ),
         "phase": args.phase,
+        "element": element_symbol,
+        "element_config": str(element_config.resolve()),
         "target_kedf": target_kedf,
         "target_temperature_K": args.temperature,
         "volume_per_atom_A3": args.volume_per_atom,
@@ -152,6 +183,24 @@ def trapezoid(rows: list[dict]) -> float | None:
     )
 
 
+def apply_element_phase_model(phase: dict, manifest: dict) -> dict:
+    if str(manifest.get("element")) != "Mg":
+        return phase
+    checks = hcp_phase_checks(
+        phase,
+        str(manifest["phase"]),
+        thermalized_initial=True,
+    )
+    expected = str(manifest["phase"])
+    phase["legacy_structure_status"] = phase.get("status")
+    phase["status"] = (
+        f"{expected}_verified" if all(checks.values()) else f"{expected}_not_verified"
+    )
+    phase["structure_model"] = "hcp_diffusion_and_non_affine_msd_v2"
+    phase["hcp_phase_gate"] = checks
+    return phase
+
+
 def analyze(args: argparse.Namespace) -> None:
     root = args.run_root.resolve()
     manifest = json.loads((root / "manifest.json").read_text())
@@ -170,7 +219,10 @@ def analyze(args: argparse.Namespace) -> None:
         # TI windows inherit positions from a phase-verified thermalized source.
         # Regenerating velocities does not turn that structure into a pristine
         # fresh-preparation sample, so validate it as a continuation.
-        phase = analyze_phase(run, manifest["phase"], thermalized_initial=True)
+        phase = apply_element_phase_model(
+            analyze_phase(run, manifest["phase"], thermalized_initial=True),
+            manifest,
+        )
         (run / "phase_analysis.json").write_text(json.dumps(phase, indent=2, sort_keys=True) + "\n")
         delta_values = [row["delta_U_eV"] for row in late_components]
         raw_by_lambda[window["lambda"]] = delta_values
@@ -265,6 +317,8 @@ def main() -> None:
     prep.add_argument("--seed", type=int, default=20260720)
     prep.add_argument("--pair-model", type=Path, required=True)
     prep.add_argument("--ranks", type=int)
+    prep.add_argument("--element-symbol", default="Al")
+    prep.add_argument("--element-config", type=Path, default=ROOT / "config" / "al.json")
     prep.add_argument(
         "--config",
         type=Path,

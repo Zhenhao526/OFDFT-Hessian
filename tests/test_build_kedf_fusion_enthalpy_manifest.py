@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,10 @@ from scripts.build_kedf_fusion_enthalpy_manifest import (
     build_manifest,
     build_point_from_roots,
 )
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def write_pair(
@@ -210,6 +215,50 @@ def test_follows_verified_extension_parent_chain(tmp_path: Path) -> None:
     assert len(
         point["enthalpy_trajectory_provenance"]["liquid"]["segments"]
     ) == 2
+
+
+def test_accepts_verified_merged_zero_pressure_parent(tmp_path: Path) -> None:
+    root = tmp_path / "run"
+    pressure = tmp_path / "pressure.json"
+    merged = tmp_path / "merged-zero-pressure"
+    merged.mkdir()
+    write_pair(root, pressure, method="xwm", stress_available=False)
+    merged_summary = merged / "zero_pressure_confirmation_summary.json"
+    merged_summary.write_text(pressure.read_text())
+    manifest = json.loads((root / "confirmation_manifest.json").read_text())
+    manifest["parent_confirmation"] = str(merged)
+    manifest["source_zero_pressure_confirmation"] = {
+        "path": str(merged_summary),
+        "sha256": sha256(merged_summary),
+    }
+    (root / "confirmation_manifest.json").write_text(json.dumps(manifest))
+
+    point = build_point_from_roots([root], merged_summary)
+
+    assert point["solid_segment_steps"] == [3000]
+    assert point["liquid_segment_steps"] == [3000]
+
+
+def test_rejects_merged_zero_pressure_parent_sha_mismatch(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "run"
+    pressure = tmp_path / "pressure.json"
+    merged = tmp_path / "merged-zero-pressure"
+    merged.mkdir()
+    write_pair(root, pressure, method="xwm", stress_available=False)
+    merged_summary = merged / "zero_pressure_confirmation_summary.json"
+    merged_summary.write_text(pressure.read_text())
+    manifest = json.loads((root / "confirmation_manifest.json").read_text())
+    manifest["parent_confirmation"] = str(merged)
+    manifest["source_zero_pressure_confirmation"] = {
+        "path": str(merged_summary),
+        "sha256": "0" * 64,
+    }
+    (root / "confirmation_manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="SHA256"):
+        build_point_from_roots([root], merged_summary)
 
 
 def test_rejects_independent_duplicate_passed_pairs(tmp_path: Path) -> None:

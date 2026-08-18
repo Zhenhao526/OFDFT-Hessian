@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.prepare_al108_ti_windows import parse_components, prepare
+from scripts.prepare_al108_ti_windows import apply_element_phase_model, parse_components, prepare
 
 
 class PrepareAl108TiWindowsTests(unittest.TestCase):
@@ -107,6 +107,89 @@ def test_prepare_records_non_wt_target(
         call[1]["extra_metadata"]["target_kedf"] == target_kedf
         for call in captured
     )
+
+
+def test_prepare_supports_explicit_mg_element(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"of_kinetic": "wt", "mpirun_np": 12}))
+    element_config = tmp_path / "mg.json"
+    element_config.write_text(json.dumps({"element": "Mg"}))
+    pair_model = tmp_path / "pair.json"
+    pair_model.write_text("{}\n")
+
+    class Atoms:
+        natoms = 128
+
+    source_calls = []
+    monkeypatch.setattr(
+        "scripts.prepare_al108_ti_windows.load_atom_source",
+        lambda source, frame, symbol, **kwargs: (
+            source_calls.append(symbol)
+            or {"atoms": Atoms(), "source": "source", "step": 20}
+        ),
+    )
+    monkeypatch.setattr(
+        "scripts.prepare_al108_ti_windows.scaled_to_volume", lambda atoms, volume: atoms
+    )
+    monkeypatch.setattr(
+        "scripts.prepare_al108_ti_windows.load_json",
+        lambda path: json.loads(path.read_text()),
+    )
+    captured = []
+    monkeypatch.setattr(
+        "scripts.prepare_al108_ti_windows.write_job",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    out = tmp_path / "out"
+    prepare(
+        argparse.Namespace(
+            out=out,
+            source="source",
+            source_frame="last",
+            phase="solid",
+            temperature=900.0,
+            volume_per_atom=23.18,
+            lambdas=[0.0, 1.0],
+            steps=10,
+            dt=1.0,
+            csvr_tau=5.0,
+            dumpfreq=1,
+            restartfreq=10,
+            seed=10,
+            pair_model=pair_model,
+            config=config,
+            ranks=12,
+            element_symbol="Mg",
+            element_config=element_config,
+        )
+    )
+
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert source_calls == ["Mg"]
+    assert manifest["element"] == "Mg"
+    assert manifest["natoms"] == 128
+    assert all(call[0][2]["element"] == "Mg" for call in captured)
+    assert all(call[1]["suffix"].startswith("mg128_wt_solid") for call in captured)
+
+
+def test_mg_phase_status_uses_hcp_dynamics(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.prepare_al108_ti_windows.hcp_phase_checks",
+        lambda phase, expected, thermalized_initial: {
+            "bounded": thermalized_initial,
+            "nearest": True,
+        },
+    )
+    phase = {"status": "solid_not_verified"}
+    result = apply_element_phase_model(
+        phase, {"element": "Mg", "phase": "solid"}
+    )
+    assert result["status"] == "solid_verified"
+    assert result["legacy_structure_status"] == "solid_not_verified"
 
 
 if __name__ == "__main__":
