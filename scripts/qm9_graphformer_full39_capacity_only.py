@@ -45,6 +45,7 @@ from qm9_hessian_density_relaxed_eval import _load_context
 PROTOCOL_IDS = {
     "qm9_graphformer_0028399_full39_capacity_only_v1",
     "qm9_graphformer_0028399_full39_capacity_only_v2",
+    "qm9_graphformer_0028399_full_network_capacity_smoke_v3",
 }
 MOLECULE_ID = "0028399"
 SCOPES = (
@@ -82,6 +83,114 @@ def configure_capacity_numerics(protocol: dict[str, Any]) -> None:
     torch.set_default_dtype(torch.float64)
     torch.manual_seed(20260727)
     np.random.seed(20260727)
+
+
+def _parameter_state_sha256(module: torch.nn.Module) -> str:
+    digest = hashlib.sha256()
+    for name, parameter in module.named_parameters():
+        value = parameter.detach().cpu().contiguous()
+        digest.update(name.encode())
+        digest.update(str(value.dtype).encode())
+        digest.update(str(tuple(value.shape)).encode())
+        digest.update(value.numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _reset_leaf_modules(module: torch.nn.Module) -> int:
+    reset_count = 0
+    for child in module.modules():
+        if any(True for _ in child.children()):
+            continue
+        reset = getattr(child, "reset_parameters", None)
+        if callable(reset):
+            reset()
+            reset_count += 1
+    return reset_count
+
+
+def initialize_capacity_model(
+    net: torch.nn.Module,
+    *,
+    arm: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply a registered pretrained or deterministic scratch initialization."""
+
+    if arm not in settings:
+        raise ValueError(f"unregistered initialization arm: {arm}")
+    definition = settings[arm]
+    kind = definition["type"]
+    before_sha256 = _parameter_state_sha256(net)
+    reset_count = 0
+    if kind == "source_checkpoint":
+        seed = None
+    elif kind == "deterministic_reset":
+        seed = int(definition["seed"])
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        roots = tuple(definition["randomized_roots"])
+        if not roots:
+            raise ValueError("scratch initialization has no randomized roots")
+        for root_name in roots:
+            module = getattr(net, root_name, None)
+            if module is None:
+                raise ValueError(
+                    f"scratch initialization root is absent: {root_name}"
+                )
+            reset_count += _reset_leaf_modules(module)
+        named_parameters = dict(net.named_parameters())
+        with torch.no_grad():
+            for name, value in definition.get(
+                "constant_parameter_overrides", {}
+            ).items():
+                if name not in named_parameters:
+                    raise ValueError(
+                        f"scratch constant override is absent: {name}"
+                    )
+                named_parameters[name].fill_(float(value))
+            for name, limits in definition.get(
+                "uniform_parameter_overrides", {}
+            ).items():
+                if name not in named_parameters:
+                    raise ValueError(
+                        f"scratch uniform override is absent: {name}"
+                    )
+                if len(limits) != 2:
+                    raise ValueError(
+                        f"scratch uniform override is invalid: {name}"
+                    )
+                torch.nn.init.uniform_(
+                    named_parameters[name],
+                    float(limits[0]),
+                    float(limits[1]),
+                )
+        if reset_count == 0:
+            raise RuntimeError("scratch initialization reset no leaf modules")
+    else:
+        raise ValueError(f"unsupported initialization type: {kind}")
+    after_sha256 = _parameter_state_sha256(net)
+    changed = after_sha256 != before_sha256
+    if kind == "source_checkpoint" and changed:
+        raise RuntimeError("pretrained initialization changed model parameters")
+    if kind == "deterministic_reset" and not changed:
+        raise RuntimeError("scratch initialization did not change model parameters")
+    return {
+        "arm": arm,
+        "type": kind,
+        "seed": seed,
+        "randomized_roots": list(definition.get("randomized_roots", [])),
+        "preserved_roots": list(definition.get("preserved_roots", [])),
+        "constant_parameter_overrides": dict(
+            definition.get("constant_parameter_overrides", {})
+        ),
+        "uniform_parameter_overrides": dict(
+            definition.get("uniform_parameter_overrides", {})
+        ),
+        "reset_leaf_module_count": reset_count,
+        "before_parameter_state_sha256": before_sha256,
+        "after_parameter_state_sha256": after_sha256,
+        "parameter_state_changed": changed,
+    }
 
 
 def implementation_provenance() -> dict[str, dict[str, str]]:
@@ -244,6 +353,16 @@ def _load_and_validate_assets(
         )
     ):
         raise ValueError("capacity-only access boundary drift")
+    initialization_arms = protocol.get("initialization_arms")
+    if protocol["protocol_id"].endswith("_v3"):
+        if (
+            set(initialization_arms or {}) != {"pretrained", "scratch"}
+            or initialization_arms["pretrained"]["type"]
+            != "source_checkpoint"
+            or initialization_arms["scratch"]["type"]
+            != "deterministic_reset"
+        ):
+            raise ValueError("v3 initialization arms are not frozen")
     if protocol["definitions"]["symmetric_matrix_power_mode"] != (
         "eigh_second_order_audit"
     ):
@@ -1371,6 +1490,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     density_args = _density_namespace(common)
     context = _load_context(run_spec, density_args, device)
+    initialization = initialize_capacity_model(
+        context.model.net,
+        arm=args.initialization,
+        settings=protocol.get(
+            "initialization_arms",
+            {"pretrained": {"type": "source_checkpoint"}},
+        ),
+    )
     names, parameters = configure_parameter_scope(context.model.net, args.scope)
     if not parameters:
         raise ValueError("selected parameter scope is empty")
@@ -1400,6 +1527,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "parameter_scope": args.scope,
         "parameter_names": names,
         "optimizer_name": args.optimizer,
+        "initialization": initialization,
         "density_rescue": (
             args.density_rescue.resolve().as_posix()
             if args.density_rescue is not None
@@ -1537,6 +1665,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "asset_registration_sha256": _sha256(args.asset_registration),
         "source_checkpoint": args.source_checkpoint.as_posix(),
         "source_checkpoint_sha256": _sha256(args.source_checkpoint),
+        "initialization": initialization,
         "registered_hashes": {
             "protocol_sha256": _sha256(args.protocol),
             "asset_registration_sha256": _sha256(
@@ -1658,6 +1787,11 @@ def parse_args() -> argparse.Namespace:
         default="optimize",
     )
     parser.add_argument("--optimizer", choices=OPTIMIZERS, default="adamw")
+    parser.add_argument(
+        "--initialization",
+        choices=("pretrained", "scratch"),
+        default="pretrained",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device", default="cuda:0")
     return parser.parse_args()

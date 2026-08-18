@@ -51,6 +51,7 @@ class OFDataModule(lightning.LightningDataModule):
         pair_batch_seed: int = 1729,
         pair_source_markers: list[str] | None = None,
         infer_pair_metadata_from_filename: bool = False,
+        pairs_per_batch: int = 1,
         pair_replay_sidecar_dir: str | Path | None = None,
         pair_replay_interval: int = 1,
         pair_replay_phase: int = 0,
@@ -86,6 +87,8 @@ class OFDataModule(lightning.LightningDataModule):
                 scanned for exact pairs.
             infer_pair_metadata_from_filename: Infer the established ``parent.sample_id`` pair
                 convention instead of opening every Zarr file during sampler construction.
+            pairs_per_batch: Number of complete displacement pairs placed in each active
+                pair-grouped mini-batch.
             train_only: Instantiate only the training split during ``fit`` and reject validation
                 or test loader access. This is intended for pre-registered fixed-step training
                 protocols that must not read held-out split entries.
@@ -116,6 +119,7 @@ class OFDataModule(lightning.LightningDataModule):
         self.infer_pair_metadata_from_filename = bool(
             infer_pair_metadata_from_filename
         )
+        self.pairs_per_batch = int(pairs_per_batch)
         self.pair_replay_sidecar_dir = pair_replay_sidecar_dir
         self.pair_replay_interval = int(pair_replay_interval)
         self.pair_replay_phase = int(pair_replay_phase)
@@ -219,6 +223,7 @@ class OFDataModule(lightning.LightningDataModule):
                 rank=global_rank,
                 pair_source_markers=self.pair_source_markers,
                 infer_pair_metadata_from_filename=self.infer_pair_metadata_from_filename,
+                pairs_per_batch=self.pairs_per_batch,
                 pair_replay_sidecar_dir=self.pair_replay_sidecar_dir,
                 pair_replay_interval=self.pair_replay_interval,
                 pair_replay_phase=self.pair_replay_phase,

@@ -1,4 +1,5 @@
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from scripts.qm9_graphformer_full39_capacity_only import (
     configure_capacity_numerics,
     damped_cgls,
     implementation_provenance,
+    initialize_capacity_model,
 )
 
 
@@ -156,3 +158,78 @@ def test_density_rescue_is_bound_to_capacity_v2():
     assert rescue["decision"]["lbfgs_refine"] is False
     assert rescue["decision"]["newton_refine"] is True
     assert len(rescue_hash) == 64
+
+
+class _TinyCapacityNet(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.randomized = torch.nn.Sequential(
+            torch.nn.Linear(3, 4),
+            torch.nn.SiLU(),
+            torch.nn.Linear(4, 1),
+        )
+        self.preserved = torch.nn.Linear(3, 1)
+
+
+def test_scratch_initialization_is_deterministic_and_preserves_registered_root():
+    base = _TinyCapacityNet().to(torch.float64)
+    first = deepcopy(base)
+    second = deepcopy(base)
+    preserved = base.preserved.weight.detach().clone()
+    settings = {
+        "scratch": {
+            "type": "deterministic_reset",
+            "seed": 20260730,
+            "randomized_roots": ["randomized"],
+            "preserved_roots": ["preserved"],
+        }
+    }
+
+    first_result = initialize_capacity_model(
+        first, arm="scratch", settings=settings
+    )
+    second_result = initialize_capacity_model(
+        second, arm="scratch", settings=settings
+    )
+
+    assert first_result["parameter_state_changed"]
+    assert first_result["after_parameter_state_sha256"] == second_result[
+        "after_parameter_state_sha256"
+    ]
+    torch.testing.assert_close(first.preserved.weight, preserved)
+    torch.testing.assert_close(second.preserved.weight, preserved)
+
+
+def test_pretrained_initialization_is_an_exact_noop():
+    net = _TinyCapacityNet().to(torch.float64)
+    result = initialize_capacity_model(
+        net,
+        arm="pretrained",
+        settings={"pretrained": {"type": "source_checkpoint"}},
+    )
+
+    assert not result["parameter_state_changed"]
+    assert result["before_parameter_state_sha256"] == result[
+        "after_parameter_state_sha256"
+    ]
+
+
+def test_v3_smoke_is_full_network_one_update_and_cannot_claim_failure():
+    root = Path(__file__).resolve().parents[1]
+    protocol = yaml.safe_load(
+        (
+            root
+            / "configs/audit/"
+            "qm9_graphformer_0028399_full_network_capacity_smoke_v3.yaml"
+        ).read_text()
+    )
+
+    assert protocol["parameter_scopes"]["order"] == ["full_graphformer"]
+    assert protocol["optimizers"]["order"] == ["adamw"]
+    assert protocol["optimizers"]["adamw"]["max_updates"] == 1
+    assert protocol["capacity_gate"][
+        "insufficient_capacity_conclusion_allowed"
+    ] is False
+    assert protocol["interpretation"]["forbidden_claim"] == (
+        "Graphformer cannot express the target Hessian"
+    )

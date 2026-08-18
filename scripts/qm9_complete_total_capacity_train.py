@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import csv
 import json
 import math
 import os
 import resource
+import sys
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ from mldft.ml.models.components.three_body_geometry_residual import (
     ThreeBodyGeometryResidual,
 )
 from mldft.ofdft.complete_total_training import (
+    assign_parameter_only_gradients,
     assign_two_task_pcgrad,
     alternating_update_kind,
     assemble_hessian_columns,
@@ -35,6 +38,7 @@ from mldft.ofdft.complete_total_training import (
     differentiable_constrained_density_unroll,
     hessian_error_metrics,
     hutchinson_internal_frobenius_squared_loss,
+    hutchinson_internal_projected_frobenius_squared_loss,
     implicit_stationary_density_parameter_response,
     internal_coordinate_projector,
     low_mode_curvature_loss,
@@ -43,22 +47,37 @@ from mldft.ofdft.complete_total_training import (
     normalized_energy_l1,
     parameter_gradient_diagnostics,
     stationary_density_parameter_step_prediction,
+    structures25_projected_gradient_mse,
+    electron_number_tangent_projection,
 )
 from mldft.ofdft.conservative_force import (
     evaluate_total_ofdft_force,
     prepare_differentiable_geometry,
     prepare_fixed_geometry_scalar_energy,
 )
-from mldft.ofdft.geometry_integrals import FiniteDifferencePySCFIntegralProvider
+from mldft.ofdft.geometry_integrals import (
+    AutodiffPySCFIntegralProvider,
+    FiniteDifferencePySCFIntegralProvider,
+)
 from mldft.ofdft.functional_factory import FunctionalFactory
 from mldft.ofdft.implicit_response import ConstrainedResponseSystem
 from mldft.ofdft.internal_directions import (
     InternalDirectionBank,
     sample_internal_rademacher_direction,
 )
+from mldft.ofdft.torch_integrals import (
+    TORCH_DIRECTIONAL_SECOND_BACKEND,
+    TORCH_INTEGRAL_BACKEND,
+    TorchAutogradLibcintIntegralProvider,
+)
 
 from qm9_hessian_density_relaxed_eval import _load_context, _parse_run
 from qm9_total_ofdft_force_audit import _evaluate_point
+from calibrate_qm9_implicit_hvp_weight import calibrate as calibrate_hvp_weight
+
+
+CANONICAL_PHYSICAL_DEFINITION_ID = "qm9_complete_total_relaxed_egfh_v1"
+LEGACY_PHYSICAL_DEFINITION_ID = "legacy_hybrid_egfh_v0"
 
 
 @dataclass(frozen=True)
@@ -77,6 +96,10 @@ class RelaxedPoint:
     final_gradient_norm: float
     cycles: int
     total_energy: float
+    initialization_mode: str = "strict_density"
+    predictor_projected_gradient_norm: float | None = None
+    predictor_total_energy: float | None = None
+    predictor_trust_scale: float | None = None
 
 
 @dataclass
@@ -89,16 +112,186 @@ class MoleculeState:
     pbe_hessian: np.ndarray
     label_coefficients: torch.Tensor
     directions: list[Direction]
+    reference_label_index: int | None = None
+    structures25_kin_plus_xc_energy: float | None = None
+    structures25_kin_plus_xc_gradient: torch.Tensor | None = None
+    raw_pbe_hessian: np.ndarray | None = None
+    reference_hessian_antisymmetric_over_symmetric_frobenius: float = math.nan
     direction_basis_definition: str = "cartesian"
     external_basis: np.ndarray | None = None
     expected_internal_dimension: int | None = None
     loaded_direction_role: str = "all"
+    internal_basis_metrics: dict[str, float | int] | None = None
     base: RelaxedPoint | None = None
     displaced: dict[tuple[int, str], RelaxedPoint] | None = None
 
     def __post_init__(self) -> None:
         if self.displaced is None:
             self.displaced = {}
+
+
+def _physical_definition_id(protocol: dict[str, Any]) -> str:
+    """Return the explicit physical-definition version for one protocol.
+
+    v1--v3 predate versioned definitions and remain reproducible as an
+    explicitly named legacy branch. New protocols must opt into the canonical
+    definition instead of silently inheriting whichever formula a runner uses.
+    """
+    definition_id = protocol.get("definitions", {}).get(
+        "physical_definition_id", LEGACY_PHYSICAL_DEFINITION_ID
+    )
+    if definition_id not in {
+        LEGACY_PHYSICAL_DEFINITION_ID,
+        CANONICAL_PHYSICAL_DEFINITION_ID,
+    }:
+        raise ValueError(f"Unsupported physical definition {definition_id!r}")
+    return str(definition_id)
+
+
+def _validate_canonical_calibration_artifact(
+    path: Path,
+    *,
+    expected_sha256: str,
+    protocol_id: str,
+    protocol_sha256: str,
+    requested_lambda_h: float | None,
+    expected_code_provenance: dict[str, str | None] | None = None,
+    calibration_protocol: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bind a formal canonical H weight to its zero-LR gradient audit."""
+    actual_sha256 = _sha256(path)
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            "canonical calibration artifact SHA256 mismatch: "
+            f"{actual_sha256} != {expected_sha256}"
+        )
+    payload = json.loads(path.read_text())
+    if (
+        payload.get("protocol_id") != protocol_id
+        or payload.get("protocol_sha256") != protocol_sha256
+        or payload.get("physical_definition_id")
+        != CANONICAL_PHYSICAL_DEFINITION_ID
+    ):
+        raise ValueError(
+            "canonical calibration artifact protocol/physical-definition mismatch"
+        )
+    training_curve = payload.get("training_curve")
+    training_curve_sha256 = payload.get("training_curve_sha256")
+    if not training_curve or not training_curve_sha256:
+        raise ValueError("canonical calibration lacks a bound training curve")
+    training_curve_path = Path(str(training_curve))
+    if not training_curve_path.is_file():
+        raise ValueError(
+            f"canonical calibration training curve is missing: {training_curve_path}"
+        )
+    if _sha256(training_curve_path) != training_curve_sha256:
+        raise ValueError("canonical calibration training-curve SHA256 mismatch")
+    if calibration_protocol is not None:
+        with training_curve_path.open(newline="") as handle:
+            calibration_rows = list(csv.DictReader(handle))
+        if len(calibration_rows) != 1:
+            raise ValueError(
+                "canonical calibration must bind exactly one zero-LR curve row"
+            )
+        recomputed = calibrate_hvp_weight(
+            calibration_protocol, calibration_rows[0]
+        )
+        for key, expected in recomputed.items():
+            recorded = payload.get(key)
+            if isinstance(expected, str):
+                matches = recorded == expected
+            else:
+                matches = recorded is not None and math.isclose(
+                    float(recorded),
+                    float(expected),
+                    rel_tol=0.0,
+                    abs_tol=1.0e-15,
+                )
+            if not matches:
+                raise ValueError(
+                    f"canonical calibration recomputation mismatch for {key}"
+                )
+    training_summary = payload.get("training_summary")
+    training_summary_sha256 = payload.get("training_summary_sha256")
+    if not training_summary or not training_summary_sha256:
+        raise ValueError("canonical calibration lacks a bound training summary")
+    training_summary_path = Path(str(training_summary))
+    if not training_summary_path.is_file():
+        raise ValueError(
+            "canonical calibration training summary is missing: "
+            f"{training_summary_path}"
+        )
+    if _sha256(training_summary_path) != training_summary_sha256:
+        raise ValueError("canonical calibration training-summary SHA256 mismatch")
+    training_summary_payload = json.loads(training_summary_path.read_text())
+    if (
+        training_summary_payload.get("physical_definition_id")
+        != CANONICAL_PHYSICAL_DEFINITION_ID
+        or training_summary_payload.get("semantic_version")
+        != CANONICAL_PHYSICAL_DEFINITION_ID
+        or training_summary_payload.get("protocol_id") != protocol_id
+        or training_summary_payload.get("protocol_sha256") != protocol_sha256
+        or training_summary_payload.get("code_provenance")
+        != payload.get("code_provenance")
+    ):
+        raise ValueError(
+            "canonical calibration training-summary provenance mismatch"
+        )
+    if (
+        expected_code_provenance is not None
+        and payload.get("code_provenance") != expected_code_provenance
+    ):
+        raise ValueError("canonical calibration code provenance mismatch")
+    if calibration_protocol is not None:
+        training_direction = calibration_protocol.get("directions", {}).get(
+            "training_direction", {}
+        )
+        strategy = training_direction.get("distribution")
+        if strategy in {
+            "cyclic_orthogonal_internal_basis_blocks",
+            "cyclic_full_rank_rademacher_pool_blocks",
+        }:
+            registered_molecules = calibration_protocol.get(
+                "frozen_train_only_asset_reuse", {}
+            ).get("molecule_ids")
+            if (
+                training_summary_payload.get("molecules")
+                != registered_molecules
+                or training_summary_payload.get("training_direction_strategy")
+                != strategy
+                or int(
+                    training_summary_payload.get("directions_per_step", -1)
+                )
+                != int(training_direction.get("count_per_step", -2))
+            ):
+                raise ValueError(
+                    "canonical calibration molecule/direction schedule mismatch"
+                )
+    formal_lambda_h = float(payload.get("formal_lambda_h", math.nan))
+    if (
+        requested_lambda_h is None
+        or not math.isfinite(formal_lambda_h)
+        or formal_lambda_h <= 0.0
+        or not math.isclose(
+            float(requested_lambda_h),
+            formal_lambda_h,
+            rel_tol=0.0,
+            abs_tol=1.0e-15,
+        )
+    ):
+        raise ValueError(
+            "canonical formal lambda_H does not match its calibration artifact"
+        )
+    return {
+        "path": path.resolve().as_posix(),
+        "sha256": actual_sha256,
+        "training_curve": training_curve_path.resolve().as_posix(),
+        "training_curve_sha256": str(training_curve_sha256),
+        "training_summary": training_summary_path.resolve().as_posix(),
+        "training_summary_sha256": str(training_summary_sha256),
+        "code_provenance": payload.get("code_provenance"),
+        "formal_lambda_h": formal_lambda_h,
+    }
 
 
 class IntegralBundleCache:
@@ -110,17 +303,97 @@ class IntegralBundleCache:
         self.entries: OrderedDict[bytes, Any] = OrderedDict()
         self.build_count = 0
         self.hit_count = 0
+        self.observed_derivative_backends: set[str] = set()
+        self.observed_directional_second_backends: set[str] = set()
+
+    @property
+    def torch_autograd_direct(self) -> bool:
+        return self.args.integral_derivative_backend == "torch_autograd_dqc"
+
+    def get_torch_provider(
+        self, atomic_numbers: np.ndarray
+    ) -> TorchAutogradLibcintIntegralProvider:
+        if not self.torch_autograd_direct:
+            raise RuntimeError("torch provider requested for a non-Torch backend")
+        key = b"torch-provider:" + np.asarray(
+            atomic_numbers, dtype=np.int64
+        ).tobytes()
+        if key in self.entries:
+            self.hit_count += 1
+            self.entries.move_to_end(key)
+            return self.entries[key]
+        provider = TorchAutogradLibcintIntegralProvider(
+            atomic_numbers=atomic_numbers,
+            basis=self.context.sample_generator.basis_info.basis_dict,
+            charge=self.args.charge,
+            derivative_step_bohr=self.args.integral_derivative_step,
+            derivative_workers=self.args.integral_derivative_workers,
+        )
+        self.entries[key] = provider
+        self.build_count += 1
+        self.observed_derivative_backends.add(TORCH_INTEGRAL_BACKEND)
+        self.observed_directional_second_backends.add(
+            TORCH_DIRECTIONAL_SECOND_BACKEND
+        )
+        while len(self.entries) > self.args.integral_cache_entries:
+            self.entries.popitem(last=False)
+        return provider
+
+    def _record_and_validate_backend(self, bundle: Any, *, directional: bool) -> None:
+        expected = (
+            "pyscfad_jax_autodiff"
+            if self.args.integral_derivative_backend == "pyscfad_autodiff"
+            else "finite_difference_pyscf"
+        )
+        observed = str(bundle.derivative_backend)
+        self.observed_derivative_backends.add(observed)
+        if observed != expected:
+            raise RuntimeError(
+                f"Integral provider backend mismatch: observed {observed!r}, "
+                f"expected {expected!r}"
+            )
+        if not directional:
+            return
+        second_backend = bundle.directional_second_backend
+        if not isinstance(second_backend, str) or not second_backend:
+            raise RuntimeError("Directional integral bundle lacks backend provenance")
+        self.observed_directional_second_backends.add(second_backend)
+        if self.args.integral_derivative_backend == "pyscfad_autodiff":
+            if (
+                not second_backend.startswith("pyscfad_")
+                or bundle.derivative_step_bohr != 0.0
+                or bundle.directional_second_step_bohr != 0.0
+            ):
+                raise RuntimeError(
+                    "Autodiff integral bundle attempted a numerical or foreign "
+                    "directional-second backend"
+                )
+        elif second_backend != "finite_difference_of_first_derivatives":
+            raise RuntimeError(
+                "Finite-difference reference bundle has unexpected second backend"
+            )
 
     def get(self, atomic_numbers: np.ndarray, positions_bohr: np.ndarray) -> Any:
+        if self.torch_autograd_direct:
+            raise RuntimeError(
+                "torch_autograd_dqc integrals must be evaluated directly in the "
+                "Torch scalar-energy graph"
+            )
         key = (
-            np.asarray(atomic_numbers, dtype=np.int64).tobytes()
+            self.args.integral_derivative_backend.encode()
+            + np.asarray(atomic_numbers, dtype=np.int64).tobytes()
             + np.asarray(positions_bohr, dtype=np.float64).tobytes()
         )
         if key in self.entries:
             self.hit_count += 1
             self.entries.move_to_end(key)
             return self.entries[key]
-        provider = FiniteDifferencePySCFIntegralProvider(
+        provider_class = (
+            AutodiffPySCFIntegralProvider
+            if self.args.integral_derivative_backend == "pyscfad_autodiff"
+            else FiniteDifferencePySCFIntegralProvider
+        )
+        provider = provider_class(
             atomic_numbers=atomic_numbers,
             basis=self.context.sample_generator.basis_info.basis_dict,
             charge=self.args.charge,
@@ -128,6 +401,7 @@ class IntegralBundleCache:
             derivative_workers=self.args.integral_derivative_workers,
         )
         bundle = provider.evaluate_with_derivatives(positions_bohr)
+        self._record_and_validate_backend(bundle, directional=False)
         self.entries[key] = bundle
         self.build_count += 1
         while len(self.entries) > self.args.integral_cache_entries:
@@ -140,9 +414,15 @@ class IntegralBundleCache:
         positions_bohr: np.ndarray,
         direction: np.ndarray,
     ) -> Any:
+        if self.torch_autograd_direct:
+            raise RuntimeError(
+                "torch_autograd_dqc obtains directional second derivatives by "
+                "Torch double backward, not a detached directional bundle"
+            )
         direction = np.asarray(direction, dtype=np.float64)
         key = (
             b"directional:"
+            + self.args.integral_derivative_backend.encode()
             + np.asarray(atomic_numbers, dtype=np.int64).tobytes()
             + np.asarray(positions_bohr, dtype=np.float64).tobytes()
             + direction.tobytes()
@@ -155,7 +435,12 @@ class IntegralBundleCache:
             self.hit_count += 1
             self.entries.move_to_end(key)
             return self.entries[key]
-        provider = FiniteDifferencePySCFIntegralProvider(
+        provider_class = (
+            AutodiffPySCFIntegralProvider
+            if self.args.integral_derivative_backend == "pyscfad_autodiff"
+            else FiniteDifferencePySCFIntegralProvider
+        )
+        provider = provider_class(
             atomic_numbers=atomic_numbers,
             basis=self.context.sample_generator.basis_info.basis_dict,
             charge=self.args.charge,
@@ -165,8 +450,13 @@ class IntegralBundleCache:
         bundle = provider.evaluate_with_directional_second_derivatives(
             positions_bohr,
             direction,
-            directional_step_bohr=self.args.integral_directional_second_step,
+            directional_step_bohr=(
+                0.0
+                if self.args.integral_derivative_backend == "pyscfad_autodiff"
+                else self.args.integral_directional_second_step
+            ),
         )
+        self._record_and_validate_backend(bundle, directional=True)
         self.entries[key] = bundle
         self.build_count += 1
         while len(self.entries) > self.args.integral_cache_entries:
@@ -215,13 +505,35 @@ def _load_molecule(
     atomic_numbers = np.asarray(root["geometry/atomic_numbers"], dtype=np.int64)
     positions = np.asarray(root["geometry/atom_pos"], dtype=np.float64)
     pbe_force = np.asarray(root["metadata/pbe_derivatives/forces"], dtype=np.float64)
-    label_coefficients = torch.as_tensor(
-        np.asarray(root["of_labels/spatial/coeffs"][-1], dtype=np.float64)
-    )
     energy_trace = np.asarray(root["ks_labels/energies/e_tot"], dtype=np.float64)
     has_energy = np.asarray(
         root["ks_labels/energies/has_energy_label"], dtype=np.bool_
     )
+    label_index = int(np.flatnonzero(has_energy)[-1])
+    label_coefficients = torch.as_tensor(
+        np.asarray(
+            root["of_labels/spatial/coeffs"][label_index], dtype=np.float64
+        )
+    )
+    structures25_kin_plus_xc_energy = None
+    structures25_kin_plus_xc_gradient = None
+    try:
+        structures25_kin_plus_xc_energy = float(
+            np.asarray(
+                root["of_labels/energies/e_kin_plus_xc"][label_index],
+                dtype=np.float64,
+            )
+        )
+        structures25_kin_plus_xc_gradient = torch.as_tensor(
+            np.asarray(
+                root["of_labels/spatial/grad_kin_plus_xc"][label_index],
+                dtype=np.float64,
+            )
+        )
+    except KeyError:
+        # Historical capacity protocols did not consume the Structures25
+        # functional-jet labels.  Canonical v4 preflight rejects their absence.
+        pass
     with np.load(manifest_entry["pbe_hessian_path"]) as payload:
         pbe_hessian = np.asarray(payload["pbe_hessian"], dtype=np.float64)
     direction_basis_definition = "cartesian"
@@ -305,16 +617,151 @@ def _load_molecule(
         molecule_id=molecule_id,
         atomic_numbers=atomic_numbers,
         positions_bohr=positions,
-        pbe_total_energy=float(energy_trace[has_energy][-1]),
+        pbe_total_energy=float(energy_trace[label_index]),
         pbe_force=pbe_force,
         pbe_hessian=pbe_hessian,
         label_coefficients=label_coefficients,
         directions=directions,
+        reference_label_index=label_index,
+        structures25_kin_plus_xc_energy=structures25_kin_plus_xc_energy,
+        structures25_kin_plus_xc_gradient=structures25_kin_plus_xc_gradient,
+        raw_pbe_hessian=pbe_hessian.copy(),
         direction_basis_definition=direction_basis_definition,
         external_basis=external_basis,
         expected_internal_dimension=expected_internal_dimension,
         loaded_direction_role=direction_role,
     )
+
+
+def _symmetrize_canonical_reference_hessian(
+    molecule: MoleculeState,
+    *,
+    antisymmetric_over_symmetric_frobenius_max: float,
+) -> None:
+    """Make the physical PBE Hessian target symmetric before any projection."""
+    if antisymmetric_over_symmetric_frobenius_max < 0:
+        raise ValueError("reference Hessian symmetry threshold must be nonnegative")
+    raw_hessian = np.asarray(molecule.pbe_hessian, dtype=np.float64)
+    if raw_hessian.ndim != 2 or raw_hessian.shape[0] != raw_hessian.shape[1]:
+        raise ValueError("reference Hessian must be square")
+    symmetric_hessian = 0.5 * (raw_hessian + raw_hessian.T)
+    antisymmetric_hessian = 0.5 * (raw_hessian - raw_hessian.T)
+    symmetry_ratio = float(
+        np.linalg.norm(antisymmetric_hessian)
+        / max(np.linalg.norm(symmetric_hessian), np.finfo(float).tiny)
+    )
+    if (
+        not math.isfinite(symmetry_ratio)
+        or symmetry_ratio > antisymmetric_over_symmetric_frobenius_max
+    ):
+        raise ValueError(
+            "Canonical reference Hessian violates the frozen symmetry gate "
+            f"for {molecule.molecule_id}: {symmetry_ratio:.3e} > "
+            f"{antisymmetric_over_symmetric_frobenius_max:.3e}"
+        )
+    if molecule.raw_pbe_hessian is None:
+        molecule.raw_pbe_hessian = raw_hessian.copy()
+    molecule.reference_hessian_antisymmetric_over_symmetric_frobenius = (
+        symmetry_ratio
+    )
+    molecule.pbe_hessian = symmetric_hessian
+    molecule.directions = [
+        Direction(
+            index=direction.index,
+            kind=direction.kind,
+            vector=direction.vector,
+            target_hvp=(
+                symmetric_hessian @ direction.vector.reshape(-1)
+            ).reshape(direction.vector.shape),
+            role=direction.role,
+        )
+        for direction in molecule.directions
+    ]
+
+
+def _assert_canonical_internal_basis(
+    molecule: MoleculeState,
+    direction_protocol: dict[str, Any],
+) -> dict[str, float | int]:
+    """Certify the complete orthonormal internal basis used by canonical H."""
+    if molecule.direction_basis_definition != "structured_internal_orthonormal":
+        raise ValueError(
+            f"Canonical H requires a structured internal basis for "
+            f"{molecule.molecule_id}"
+        )
+    if (
+        molecule.loaded_direction_role != "all"
+        or molecule.external_basis is None
+        or molecule.expected_internal_dimension is None
+    ):
+        raise ValueError(
+            f"Canonical H requires the complete internal/external basis for "
+            f"{molecule.molecule_id}"
+        )
+
+    ordered = sorted(molecule.directions, key=lambda item: item.index)
+    internal_dimension = int(molecule.expected_internal_dimension)
+    if (
+        len(ordered) != internal_dimension
+        or [item.index for item in ordered] != list(range(internal_dimension))
+    ):
+        raise ValueError(
+            f"Canonical H internal basis is incomplete for {molecule.molecule_id}: "
+            f"loaded={len(ordered)} expected={internal_dimension}"
+        )
+    basis = np.stack(
+        [np.asarray(item.vector, dtype=np.float64).reshape(-1) for item in ordered]
+    )
+    external = np.asarray(molecule.external_basis, dtype=np.float64)
+    coordinate_count = int(molecule.positions_bohr.size)
+    if basis.shape != (internal_dimension, coordinate_count):
+        raise ValueError(
+            f"Canonical H internal-basis shape drift for {molecule.molecule_id}: "
+            f"{basis.shape} != {(internal_dimension, coordinate_count)}"
+        )
+    if external.ndim != 2 or external.shape[0] != coordinate_count:
+        raise ValueError(
+            f"Canonical H external-basis shape drift for {molecule.molecule_id}: "
+            f"{external.shape}"
+        )
+    if not np.isfinite(basis).all() or not np.isfinite(external).all():
+        raise ValueError(
+            f"Canonical H basis contains non-finite values for {molecule.molecule_id}"
+        )
+
+    projector = basis.T @ basis
+    metrics: dict[str, float | int] = {
+        "internal_dimension": internal_dimension,
+        "external_rank": int(external.shape[1]),
+        "coordinate_count": coordinate_count,
+        "internal_basis_orthonormality_max_abs": float(
+            np.max(np.abs(basis @ basis.T - np.eye(internal_dimension)))
+        ),
+        "internal_external_overlap_max_abs": float(
+            np.max(np.abs(basis @ external)) if external.size else 0.0
+        ),
+        "projector_idempotence_max_abs": float(
+            np.max(np.abs(projector @ projector - projector))
+        ),
+    }
+    for metric_name in (
+        "internal_basis_orthonormality_max_abs",
+        "internal_external_overlap_max_abs",
+        "projector_idempotence_max_abs",
+    ):
+        if metric_name not in direction_protocol:
+            raise ValueError(f"Canonical direction protocol lacks {metric_name}")
+        limit = float(direction_protocol[metric_name])
+        value = float(metrics[metric_name])
+        if not math.isfinite(limit) or limit < 0.0:
+            raise ValueError(f"Invalid canonical direction gate {metric_name}={limit}")
+        if not math.isfinite(value) or value > limit:
+            raise ValueError(
+                f"Canonical H basis gate failed for {molecule.molecule_id}: "
+                f"{metric_name}={value:.3e} > {limit:.3e}"
+            )
+    molecule.internal_basis_metrics = metrics
+    return metrics
 
 
 def _directions(
@@ -397,6 +844,12 @@ def _density_namespace(args: argparse.Namespace) -> argparse.Namespace:
             "newton_krylov_tolerance": 1.0e-10,
             "newton_diagonal_probes": 8,
             "newton_damping": 1.0e-8,
+            "response_predictor_fast_refine": bool(
+                args.density_predictor_corrector_first
+            ),
+            "response_predictor_fast_refine_threshold": (
+                args.density_predictor_corrector_threshold
+            ),
             "negative_integrated_density_penalty_weight": 0.0,
             "max_xc_memory": 4000,
             "normalize_initial_guess": True,
@@ -419,6 +872,7 @@ def _relax(
     *,
     warm_start: torch.Tensor | None,
     explicit_start: torch.Tensor | None = None,
+    initialization_mode_override: str | None = None,
 ) -> tuple[RelaxedPoint, dict[str, Any]]:
     point = _evaluate_point(
         context,
@@ -430,10 +884,15 @@ def _relax(
         need_force=False,
         initial_coeffs=explicit_start,
         initialization_mode_override=(
-            "previous_refresh" if explicit_start is not None else None
+            initialization_mode_override
+            or ("previous_refresh" if explicit_start is not None else None)
         ),
     )
     metadata = point["optimization_metadata"]
+    metadata["total_point_elapsed_s"] = float(point["total_point_elapsed_s"])
+    metadata["density_optimization_elapsed_s"] = float(
+        point["density_optimization_elapsed_s"]
+    )
     final_norm = float(metadata["final_gradient_norm"])
     if not bool(metadata["converged"]) or final_norm >= density_args.density_strict_threshold:
         failure_root = Path(density_args.output_dir) / "failed_density_points"
@@ -496,9 +955,73 @@ def _relax(
             final_gradient_norm=final_norm,
             cycles=int(metadata["cycles"]),
             total_energy=float(metadata["final_total_energy"]),
+            initialization_mode="strict_density",
         ),
         metadata,
     )
+
+
+def _optimization_stage_columns(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Flatten density-solver stages so successful refresh costs remain auditable."""
+    krylov_iterations = metadata.get("newton_krylov_iterations") or []
+    return {
+        "initialization_mode": metadata.get("initialization_mode"),
+        "initial_gradient_norm": metadata.get("initial_gradient_norm"),
+        "first_stage_cycles": metadata.get("first_stage_cycles", 0),
+        "first_stage_final_gradient_norm": metadata.get(
+            "first_stage_final_gradient_norm"
+        ),
+        "used_fallback": metadata.get("used_fallback", False),
+        "fallback_cycles": metadata.get("fallback_cycles", 0),
+        "fallback_final_gradient_norm": metadata.get(
+            "fallback_final_gradient_norm"
+        ),
+        "lbfgs_closure_evaluations": metadata.get(
+            "lbfgs_closure_evaluations", 0
+        ),
+        "lbfgs_final_gradient_norm": metadata.get("lbfgs_final_gradient_norm"),
+        "newton_energy_evaluations": metadata.get(
+            "newton_energy_evaluations", 0
+        ),
+        "newton_final_gradient_norm": metadata.get("newton_final_gradient_norm"),
+        "newton_krylov_iterations_total": int(sum(krylov_iterations)),
+        "density_optimization_elapsed_s": metadata.get(
+            "density_optimization_elapsed_s"
+        ),
+        "total_point_elapsed_s": metadata.get("total_point_elapsed_s"),
+        "response_predictor_fast_path_attempted": metadata.get(
+            "response_predictor_fast_path_attempted", False
+        ),
+        "response_predictor_fast_path_used": metadata.get(
+            "response_predictor_fast_path_used", False
+        ),
+        "response_predictor_fast_path_succeeded": metadata.get(
+            "response_predictor_fast_path_succeeded", False
+        ),
+        "response_predictor_fast_path_fallback_reason": metadata.get(
+            "response_predictor_fast_path_fallback_reason"
+        ),
+        "response_predictor_fast_path_failed_cycles": metadata.get(
+            "response_predictor_fast_path_failed_cycles", 0
+        ),
+        "response_predictor_fast_path_failed_lbfgs_closure_evaluations": metadata.get(
+            "response_predictor_fast_path_failed_lbfgs_closure_evaluations", 0
+        ),
+        "response_predictor_fast_path_failed_newton_energy_evaluations": metadata.get(
+            "response_predictor_fast_path_failed_newton_energy_evaluations", 0
+        ),
+        "response_predictor_fast_path_failed_newton_krylov_iterations_total": int(
+            sum(
+                metadata.get(
+                    "response_predictor_fast_path_failed_newton_krylov_iterations",
+                    [],
+                )
+            )
+        ),
+        "response_predictor_fast_path_failed_point_elapsed_s": metadata.get(
+            "response_predictor_fast_path_failed_point_elapsed_s", 0.0
+        ),
+    }
 
 
 def _refresh_densities(
@@ -533,6 +1056,7 @@ def _refresh_densities(
                 "cycles": molecule.base.cycles,
                 "final_gradient_norm": molecule.base.final_gradient_norm,
                 "total_energy": molecule.base.total_energy,
+                **_optimization_stage_columns(metadata),
             }
         )
         for direction in molecule.directions:
@@ -562,6 +1086,7 @@ def _refresh_densities(
                         "cycles": relaxed.cycles,
                         "final_gradient_norm": relaxed.final_gradient_norm,
                         "total_energy": relaxed.total_energy,
+                        **_optimization_stage_columns(metadata),
                     }
                 )
     return rows
@@ -583,13 +1108,36 @@ def _refresh_base_densities(
             if molecule.base is not None
             else molecule.label_coefficients
         )
-        molecule.base, _ = _relax(
+        predicted_gradient_norm = (
+            molecule.base.predictor_projected_gradient_norm
+            if molecule.base is not None
+            else None
+        )
+        predicted_total_energy = (
+            molecule.base.predictor_total_energy
+            if molecule.base is not None
+            else None
+        )
+        predictor_trust_scale = (
+            molecule.base.predictor_trust_scale
+            if molecule.base is not None
+            else None
+        )
+        initialization_mode = (
+            molecule.base.initialization_mode
+            if molecule.base is not None
+            and molecule.base.initialization_mode
+            in {"parameter_response_prediction", "checkpoint_density_warm_start"}
+            else "previous_refresh"
+        )
+        molecule.base, metadata = _relax(
             context,
             molecule,
             molecule.positions_bohr,
             density_args,
             warm_start=None,
             explicit_start=previous_base,
+            initialization_mode_override=initialization_mode,
         )
         rows.append(
             {
@@ -603,9 +1151,51 @@ def _refresh_base_densities(
                 "cycles": molecule.base.cycles,
                 "final_gradient_norm": molecule.base.final_gradient_norm,
                 "total_energy": molecule.base.total_energy,
+                "predictor_projected_gradient_norm": predicted_gradient_norm,
+                "predictor_total_energy": predicted_total_energy,
+                "predictor_trust_scale": predictor_trust_scale,
+                **_optimization_stage_columns(metadata),
             }
         )
     return rows
+
+
+def _response_predictor_trial_scales(minimum_scale: float) -> list[float]:
+    if not 0.0 < minimum_scale <= 1.0:
+        raise ValueError("density predictor trust minimum scale must lie in (0, 1]")
+    scales = []
+    scale = 1.0
+    while scale + 1.0e-15 >= minimum_scale:
+        scales.append(scale)
+        scale *= 0.5
+    return scales
+
+
+def _fixed_energy_stationarity_merit(
+    fixed_energy: Any,
+    coefficients: torch.Tensor,
+    n_electron: int,
+) -> tuple[float, float, float]:
+    variable = coefficients.detach().clone().requires_grad_(True)
+    energy = fixed_energy(variable)
+    gradient = torch.autograd.grad(energy, variable)[0]
+    normalization = fixed_energy.normalization_untransformed.detach().to(variable)
+    projected = gradient - normalization * (
+        torch.dot(normalization, gradient)
+        / torch.dot(normalization, normalization)
+    )
+    target = torch.as_tensor(
+        n_electron,
+        dtype=variable.dtype,
+        device=variable.device,
+    )
+    result = (
+        float(torch.linalg.vector_norm(projected).detach().cpu()),
+        float(energy.detach().cpu()),
+        float((torch.dot(normalization, variable) - target).detach().cpu()),
+    )
+    fixed_energy.sample.coeffs = fixed_energy.sample.coeffs.detach()
+    return result
 
 
 def _predict_next_parameter_step_densities(
@@ -617,20 +1207,29 @@ def _predict_next_parameter_step_densities(
     *,
     charge: int,
     damping: float,
-) -> list[float]:
-    """Replace center-density warm starts by exact linear-response predictions."""
+    trust_region: bool,
+    trust_threshold: float,
+    trust_minimum_scale: float,
+) -> list[dict[str, float | str]]:
+    """Apply an exact response predictor and optional stationarity trust region."""
     parameter_steps = [
         new - old
         for old, new in zip(
             old_parameter_values, new_parameter_values, strict=True
         )
     ]
+    raw_parameter_step_norm = math.sqrt(
+        sum(
+            float(torch.sum(step.detach() ** 2).cpu())
+            for step in parameter_steps
+        )
+    )
     with torch.no_grad():
         for parameter, old in zip(
             parameters, old_parameter_values, strict=True
         ):
             parameter.copy_(old)
-    correction_norms: list[float] = []
+    predictions: list[dict[str, Any]] = []
     try:
         for molecule in molecules:
             if molecule.base is None:
@@ -653,21 +1252,19 @@ def _predict_next_parameter_step_densities(
                 parameters,
                 parameter_steps,
                 damping=damping,
-            )
-            predicted = coefficients + correction.detach()
-            normalization = fixed_energy.normalization_untransformed
-            target = torch.as_tensor(
-                int(np.sum(molecule.atomic_numbers) - charge),
-                dtype=predicted.dtype,
-                device=predicted.device,
-            )
-            residual = torch.dot(normalization, predicted) - target
-            predicted = predicted - normalization * (
-                residual / torch.dot(normalization, normalization)
-            )
-            molecule.base.coefficients = predicted.detach().cpu()
-            correction_norms.append(
-                float(torch.linalg.vector_norm(correction).detach().cpu())
+            ).detach()
+            fixed_energy.sample.coeffs = fixed_energy.sample.coeffs.detach()
+            predictions.append(
+                {
+                    "molecule": molecule,
+                    "fixed_energy": fixed_energy,
+                    "coefficients": coefficients.detach(),
+                    "correction": correction,
+                    "correction_norm": float(
+                        torch.linalg.vector_norm(correction).detach().cpu()
+                    ),
+                    "n_electron": int(np.sum(molecule.atomic_numbers) - charge),
+                }
             )
     finally:
         with torch.no_grad():
@@ -675,7 +1272,121 @@ def _predict_next_parameter_step_densities(
                 parameters, new_parameter_values, strict=True
             ):
                 parameter.copy_(new)
-    return correction_norms
+
+    scales = (
+        _response_predictor_trial_scales(trust_minimum_scale)
+        if trust_region
+        else [1.0]
+    )
+    accepted_scale: float | None = None
+    accepted_trials: list[dict[str, float]] = []
+    for scale in scales:
+        with torch.no_grad():
+            for parameter, old, step in zip(
+                parameters,
+                old_parameter_values,
+                parameter_steps,
+                strict=True,
+            ):
+                parameter.copy_(old + scale * step)
+        trials: list[dict[str, float]] = []
+        all_within_trust = True
+        for prediction in predictions:
+            fixed_energy = prediction["fixed_energy"]
+            candidate = prediction["coefficients"] + scale * prediction["correction"]
+            normalization = fixed_energy.normalization_untransformed.detach().to(candidate)
+            target = torch.as_tensor(
+                prediction["n_electron"],
+                dtype=candidate.dtype,
+                device=candidate.device,
+            )
+            candidate = candidate + normalization * (
+                (target - torch.dot(normalization, candidate))
+                / torch.dot(normalization, normalization)
+            )
+            gradient_norm, total_energy, constraint_residual = (
+                _fixed_energy_stationarity_merit(
+                    fixed_energy, candidate, prediction["n_electron"]
+                )
+            )
+            trials.append(
+                {
+                    "gradient_norm": gradient_norm,
+                    "total_energy": total_energy,
+                    "constraint_residual": constraint_residual,
+                }
+            )
+            if not math.isfinite(gradient_norm) or gradient_norm >= trust_threshold:
+                all_within_trust = False
+        if all_within_trust or not trust_region:
+            accepted_scale = scale
+            accepted_trials = trials
+            break
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if accepted_scale is None:
+        with torch.no_grad():
+            for parameter, old in zip(
+                parameters, old_parameter_values, strict=True
+            ):
+                parameter.copy_(old)
+        maximum = max(
+            (trial["gradient_norm"] for trial in trials),
+            default=math.inf,
+        )
+        raise RuntimeError(
+            "density-stationarity trust region rejected the parameter step: "
+            f"minimum_scale={trust_minimum_scale:g} max_projected_gradient={maximum:.3e} "
+            f"threshold={trust_threshold:.3e}"
+        )
+
+    diagnostics: list[dict[str, float | str]] = []
+    for prediction, trial in zip(predictions, accepted_trials, strict=True):
+        molecule = prediction["molecule"]
+        fixed_energy = prediction["fixed_energy"]
+        candidate = (
+            prediction["coefficients"]
+            + accepted_scale * prediction["correction"]
+        )
+        normalization = fixed_energy.normalization_untransformed.detach().to(candidate)
+        target = torch.as_tensor(
+            prediction["n_electron"],
+            dtype=candidate.dtype,
+            device=candidate.device,
+        )
+        candidate = candidate + normalization * (
+            (target - torch.dot(normalization, candidate))
+            / torch.dot(normalization, normalization)
+        )
+        molecule.base.coefficients = candidate.detach().cpu()
+        molecule.base.initialization_mode = "parameter_response_prediction"
+        molecule.base.predictor_projected_gradient_norm = trial["gradient_norm"]
+        molecule.base.predictor_total_energy = trial["total_energy"]
+        molecule.base.predictor_trust_scale = accepted_scale
+        diagnostics.append(
+            {
+                "molecule_id": molecule.molecule_id,
+                "raw_correction_norm": prediction["correction_norm"],
+                "accepted_correction_norm": (
+                    accepted_scale * prediction["correction_norm"]
+                ),
+                "accepted_scale": accepted_scale,
+                "raw_parameter_step_norm": raw_parameter_step_norm,
+                "accepted_parameter_step_norm": (
+                    accepted_scale * raw_parameter_step_norm
+                ),
+                "projected_gradient_norm": trial["gradient_norm"],
+                "total_energy": trial["total_energy"],
+                "constraint_residual": trial["constraint_residual"],
+            }
+        )
+    predictions.clear()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return diagnostics
 
 
 def _refresh_active_densities(
@@ -695,7 +1406,7 @@ def _refresh_active_densities(
             if molecule.base is not None
             else molecule.label_coefficients
         )
-        molecule.base, _ = _relax(
+        molecule.base, metadata = _relax(
             context,
             molecule,
             molecule.positions_bohr,
@@ -715,6 +1426,7 @@ def _refresh_active_densities(
                 "cycles": molecule.base.cycles,
                 "final_gradient_norm": molecule.base.final_gradient_norm,
                 "total_energy": molecule.base.total_energy,
+                **_optimization_stage_columns(metadata),
             }
         )
         for direction in selected_by_molecule[molecule.molecule_id]:
@@ -725,7 +1437,7 @@ def _refresh_active_densities(
                     molecule.positions_bohr
                     + sign * density_args.displacement * direction.vector
                 )
-                relaxed, _ = _relax(
+                relaxed, metadata = _relax(
                     context,
                     molecule,
                     positions,
@@ -748,6 +1460,7 @@ def _refresh_active_densities(
                         "cycles": relaxed.cycles,
                         "final_gradient_norm": relaxed.final_gradient_norm,
                         "total_energy": relaxed.total_energy,
+                        **_optimization_stage_columns(metadata),
                     }
                 )
     return rows
@@ -774,6 +1487,51 @@ def _density_refresh_scope(
     return None
 
 
+def _assert_density_refresh_cost_gates(
+    rows: list[dict[str, Any]],
+    protocol: dict[str, Any],
+    density_args: argparse.Namespace,
+    source_capacity_step: int,
+) -> None:
+    gates = protocol.get("gates", {})
+    maximum_cycles = gates.get("density_refresh_max_cycles")
+    maximum_full_fallbacks = gates.get("density_fallback_full_count")
+    if maximum_cycles is None and maximum_full_fallbacks is None:
+        return
+    transition_rows = [
+        row
+        for row in rows
+        if row.get("parameter_step") is not None
+        and int(row["parameter_step"]) > source_capacity_step
+        and row.get("kind") == "base"
+    ]
+    if maximum_cycles is not None:
+        offenders = [
+            row
+            for row in transition_rows
+            if int(row.get("cycles", 0)) > int(maximum_cycles)
+        ]
+        if offenders:
+            raise RuntimeError(
+                "density refresh exceeded the fail-closed cycle gate: "
+                + ", ".join(
+                    f"step={row['parameter_step']} cycles={row.get('cycles')}"
+                    for row in offenders
+                )
+            )
+    if maximum_full_fallbacks is not None:
+        full_fallbacks = sum(
+            int(row.get("fallback_cycles", 0))
+            >= int(density_args.fallback_max_cycle)
+            for row in transition_rows
+        )
+        if full_fallbacks > int(maximum_full_fallbacks):
+            raise RuntimeError(
+                "density refresh exceeded the fail-closed full-fallback gate: "
+                f"{full_fallbacks} > {int(maximum_full_fallbacks)}"
+            )
+
+
 def _assert_training_density_stationarity(
     maximum_projected_gradient_norm: float,
     strict_threshold: float,
@@ -789,6 +1547,17 @@ def _assert_training_density_stationarity(
             f"projected_gradient_norm={maximum_projected_gradient_norm:.3e} "
             f"threshold={strict_threshold:.3e}"
         )
+
+
+def _training_density_stationarity_threshold(
+    args: argparse.Namespace,
+) -> float:
+    threshold = args.training_density_stationarity_threshold
+    return (
+        float(args.density_strict_threshold)
+        if threshold is None
+        else float(threshold)
+    )
 
 
 def _evaluate_point_graph(
@@ -858,21 +1627,29 @@ def _evaluate_point_graph(
                 learning_rate=cache.args.density_response_unroll_lr,
             )
         detach_coefficients = False
-    bundle = (
-        cache.get(molecule.atomic_numbers, point.positions_bohr)
-        if directional_second_direction is None
-        else cache.get_directional(
-            molecule.atomic_numbers,
-            point.positions_bohr,
-            directional_second_direction,
+    if cache.torch_autograd_direct:
+        bundle = None
+        torch_integral_provider = cache.get_torch_provider(
+            molecule.atomic_numbers
         )
-    )
+    else:
+        torch_integral_provider = None
+        bundle = (
+            cache.get(molecule.atomic_numbers, point.positions_bohr)
+            if directional_second_direction is None
+            else cache.get_directional(
+                molecule.atomic_numbers,
+                point.positions_bohr,
+                directional_second_direction,
+            )
+        )
     geometry = prepare_differentiable_geometry(
         context.sample_generator,
         molecule.atomic_numbers,
         point.positions_bohr,
         coefficients,
         integral_bundle=bundle,
+        torch_integral_provider=torch_integral_provider,
         charge=cache.args.charge,
         detach_coefficients=detach_coefficients,
     )
@@ -891,6 +1668,219 @@ def _evaluate_point_graph(
             )
         ),
     )
+
+
+def _label_density_replay_point(molecule: MoleculeState) -> RelaxedPoint:
+    """Return the fixed PBE/KS-density point used by canonical E/G replay.
+
+    Historical protocols also evaluated F at this point; the canonical branch
+    deliberately obtains F from the model-self-consistent relaxed center.
+    """
+    return RelaxedPoint(
+        positions_bohr=np.asarray(molecule.positions_bohr, dtype=np.float64),
+        coefficients=molecule.label_coefficients,
+        final_gradient_norm=math.nan,
+        cycles=0,
+        total_energy=molecule.pbe_total_energy,
+    )
+
+
+def _canonical_structures25_replay_terms(
+    replay: Any,
+    molecule: MoleculeState,
+    loss_config: dict[str, Any],
+) -> dict[str, torch.Tensor]:
+    """Return the canonical Structures25 E/G functional-jet terms and closures.
+
+    E/G supervise ``A = T_s + E_xc`` at the frozen KS density.  The complete
+    total Euler residual and the reconstructed total energy are diagnostics,
+    not substitute labels.  Keeping both makes the exact identities
+
+    ``P E_total,c = P(A_model,c-A_ref,c) + P(A_ref,c+Jc+v_ext)`` and
+    ``E_total,matched = A_ref + E_H + E_ext + E_nn`` auditable per sample.
+    """
+    if molecule.structures25_kin_plus_xc_energy is None:
+        raise ValueError(
+            f"{molecule.molecule_id} lacks the Structures25 e_kin_plus_xc label"
+        )
+    if molecule.structures25_kin_plus_xc_gradient is None:
+        raise ValueError(
+            f"{molecule.molecule_id} lacks the Structures25 grad_kin_plus_xc label"
+        )
+    try:
+        model_energy = replay.energies["kin_plus_xc"]
+    except KeyError as exc:
+        raise ValueError(
+            "canonical E/G replay requires a scalar kin_plus_xc model owner"
+        ) from exc
+    coefficients = replay.geometry.coeffs
+    predicted_gradient = torch.autograd.grad(
+        model_energy,
+        coefficients,
+        create_graph=True,
+        retain_graph=True,
+    )[0]
+    target_gradient = molecule.structures25_kin_plus_xc_gradient.to(
+        device=coefficients.device,
+        dtype=coefficients.dtype,
+    )
+    direct_values = (
+        getattr(replay.geometry, "normalization_untransformed", None),
+        getattr(replay.geometry, "coulomb_untransformed", None),
+        getattr(replay.geometry, "nuclear_attraction_untransformed", None),
+    )
+    if all(value is not None for value in direct_values):
+        normalization, coulomb, attraction = (
+            value.to(dtype=coefficients.dtype, device=coefficients.device)
+            for value in direct_values
+        )
+    elif replay.geometry.bundle is not None:
+        values = replay.geometry.bundle.values
+        normalization = torch.as_tensor(
+            values.normalization,
+            dtype=coefficients.dtype,
+            device=coefficients.device,
+        )
+        coulomb = torch.as_tensor(
+            values.coulomb,
+            dtype=coefficients.dtype,
+            device=coefficients.device,
+        )
+        attraction = torch.as_tensor(
+            values.nuclear_attraction,
+            dtype=coefficients.dtype,
+            device=coefficients.device,
+        )
+    else:
+        raise RuntimeError("canonical replay lacks untransformed integral tensors")
+    known_density_gradient = coulomb @ coefficients + attraction
+    projected_gradient_error = electron_number_tangent_projection(
+        predicted_gradient - target_gradient,
+        normalization,
+    )
+    reference_euler_residual = electron_number_tangent_projection(
+        target_gradient + known_density_gradient,
+        normalization,
+    )
+    predicted_total_gradient = electron_number_tangent_projection(
+        predicted_gradient + known_density_gradient,
+        normalization,
+    )
+    identity_residual = predicted_total_gradient - (
+        projected_gradient_error + reference_euler_residual
+    )
+
+    target_energy = torch.as_tensor(
+        molecule.structures25_kin_plus_xc_energy,
+        dtype=model_energy.dtype,
+        device=model_energy.device,
+    )
+    known_energy = replay.energies.total_energy - model_energy
+    matched_reference_total = target_energy + known_energy
+    pbe_total = torch.as_tensor(
+        molecule.pbe_total_energy,
+        dtype=model_energy.dtype,
+        device=model_energy.device,
+    )
+    return {
+        "energy_loss": normalized_energy_l1(
+            model_energy,
+            target_energy,
+            absolute_scale_hartree=float(
+                loss_config["energy"]["absolute_scale_hartree"]
+            ),
+        ),
+        "gradient_loss": structures25_projected_gradient_mse(
+            predicted_gradient,
+            target_gradient,
+            normalization,
+            absolute_scale=float(
+                loss_config["density"][
+                    "scale_hartree_per_density_coefficient"
+                ]
+            ),
+        ),
+        "projected_gradient_error_norm": torch.linalg.vector_norm(
+            projected_gradient_error
+        ),
+        "reference_euler_residual_norm": torch.linalg.vector_norm(
+            reference_euler_residual
+        ),
+        "reference_euler_residual_rms": torch.sqrt(
+            torch.mean(reference_euler_residual.square())
+        ),
+        "reference_euler_residual_max_abs": torch.max(
+            torch.abs(reference_euler_residual)
+        ),
+        "gradient_identity_max_abs": torch.max(torch.abs(identity_residual)),
+        "matched_total_energy_closure_abs": torch.abs(
+            matched_reference_total - pbe_total
+        ),
+        "label_electron_number_residual_abs": torch.abs(
+            replay.constraint_residual
+        ),
+    }
+
+
+def _assert_canonical_replay_closures(
+    terms: dict[str, torch.Tensor],
+    gates: dict[str, Any],
+    molecule_id: str,
+) -> None:
+    """Fail closed when Structures25 labels and complete-total identities disagree."""
+    checks = {
+        "reference_euler_residual_rms": "reference_euler_residual_rms_max",
+        "gradient_identity_max_abs": "gradient_identity_max_abs",
+        "matched_total_energy_closure_abs": "matched_total_energy_closure_max_hartree",
+        "label_electron_number_residual_abs": (
+            "label_electron_number_residual_abs_max"
+        ),
+    }
+    missing = [gate for gate in checks.values() if gate not in gates]
+    if missing:
+        raise ValueError(
+            "canonical protocol lacks replay closure gates: " + ", ".join(missing)
+        )
+    failures = []
+    for value_name, gate_name in checks.items():
+        value = float(terms[value_name].detach().cpu())
+        limit = float(gates[gate_name])
+        if not math.isfinite(value) or value > limit:
+            failures.append(f"{value_name}={value:.3e}>{limit:.3e}")
+    if failures:
+        raise RuntimeError(
+            f"canonical Structures25 replay closure failed for {molecule_id}: "
+            + ", ".join(failures)
+        )
+
+
+def _response_cancellation_diagnostics(
+    partial_hvp: torch.Tensor,
+    response_correction: torch.Tensor,
+) -> dict[str, float]:
+    """Summarize whether the relaxed HVP is a fragile cancellation."""
+    partial = partial_hvp.detach()
+    correction = response_correction.detach()
+    relaxed = partial + correction
+    tiny = torch.finfo(partial.dtype).tiny
+    partial_norm = torch.linalg.vector_norm(partial)
+    correction_norm = torch.linalg.vector_norm(correction)
+    relaxed_norm = torch.linalg.vector_norm(relaxed)
+    cosine = torch.sum(partial * correction) / (
+        partial_norm * correction_norm
+    ).clamp_min(tiny)
+    return {
+        "partial_hvp_norm": float(partial_norm.cpu()),
+        "response_correction_norm": float(correction_norm.cpu()),
+        "relaxed_hvp_norm": float(relaxed_norm.cpu()),
+        "response_correction_fraction_of_relaxed_norm": float(
+            (correction_norm / relaxed_norm.clamp_min(tiny)).cpu()
+        ),
+        "partial_response_cosine": float(cosine.cpu()),
+        "cancellation_index": float(
+            ((partial_norm + correction_norm) / relaxed_norm.clamp_min(tiny)).cpu()
+        ),
+    }
 
 
 def _analytic_center_response(
@@ -925,20 +1915,64 @@ def _analytic_center_response(
     )
     _synchronize(center.geometry.coeffs)
     graph_seconds = time.perf_counter() - started
-    if center.geometry.bundle.directional_second_derivatives is None:
-        raise RuntimeError(
-            "analytic relaxed HVP requires directional second integral derivatives"
-        )
-    normalization_first_max = float(
-        np.max(np.abs(center.geometry.bundle.derivatives.normalization))
+    center_constraint_residual = float(
+        torch.abs(center.constraint_residual.detach()).cpu()
     )
-    normalization_second_max = float(
-        np.max(
-            np.abs(
-                center.geometry.bundle.directional_second_derivatives.normalization
+    center_constraint_limit = cache.args.center_electron_number_residual_max
+    if center_constraint_limit is not None and (
+        not math.isfinite(center_constraint_residual)
+        or center_constraint_residual > center_constraint_limit
+    ):
+        raise RuntimeError(
+            "analytic center violates the electron-number constraint: "
+            f"{center_constraint_residual:.3e} > {center_constraint_limit:.3e}"
+        )
+    if cache.torch_autograd_direct:
+        normalization = center.geometry.normalization_untransformed
+        if normalization is None:
+            raise RuntimeError("Torch geometry lacks its normalization tensor")
+        normalization_first = torch.autograd.grad(
+            normalization.sum(),
+            center.geometry.positions,
+            create_graph=True,
+            retain_graph=True,
+        )[0]
+        normalization_second = torch.autograd.grad(
+            torch.sum(
+                normalization_first
+                * torch.as_tensor(
+                    direction.vector,
+                    dtype=normalization_first.dtype,
+                    device=normalization_first.device,
+                )
+            ),
+            center.geometry.positions,
+            retain_graph=True,
+        )[0]
+        normalization_first_max = float(
+            torch.max(torch.abs(normalization_first.detach())).cpu()
+        )
+        normalization_second_max = float(
+            torch.max(torch.abs(normalization_second.detach())).cpu()
+        )
+    else:
+        if (
+            center.geometry.bundle is None
+            or center.geometry.bundle.directional_second_derivatives is None
+        ):
+            raise RuntimeError(
+                "analytic relaxed HVP requires directional second integral derivatives"
+            )
+        normalization_first_max = float(
+            np.max(np.abs(center.geometry.bundle.derivatives.normalization))
+        )
+        normalization_second_max = float(
+            np.max(
+                np.abs(
+                    center.geometry.bundle.directional_second_derivatives.normalization
+                )
             )
         )
-    )
     if max(normalization_first_max, normalization_second_max) > 1.0e-12:
         raise RuntimeError(
             "analytic relaxed HVP currently requires a geometry-independent "
@@ -953,10 +1987,17 @@ def _analytic_center_response(
         total_energy=center.energies.total_energy,
         coeffs=center.geometry.coeffs,
         positions=center.geometry.positions,
-        normalization=torch.as_tensor(
-            center.geometry.bundle.values.normalization,
-            dtype=center.geometry.coeffs.dtype,
-            device=center.geometry.coeffs.device,
+        normalization=(
+            center.geometry.normalization_untransformed.to(
+                dtype=center.geometry.coeffs.dtype,
+                device=center.geometry.coeffs.device,
+            )
+            if center.geometry.normalization_untransformed is not None
+            else torch.as_tensor(
+                center.geometry.bundle.values.normalization,
+                dtype=center.geometry.coeffs.dtype,
+                device=center.geometry.coeffs.device,
+            )
         ),
         n_electron=int(np.sum(molecule.atomic_numbers) - cache.args.charge),
         multiplier=center.lagrange_multiplier,
@@ -972,15 +2013,21 @@ def _analytic_center_response(
     if not response.krylov.converged:
         raise RuntimeError("analytic density-response solve produced non-finite values")
     response_limit = cache.args.analytic_response_residual_tolerance
+    response_constraint_limit = (
+        cache.args.analytic_response_constraint_tolerance
+        if cache.args.analytic_response_constraint_tolerance is not None
+        else response_limit
+    )
     if (
-        response.stationarity_direction_residual >= response_limit
-        or response.constraint_direction_residual >= response_limit
+        response.stationarity_direction_residual > response_limit
+        or response.constraint_direction_residual > response_constraint_limit
     ):
         raise RuntimeError(
             "analytic density-response residual exceeds fail-closed threshold: "
             f"stationarity={response.stationarity_direction_residual:.3e} "
             f"constraint={response.constraint_direction_residual:.3e} "
-            f"threshold={response_limit:.3e}"
+            f"thresholds=({response_limit:.3e},"
+            f"{response_constraint_limit:.3e})"
         )
     return (
         center,
@@ -996,20 +2043,28 @@ def _analytic_center_response(
             "response_constraint_residual": (
                 response.constraint_direction_residual
             ),
+            "center_electron_number_residual_abs": (
+                center_constraint_residual
+            ),
             "center_graph_seconds": graph_seconds,
             "kkt_solve_seconds": solve_seconds,
         },
     )
 
 
-def _analytic_relaxed_direction_prediction(
+def _analytic_relaxed_direction_prediction_with_center(
     context: Any,
     cache: IntegralBundleCache,
     molecule: MoleculeState,
     direction: Direction,
     *,
     create_graph: bool,
-) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, float | int | str | bool]]:
+) -> tuple[
+    torch.Tensor,
+    list[torch.Tensor],
+    dict[str, float | int | str | bool],
+    Any,
+]:
     """Evaluate one complete-total relaxed HVP from a single center density."""
     (
         center,
@@ -1025,21 +2080,53 @@ def _analytic_relaxed_direction_prediction(
         create_graph=create_graph,
     )
     hvp_started = time.perf_counter()
-    hvp = response_system.relaxed_hvp(
-        position_direction,
-        response,
+    partial_hvp = response_system.partial_position_hvp(
+        position_direction, create_graph=create_graph
+    )
+    response_correction = response_system.response_correction(
+        response.density_response,
+        response.multiplier_response,
         create_graph=create_graph,
     )
+    hvp = partial_hvp + response_correction
     _synchronize(hvp)
     hvp_seconds = time.perf_counter() - hvp_started
     if not bool(torch.isfinite(hvp).all()):
         raise RuntimeError("analytic complete-total relaxed HVP is non-finite")
     diagnostics["relaxed_hvp_seconds"] = hvp_seconds
+    diagnostics["density_response_norm"] = float(
+        torch.linalg.vector_norm(response.density_response.detach()).cpu()
+    )
+    diagnostics.update(
+        _response_cancellation_diagnostics(partial_hvp, response_correction)
+    )
     return (
         hvp,
         [center.projected_density_gradient_norm],
         diagnostics,
+        center,
     )
+
+
+def _analytic_relaxed_direction_prediction(
+    context: Any,
+    cache: IntegralBundleCache,
+    molecule: MoleculeState,
+    direction: Direction,
+    *,
+    create_graph: bool,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, float | int | str | bool]]:
+    """Compatibility wrapper returning only the relaxed HVP and diagnostics."""
+    hvp, density_norms, diagnostics, _ = (
+        _analytic_relaxed_direction_prediction_with_center(
+            context,
+            cache,
+            molecule,
+            direction,
+            create_graph=create_graph,
+        )
+    )
+    return hvp, density_norms, diagnostics
 
 
 def _direction_prediction(
@@ -1270,6 +2357,9 @@ def _full_hessian_metrics(
                 "loaded_direction_role": molecule.loaded_direction_role,
                 "direction_count": len(columns),
                 "expected_internal_dimension": molecule.expected_internal_dimension,
+                "reference_hessian_antisymmetric_over_symmetric_frobenius": (
+                    molecule.reference_hessian_antisymmetric_over_symmetric_frobenius
+                ),
                 "total_energy_hartree": float(base.energies.total_energy.detach().cpu()),
                 "pbe_total_energy_hartree": molecule.pbe_total_energy,
                 "total_energy_abs_error_hartree": abs(
@@ -1319,6 +2409,11 @@ def _full_hessian_metrics(
             predicted_hessian=hessian.numpy(),
             comparison_reference_hessian=reference.numpy(),
             pbe_hessian=molecule.pbe_hessian,
+            raw_pbe_hessian=(
+                molecule.raw_pbe_hessian
+                if molecule.raw_pbe_hessian is not None
+                else molecule.pbe_hessian
+            ),
             direction_matrix=direction_matrix.numpy(),
             direction_roles=np.asarray(direction_roles),
             direction_relative_errors=np.asarray(direction_relative_errors),
@@ -1415,13 +2510,24 @@ def _analytic_full_hessian_metrics(
                 "natoms": int(molecule.atomic_numbers.size),
                 "full_hessian_complete": True,
                 "hessian_definition": (
-                    "analytic_complete_total_relaxed_internal_projected_"
+                    "torch_autograd_complete_total_relaxed_internal_projected_"
+                    "dqc_libcint_double_backward"
+                    if cache.args.integral_derivative_backend
+                    == "torch_autograd_dqc"
+                    else "autodiff_complete_total_relaxed_internal_projected_"
+                    "pyscfad_integral_jvp"
+                    if cache.args.integral_derivative_backend
+                    == "pyscfad_autodiff"
+                    else "analytic_complete_total_relaxed_internal_projected_"
                     "directional_second_integrals"
                 ),
                 "direction_basis_definition": molecule.direction_basis_definition,
                 "loaded_direction_role": molecule.loaded_direction_role,
                 "direction_count": len(columns),
                 "expected_internal_dimension": molecule.expected_internal_dimension,
+                "reference_hessian_antisymmetric_over_symmetric_frobenius": (
+                    molecule.reference_hessian_antisymmetric_over_symmetric_frobenius
+                ),
                 "total_energy_hartree": float(
                     base.energies.total_energy.detach().cpu()
                 ),
@@ -1473,6 +2579,11 @@ def _analytic_full_hessian_metrics(
             predicted_hessian=hessian.numpy(),
             comparison_reference_hessian=reference.numpy(),
             pbe_hessian=molecule.pbe_hessian,
+            raw_pbe_hessian=(
+                molecule.raw_pbe_hessian
+                if molecule.raw_pbe_hessian is not None
+                else molecule.pbe_hessian
+            ),
             direction_matrix=direction_matrix.numpy(),
             direction_roles=np.asarray(
                 [item.role for item in molecule.directions]
@@ -1497,6 +2608,7 @@ def _save_checkpoint(
         "block-coordinate complete-total relaxed-force secant capacity fit"
     ),
     provenance_update: dict[str, Any] | None = None,
+    center_density_state: dict[str, Any] | None = None,
 ) -> None:
     payload = torch.load(source_checkpoint, map_location="cpu", weights_only=False)
     payload["state_dict"] = {
@@ -1519,6 +2631,10 @@ def _save_checkpoint(
         }
     )
     payload["complete_total_capacity"] = provenance
+    if center_density_state is not None:
+        payload["complete_total_capacity"]["center_density_state"] = (
+            center_density_state
+        )
     if geometry_residual is not None:
         payload["complete_total_capacity"]["geometry_residual"] = {
             "state_dict": {
@@ -1534,6 +2650,108 @@ def _save_checkpoint(
         }
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, output)
+
+
+def _center_density_checkpoint_state(
+    molecules: list[MoleculeState],
+    parameter_step: int,
+    strict_threshold: float,
+) -> dict[str, Any]:
+    entries: dict[str, Any] = {}
+    for molecule in molecules:
+        if molecule.base is None:
+            continue
+        predicted = molecule.base.initialization_mode == "parameter_response_prediction"
+        projected_gradient_norm = (
+            molecule.base.predictor_projected_gradient_norm
+            if predicted
+            else molecule.base.final_gradient_norm
+        )
+        entries[molecule.molecule_id] = {
+            "positions_sha256": hashlib.sha256(
+                np.asarray(molecule.positions_bohr, dtype=np.float64).tobytes()
+            ).hexdigest(),
+            "parameter_step": int(parameter_step),
+            "coefficients": molecule.base.coefficients.detach().cpu(),
+            "projected_gradient_norm": projected_gradient_norm,
+            "total_energy": (
+                molecule.base.predictor_total_energy
+                if predicted
+                else molecule.base.total_energy
+            ),
+            "certified_strict": bool(
+                not predicted
+                and molecule.base.final_gradient_norm < strict_threshold
+            ),
+            "initialization_mode": molecule.base.initialization_mode,
+            "predictor_trust_scale": molecule.base.predictor_trust_scale,
+        }
+    return {
+        "schema_version": 1,
+        "parameter_step": int(parameter_step),
+        "molecules": entries,
+    }
+
+
+def _restore_center_density_checkpoint_state(
+    molecules: list[MoleculeState],
+    capacity_state: dict[str, Any] | None,
+    parameter_step: int,
+) -> int:
+    if not isinstance(capacity_state, dict):
+        return 0
+    snapshot = capacity_state.get("center_density_state")
+    if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 1:
+        return 0
+    if int(snapshot.get("parameter_step", -1)) != int(parameter_step):
+        raise ValueError("checkpoint center-density parameter step mismatch")
+    entries = snapshot.get("molecules")
+    if not isinstance(entries, dict):
+        raise ValueError("checkpoint center-density entries are malformed")
+    restored = 0
+    for molecule in molecules:
+        entry = entries.get(molecule.molecule_id)
+        if not isinstance(entry, dict):
+            continue
+        positions_sha256 = hashlib.sha256(
+            np.asarray(molecule.positions_bohr, dtype=np.float64).tobytes()
+        ).hexdigest()
+        if entry.get("positions_sha256") != positions_sha256:
+            raise ValueError(
+                f"checkpoint density geometry mismatch for {molecule.molecule_id}"
+            )
+        coefficients = entry.get("coefficients")
+        if not isinstance(coefficients, torch.Tensor) or not bool(
+            torch.isfinite(coefficients).all()
+        ):
+            raise ValueError(
+                f"checkpoint density coefficients are invalid for {molecule.molecule_id}"
+            )
+        projected_gradient_norm = float(
+            entry.get("projected_gradient_norm", math.inf)
+        )
+        certified = bool(entry.get("certified_strict", False))
+        molecule.base = RelaxedPoint(
+            positions_bohr=np.asarray(molecule.positions_bohr, dtype=np.float64),
+            coefficients=coefficients.detach().cpu(),
+            final_gradient_norm=(projected_gradient_norm if certified else math.inf),
+            cycles=0,
+            total_energy=float(entry.get("total_energy", math.nan)),
+            initialization_mode=(
+                "checkpoint_density_warm_start"
+                if certified
+                else "parameter_response_prediction"
+            ),
+            predictor_projected_gradient_norm=(
+                None if certified else projected_gradient_norm
+            ),
+            predictor_total_energy=(
+                None if certified else float(entry.get("total_energy", math.nan))
+            ),
+            predictor_trust_scale=entry.get("predictor_trust_scale"),
+        )
+        restored += 1
+    return restored
 
 
 def _selected_directions(
@@ -1663,8 +2881,317 @@ def _hutchinson_direction(
     )
 
 
+def _hvp_updates_before_step(
+    cumulative_step: int,
+    *,
+    hvp_update_period: int,
+    replay_update_period: int | None,
+) -> int:
+    """Return the number of H updates completed before ``cumulative_step``.
+
+    Keeping this a pure function makes a resumed run select exactly the same
+    direction block as an uninterrupted run without a mutable RNG checkpoint.
+    """
+    if cumulative_step <= 0 or hvp_update_period <= 0:
+        raise ValueError("cumulative_step and hvp_update_period must be positive")
+    previous_steps = cumulative_step - 1
+    if replay_update_period is not None:
+        if replay_update_period <= 1:
+            raise ValueError("replay_update_period must be greater than one")
+        return previous_steps - previous_steps // replay_update_period
+    return previous_steps // hvp_update_period
+
+
+def _cyclic_orthogonal_internal_directions(
+    molecule: MoleculeState,
+    *,
+    hvp_update_ordinal: int,
+    count: int,
+    seed: int,
+) -> list[Direction]:
+    """Select a reproducible cyclic block of scaled orthogonal basis rows.
+
+    One seed-bound permutation of the complete internal basis is repeated
+    continuously.  Selecting consecutive slots (including across the cycle
+    boundary) therefore gives distinct orthogonal rows whenever ``count <= d``.
+    Each row is multiplied by ``sqrt(d)`` so the existing canonical Hutchinson
+    loss keeps exactly the same internal-Frobenius normalization.
+    """
+    if molecule.direction_basis_definition != "structured_internal_orthonormal":
+        raise ValueError(
+            "cyclic orthogonal training requires a structured internal basis"
+        )
+    if molecule.expected_internal_dimension is None:
+        raise ValueError("internal direction metadata are incomplete")
+    if hvp_update_ordinal < 0:
+        raise ValueError("hvp_update_ordinal must be nonnegative")
+    internal_dimension = int(molecule.expected_internal_dimension)
+    ordered = sorted(molecule.directions, key=lambda item: item.index)
+    if (
+        len(ordered) != internal_dimension
+        or [item.index for item in ordered] != list(range(internal_dimension))
+    ):
+        raise ValueError(
+            "cyclic orthogonal training requires the complete indexed internal basis"
+        )
+    if count <= 0 or count > internal_dimension:
+        raise ValueError(
+            "directions-per-step must be in [1, internal_dimension] for "
+            "cyclic orthogonal training"
+        )
+    molecule_seed = int(
+        hashlib.sha256(molecule.molecule_id.encode()).hexdigest()[:8], 16
+    )
+    permutation = np.random.default_rng(seed + molecule_seed).permutation(
+        internal_dimension
+    )
+    scale = math.sqrt(float(internal_dimension))
+    first_slot = hvp_update_ordinal * count
+    selected = []
+    for offset in range(count):
+        basis_index = int(
+            permutation[(first_slot + offset) % internal_dimension]
+        )
+        source = ordered[basis_index]
+        selected.append(
+            Direction(
+                index=basis_index,
+                kind="cyclic_orthogonal_internal_basis",
+                vector=scale * np.asarray(source.vector, dtype=np.float64),
+                target_hvp=(
+                    scale * np.asarray(source.target_hvp, dtype=np.float64)
+                ),
+                role="train",
+            )
+        )
+    return selected
+
+
+def _fixed_full_rank_rademacher_internal_probe_pool(
+    molecule: MoleculeState,
+    *,
+    pool_size: int,
+    seed: int,
+    condition_number_max: float,
+) -> tuple[np.ndarray, dict[str, float | int | str]]:
+    """Build one deterministic, full-rank Rademacher pool for a molecule.
+
+    The pool lives in the complete orthonormal internal coordinates.  A
+    deterministic retry is used only if the first +/-1 matrix is rank
+    deficient or violates the frozen conditioning gate.  Returning the pool
+    hash and numerical diagnostics makes the actual training probes auditable
+    without storing another large label artifact.
+    """
+    if molecule.direction_basis_definition != "structured_internal_orthonormal":
+        raise ValueError(
+            "fixed Rademacher-pool training requires a structured internal basis"
+        )
+    if molecule.expected_internal_dimension is None:
+        raise ValueError("internal direction metadata are incomplete")
+    internal_dimension = int(molecule.expected_internal_dimension)
+    if pool_size < internal_dimension:
+        raise ValueError(
+            "a full-rank Rademacher pool requires pool_size >= internal_dimension"
+        )
+    if not math.isfinite(condition_number_max) or condition_number_max <= 1.0:
+        raise ValueError("Rademacher pool condition-number gate must exceed one")
+    ordered = sorted(molecule.directions, key=lambda item: item.index)
+    if (
+        len(ordered) != internal_dimension
+        or [item.index for item in ordered] != list(range(internal_dimension))
+    ):
+        raise ValueError(
+            "fixed Rademacher-pool training requires the complete indexed "
+            "internal basis"
+        )
+    molecule_seed = int(
+        hashlib.sha256(molecule.molecule_id.encode()).hexdigest()[:8], 16
+    )
+    for attempt in range(256):
+        generator = np.random.default_rng(
+            seed + molecule_seed + attempt * 104729
+        )
+        signs = generator.choice(
+            np.asarray([-1, 1], dtype=np.int8),
+            size=(pool_size, internal_dimension),
+        )
+        floating_signs = signs.astype(np.float64)
+        rank = int(np.linalg.matrix_rank(floating_signs))
+        condition_number = float(np.linalg.cond(floating_signs))
+        if rank == internal_dimension and condition_number <= condition_number_max:
+            return signs, {
+                "pool_size": pool_size,
+                "internal_dimension": internal_dimension,
+                "rank": rank,
+                "condition_number": condition_number,
+                "generation_attempt": attempt,
+                "sign_matrix_sha256": hashlib.sha256(
+                    np.ascontiguousarray(signs).tobytes()
+                ).hexdigest(),
+            }
+    raise ValueError(
+        "failed to construct a full-rank Rademacher pool within the frozen "
+        "conditioning gate"
+    )
+
+
+def _cyclic_full_rank_rademacher_internal_directions(
+    molecule: MoleculeState,
+    *,
+    hvp_update_ordinal: int,
+    count: int,
+    pool_size: int,
+    seed: int,
+    condition_number_max: float,
+) -> list[Direction]:
+    """Select a cyclic block from one fixed, full-rank Rademacher pool."""
+    if hvp_update_ordinal < 0:
+        raise ValueError("hvp_update_ordinal must be nonnegative")
+    if count <= 0 or count > pool_size:
+        raise ValueError("directions-per-step must lie in [1, pool_size]")
+    signs, _ = _fixed_full_rank_rademacher_internal_probe_pool(
+        molecule,
+        pool_size=pool_size,
+        seed=seed,
+        condition_number_max=condition_number_max,
+    )
+    ordered = sorted(molecule.directions, key=lambda item: item.index)
+    basis = np.stack(
+        [np.asarray(item.vector, dtype=np.float64) for item in ordered]
+    )
+    target_columns = np.stack(
+        [np.asarray(item.target_hvp, dtype=np.float64) for item in ordered]
+    )
+    first_slot = hvp_update_ordinal * count
+    selected = []
+    for offset in range(count):
+        pool_index = int((first_slot + offset) % pool_size)
+        probe_signs = signs[pool_index].astype(np.float64)
+        selected.append(
+            Direction(
+                index=pool_index,
+                kind="fixed_rademacher_internal",
+                vector=np.einsum("d,dij->ij", probe_signs, basis),
+                target_hvp=np.einsum(
+                    "d,dij->ij", probe_signs, target_columns
+                ),
+                role="train",
+            )
+        )
+    return selected
+
+
+def _clip_parameter_gradients_with_diagnostics(
+    parameters: list[torch.Tensor],
+    max_norm: float,
+) -> dict[str, float | bool]:
+    """Clip one aggregate update and report the exact before/after norms.
+
+    A non-positive threshold is the explicit no-clipping ablation arm.  Calling
+    ``clip_grad_norm_`` with infinity still gives the same aggregate pre-clip
+    norm calculation as the clipped arms without modifying the gradients.
+    """
+    if max_norm < 0.0 or not math.isfinite(max_norm):
+        raise ValueError("gradient clip norm must be finite and nonnegative")
+    enabled = max_norm > 0.0
+    before = torch.nn.utils.clip_grad_norm_(
+        parameters,
+        max_norm if enabled else math.inf,
+    )
+    squared_after: torch.Tensor | None = None
+    for parameter in parameters:
+        if parameter.grad is None:
+            continue
+        contribution = torch.sum(parameter.grad.detach() ** 2)
+        squared_after = (
+            contribution
+            if squared_after is None
+            else squared_after + contribution
+        )
+    after = (
+        torch.sqrt(squared_after)
+        if squared_after is not None
+        else before.new_zeros(())
+    )
+    before_value = float(before.detach().cpu())
+    after_value = float(after.detach().cpu())
+    scale = after_value / before_value if before_value > 0.0 else 1.0
+    return {
+        "parameter_gradient_norm_before_clip": before_value,
+        "parameter_gradient_norm_after_clip": after_value,
+        "gradient_clip_scale": scale,
+        "gradient_clipping_enabled": enabled,
+        "gradient_clipping_active": bool(enabled and scale < 1.0 - 1.0e-12),
+    }
+
+
+def _optimizer_parameter_step_diagnostics(
+    named_parameters: list[tuple[str, torch.Tensor]],
+    old_parameter_values: list[torch.Tensor],
+    new_parameter_values: list[torch.Tensor],
+) -> dict[str, float]:
+    """Report the raw AdamW parameter displacement before density trust scaling."""
+    if not (
+        len(named_parameters)
+        == len(old_parameter_values)
+        == len(new_parameter_values)
+    ):
+        raise ValueError("parameter-step diagnostics require aligned tensors")
+    total_squared = 0.0
+    group_squared: dict[str, float] = {}
+    for (name, _), old, new in zip(
+        named_parameters,
+        old_parameter_values,
+        new_parameter_values,
+        strict=True,
+    ):
+        contribution = float(torch.sum((new.detach() - old.detach()) ** 2).cpu())
+        total_squared += contribution
+        group = name.split(".", 1)[0]
+        group_squared[group] = group_squared.get(group, 0.0) + contribution
+    diagnostics = {
+        "optimizer_raw_parameter_step_norm": math.sqrt(total_squared),
+    }
+    denominator = max(total_squared, np.finfo(np.float64).tiny)
+    for group, contribution in group_squared.items():
+        diagnostics[f"optimizer_step_group_norm/{group}"] = math.sqrt(contribution)
+        diagnostics[f"optimizer_step_group_squared_fraction/{group}"] = (
+            contribution / denominator
+        )
+    return diagnostics
+
+
+def _select_backward_terms(
+    weighted: dict[str, torch.Tensor],
+    *,
+    alternating_hvp_updates: bool,
+    update_kind: str,
+) -> dict[str, torch.Tensor]:
+    """Select the losses owned by one optimizer update.
+
+    The shared-optimizer path intentionally returns every E/G/F/H term so a
+    single autograd traversal and one AdamW state see the mixed derivative.
+    The historical alternating path is retained for frozen control protocols.
+    """
+    if not alternating_hvp_updates:
+        if update_kind != "joint":
+            raise ValueError("shared-optimizer loss selection requires a joint update")
+        return dict(weighted)
+    if update_kind == "hvp":
+        return {"hvp": weighted["hvp"]}
+    if update_kind == "replay":
+        return {name: value for name, value in weighted.items() if name != "hvp"}
+    raise ValueError(f"unsupported alternating update kind: {update_kind!r}")
+
+
 def train(args: argparse.Namespace) -> dict[str, Any]:
     started = time.perf_counter()
+    if getattr(args, "integral_derivative_backend", None) == "torch_autograd_dqc" and any(
+        name == "jax" or name.startswith("jax.") for name in sys.modules
+    ):
+        raise RuntimeError(
+            "torch_autograd_dqc is a PyTorch-only run, but JAX was already imported"
+        )
     symmetric_matrix_power_mode = getattr(
         args, "symmetric_matrix_power_mode", "stable_first_order"
     )
@@ -1683,8 +3210,54 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--hvp-update-period must be positive")
     if args.replay_update_period is not None and args.replay_update_period <= 1:
         raise ValueError("--replay-update-period must be greater than one")
+    if args.replay_learning_rate is not None and args.replay_learning_rate < 0:
+        raise ValueError("--replay-learning-rate must be nonnegative")
+    if args.replay_learning_rate is not None and not args.alternating_hvp_updates:
+        raise ValueError(
+            "--replay-learning-rate requires --alternating-hvp-updates"
+        )
+    if args.hvp_learning_rate is not None and not args.alternating_hvp_updates:
+        raise ValueError(
+            "--hvp-learning-rate requires --alternating-hvp-updates"
+        )
+    if args.replay_update_period is not None and not args.alternating_hvp_updates:
+        raise ValueError(
+            "--replay-update-period requires --alternating-hvp-updates"
+        )
     if args.loss_balance_mode == "pcgrad" and args.alternating_hvp_updates:
         raise ValueError("PCGrad and alternating HVP updates are mutually exclusive")
+    if args.evaluation_mode == "none" and args.learning_rate != 0.0 and not (
+        args.two_step_failure_reproduction
+    ):
+        raise ValueError(
+            "--evaluation-mode=none is restricted to zero-learning-rate smokes"
+        )
+    if args.evaluation_mode == "density_cost" and (
+        args.max_steps > 4
+        or args.checkpoint_interval != 1
+        or not args.density_parameter_trust_region
+        or not args.density_predictor_corrector_first
+    ):
+        raise ValueError(
+            "--evaluation-mode=density_cost requires max-steps<=4, "
+            "checkpoint-interval=1, --density-parameter-trust-region, and "
+            "--density-predictor-corrector-first"
+        )
+    if args.two_step_failure_reproduction and (
+        args.evaluation_mode != "none"
+        or args.max_steps > 2
+        or args.checkpoint_interval != 1
+    ):
+        raise ValueError(
+            "--two-step-failure-reproduction requires evaluation-mode=none, "
+            "max-steps<=2, and checkpoint-interval=1"
+        )
+    if args.response_correction_fraction_max <= 0:
+        raise ValueError("--response-correction-fraction-max must be positive")
+    if args.cancellation_index_max < 1:
+        raise ValueError("--cancellation-index-max must be at least one")
+    if args.gradient_clip_norm < 0 or not math.isfinite(args.gradient_clip_norm):
+        raise ValueError("--gradient-clip-norm must be finite and nonnegative")
     if args.analytic_relaxed_hvp and not args.require_complete_total_relaxed_hvp:
         raise ValueError(
             "--analytic-relaxed-hvp requires the fail-closed "
@@ -1698,13 +3271,59 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "--density-parameter-response-predictor requires "
             "--analytic-relaxed-hvp"
         )
-    if args.integral_directional_second_step <= 0:
+    if (
+        args.density_parameter_trust_region
+        or args.density_predictor_corrector_first
+    ) and not args.density_parameter_response_predictor:
+        raise ValueError(
+            "density predictor trust/corrector options require "
+            "--density-parameter-response-predictor"
+        )
+    if args.density_predictor_damping < 0:
+        raise ValueError("--density-predictor-damping must be nonnegative")
+    if args.density_parameter_trust_threshold <= 0:
+        raise ValueError("--density-parameter-trust-threshold must be positive")
+    if not 0.0 < args.density_parameter_trust_minimum_scale <= 1.0:
+        raise ValueError(
+            "--density-parameter-trust-minimum-scale must lie in (0, 1]"
+        )
+    if args.density_predictor_corrector_threshold <= 0:
+        raise ValueError(
+            "--density-predictor-corrector-threshold must be positive"
+        )
+    if args.integral_derivative_backend in {
+        "pyscfad_autodiff",
+        "torch_autograd_dqc",
+    }:
+        if (
+            args.integral_derivative_step != 0.0
+            or args.integral_directional_second_step != 0.0
+        ):
+            raise ValueError(
+                "autodiff integral backends require both integral derivative steps to be zero; "
+                "finite coordinate displacements are forbidden"
+            )
+    elif args.integral_directional_second_step <= 0:
         raise ValueError("--integral-directional-second-step must be positive")
     if args.analytic_response_damping < 0:
         raise ValueError("--analytic-response-damping must be nonnegative")
     if args.analytic_response_residual_tolerance <= 0:
         raise ValueError(
             "--analytic-response-residual-tolerance must be positive"
+        )
+    if (
+        args.analytic_response_constraint_tolerance is not None
+        and args.analytic_response_constraint_tolerance <= 0
+    ):
+        raise ValueError(
+            "--analytic-response-constraint-tolerance must be positive"
+        )
+    if (
+        args.center_electron_number_residual_max is not None
+        and args.center_electron_number_residual_max <= 0
+    ):
+        raise ValueError(
+            "--center-electron-number-residual-max must be positive"
         )
     torch.set_default_dtype(torch.float64)
     torch.manual_seed(args.seed)
@@ -1713,10 +3332,178 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     manifest = json.loads(args.manifest.read_text())
     protocol_sha256 = _sha256(args.protocol)
     manifest_sha256 = _sha256(args.manifest)
+    physical_definition_id = _physical_definition_id(protocol)
+    canonical_physics = (
+        physical_definition_id == CANONICAL_PHYSICAL_DEFINITION_ID
+    )
+    gradient_clip_ablation = protocol.get("gradient_clip_ablation")
+    selected_gradient_clip_arm: str | None = None
+    record_optimizer_step_diagnostics = False
+    if gradient_clip_ablation is not None:
+        if not canonical_physics or not isinstance(gradient_clip_ablation, dict):
+            raise ValueError("gradient clipping ablation requires canonical semantics")
+        arms = gradient_clip_ablation.get("arms")
+        if not isinstance(arms, dict) or not arms:
+            raise ValueError("gradient clipping ablation lacks registered arms")
+        registered_clip_norms: dict[str, float] = {}
+        for arm_name, arm in arms.items():
+            if not isinstance(arm, dict) or "gradient_clip_norm" not in arm:
+                raise ValueError(f"gradient clipping arm {arm_name!r} is malformed")
+            value = float(arm["gradient_clip_norm"])
+            if value < 0.0 or not math.isfinite(value):
+                raise ValueError(
+                    f"gradient clipping arm {arm_name!r} has an invalid threshold"
+                )
+            registered_clip_norms[str(arm_name)] = value
+        if args.evaluation_mode == "full":
+            matches = [
+                name
+                for name, value in registered_clip_norms.items()
+                if math.isclose(
+                    float(args.gradient_clip_norm),
+                    value,
+                    rel_tol=0.0,
+                    abs_tol=1.0e-15,
+                )
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    "formal gradient clip norm does not identify exactly one "
+                    "registered ablation arm"
+                )
+            selected_gradient_clip_arm = matches[0]
+        record_optimizer_step_diagnostics = bool(
+            gradient_clip_ablation.get(
+                "record_optimizer_parameter_step_norm", False
+            )
+        )
+    repository_root = Path(__file__).resolve().parents[1]
+    code_provenance: dict[str, str | None] = {
+        "runner_sha256": _sha256(Path(__file__).resolve()),
+        "complete_total_training_sha256": _sha256(
+            repository_root / "mldft/ofdft/complete_total_training.py"
+        ),
+        "geometry_integrals_sha256": _sha256(
+            repository_root / "mldft/ofdft/geometry_integrals.py"
+        ),
+        "conservative_force_sha256": _sha256(
+            repository_root / "mldft/ofdft/conservative_force.py"
+        ),
+        "implicit_response_sha256": _sha256(
+            repository_root / "mldft/ofdft/implicit_response.py"
+        ),
+        "functional_factory_sha256": _sha256(
+            repository_root / "mldft/ofdft/functional_factory.py"
+        ),
+        "basis_integrals_sha256": _sha256(
+            repository_root / "mldft/ofdft/basis_integrals.py"
+        ),
+        "torch_integrals_sha256": _sha256(
+            repository_root / "mldft/ofdft/torch_integrals.py"
+        ),
+        "normative_specification": None,
+        "normative_specification_sha256": None,
+    }
+    if canonical_physics:
+        normative_specification = protocol.get("definitions", {}).get(
+            "normative_specification"
+        )
+        if not isinstance(normative_specification, str):
+            raise ValueError("canonical protocol lacks a normative specification")
+        normative_path = repository_root / normative_specification
+        if not normative_path.is_file():
+            raise ValueError(
+                f"canonical normative specification is missing: {normative_path}"
+            )
+        code_provenance["normative_specification"] = normative_specification
+        code_provenance["normative_specification_sha256"] = _sha256(
+            normative_path
+        )
+    canonical_calibration_provenance = None
+    if canonical_physics and args.evaluation_mode == "full":
+        if (
+            args.hvp_calibration_artifact is None
+            or args.hvp_calibration_sha256 is None
+        ):
+            raise ValueError(
+                "canonical formal/resume training requires a bound v4 HVP "
+                "calibration artifact and SHA256"
+            )
+        canonical_calibration_provenance = (
+            _validate_canonical_calibration_artifact(
+                args.hvp_calibration_artifact,
+                expected_sha256=args.hvp_calibration_sha256,
+                protocol_id=str(protocol["protocol_id"]),
+                protocol_sha256=protocol_sha256,
+                requested_lambda_h=args.lambda_h,
+                expected_code_provenance=code_provenance,
+                calibration_protocol=protocol,
+            )
+        )
+    elif canonical_physics and (
+        args.hvp_calibration_artifact is not None
+        or args.hvp_calibration_sha256 is not None
+    ):
+        raise ValueError(
+            "canonical calibration input is accepted only by full formal/resume runs"
+        )
+    autodiff_integrals = args.integral_derivative_backend in {
+        "pyscfad_autodiff",
+        "torch_autograd_dqc",
+    }
+    registered_numerics = protocol.get("numerics", {})
     if (
-        protocol.get("method_name")
-        != "解析密度/KKT响应的hybrid relaxed-HVP"
-        or protocol.get("fully_analytic_libcint_second_integrals") is not False
+        registered_numerics.get(
+            "integral_derivative_backend", "finite_difference_pyscf"
+        )
+        != args.integral_derivative_backend
+        or not math.isclose(
+            float(registered_numerics.get("integral_derivative_step_bohr", math.nan)),
+            float(args.integral_derivative_step),
+            rel_tol=0.0,
+            abs_tol=0.0,
+        )
+        or not math.isclose(
+            float(
+                registered_numerics.get(
+                    "integral_directional_second_step_bohr", math.nan
+                )
+            ),
+            float(args.integral_directional_second_step),
+            rel_tol=0.0,
+            abs_tol=0.0,
+        )
+    ):
+        raise ValueError(
+            "Runtime integral derivative backend/steps do not match the frozen protocol"
+        )
+    if args.integral_derivative_backend == "pyscfad_autodiff":
+        derivative_identity_failed = (
+            protocol.get("method_name")
+            != "自动微分积分与密度/KKT响应的complete-total relaxed-HVP"
+            or protocol.get("primary_derivative_backend")
+            != "pyscfad_jax_autodiff_plus_torch_autograd"
+            or protocol.get("fully_autodiff_geometry_integrals") is not True
+            or protocol.get("finite_difference_primary_path_allowed") is not False
+        )
+    elif args.integral_derivative_backend == "torch_autograd_dqc":
+        derivative_identity_failed = (
+            protocol.get("method_name")
+            != "自动微分积分与密度/KKT响应的complete-total relaxed-HVP"
+            or protocol.get("primary_derivative_backend")
+            != "torch_autograd_dqc_libcint"
+            or protocol.get("fully_autodiff_geometry_integrals") is not True
+            or protocol.get("finite_difference_primary_path_allowed") is not False
+            or protocol.get("jax_primary_path_allowed") is not False
+        )
+    else:
+        derivative_identity_failed = (
+            protocol.get("method_name")
+            != "解析密度/KKT响应的hybrid relaxed-HVP"
+            or protocol.get("fully_analytic_libcint_second_integrals") is not False
+        )
+    if (
+        derivative_identity_failed
         or protocol.get("validation_access_allowed") is not False
         or protocol.get("test100_access_allowed") is not False
         or protocol["identity"].get("old_original_a_identity_allowed") is not False
@@ -1725,24 +3512,409 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         )
         is not False
     ):
-        raise ValueError("Hybrid rebuild protocol identity/access boundary failed")
+        raise ValueError("Derivative protocol identity/access boundary failed")
     training_direction = protocol["directions"]["training_direction"]
-    if (
-        int(training_direction["count_per_step"]) != 1
-        or training_direction["distribution"] != "internal_space_rademacher"
-        or training_direction["resample_each_step"] is not True
-        or training_direction["normalization"]
-        != "unnormalized_pm1_in_orthonormal_internal_coordinates"
-        or training_direction["estimator"]
-        != "unbiased_internal_hessian_frobenius_squared"
+    expected_estimator = (
+        "unbiased_internal_projected_hessian_frobenius_squared"
+        if canonical_physics
+        else "unbiased_internal_hessian_frobenius_squared"
+    )
+    registered_direction_count = int(training_direction["count_per_step"])
+    registered_direction_strategy = str(training_direction["distribution"])
+    registered_direction_pool_size = (
+        int(training_direction["pool_size"])
+        if "pool_size" in training_direction
+        else None
+    )
+    registered_direction_pool_condition_max = (
+        float(training_direction["condition_number_max"])
+        if "condition_number_max" in training_direction
+        else None
+    )
+    cli_direction_strategy = getattr(args, "direction_strategy", None)
+    if cli_direction_strategy is None:
+        # Historical launchers predate this explicit CLI field.  Preserve the
+        # immutable v1--v4 single-Rademacher path, but require new strategies
+        # to name themselves on both the protocol and command line.
+        if registered_direction_strategy != "internal_space_rademacher":
+            raise ValueError(
+                "non-legacy direction strategies require --direction-strategy"
+            )
+        cli_direction_strategy = registered_direction_strategy
+    direction_protocol_drift = (
+        args.directions_per_step != registered_direction_count
+        or cli_direction_strategy != registered_direction_strategy
+        or training_direction.get("estimator") != expected_estimator
+    )
+    if canonical_physics:
+        direction_protocol_drift = direction_protocol_drift or (
+            training_direction.get("input_projection") != "complete_internal"
+            or training_direction.get("output_projection") != "complete_internal"
+        )
+    if registered_direction_strategy == "internal_space_rademacher":
+        direction_protocol_drift = direction_protocol_drift or (
+            registered_direction_count != 1
+            or training_direction.get("resample_each_step") is not True
+            or training_direction.get("normalization")
+            != "unnormalized_pm1_in_orthonormal_internal_coordinates"
+        )
+    elif (
+        registered_direction_strategy
+        == "cyclic_orthogonal_internal_basis_blocks"
     ):
-        raise ValueError("Hybrid rebuild Rademacher estimator protocol drift")
+        direction_protocol_drift = direction_protocol_drift or (
+            not canonical_physics
+            or registered_direction_count <= 1
+            or training_direction.get("resample_each_step") is not False
+            or training_direction.get("normalization")
+            != "sqrt_internal_dimension_in_orthonormal_internal_coordinates"
+            or training_direction.get("schedule")
+            != "cumulative_hvp_update_ordinal"
+            or training_direction.get("cycle_continuously") is not True
+        )
+    elif (
+        registered_direction_strategy
+        == "cyclic_full_rank_rademacher_pool_blocks"
+    ):
+        direction_protocol_drift = direction_protocol_drift or (
+            not canonical_physics
+            or registered_direction_count <= 1
+            or registered_direction_pool_size is None
+            or registered_direction_pool_size < registered_direction_count
+            or registered_direction_pool_condition_max is None
+            or registered_direction_pool_condition_max <= 1.0
+            or training_direction.get("resample_each_step") is not False
+            or training_direction.get("normalization")
+            != "unnormalized_pm1_in_orthonormal_internal_coordinates"
+            or training_direction.get("schedule")
+            != "cumulative_hvp_update_ordinal"
+            or training_direction.get("cycle_continuously") is not True
+            or training_direction.get("full_rank_required") is not True
+        )
+    else:
+        raise ValueError(
+            f"Unsupported analytic direction strategy {registered_direction_strategy!r}"
+        )
+    if direction_protocol_drift:
+        raise ValueError("Hybrid rebuild direction-estimator protocol drift")
+    if canonical_physics:
+        canonical_semantics = protocol.get("training_semantics", {})
+        canonical_loss = protocol.get("loss", {})
+        reference_record = protocol.get("reference_record", {})
+        required_common_label_keys = {
+            "of_labels/spatial/coeffs",
+            "of_labels/energies/e_kin_plus_xc",
+            "of_labels/spatial/grad_kin_plus_xc",
+            "ks_labels/energies/e_tot",
+        }
+        if (
+            protocol.get("semantic_version")
+            != CANONICAL_PHYSICAL_DEFINITION_ID
+            or canonical_semantics.get("energy_gradient_branch")
+            != "structures25_kin_plus_xc_at_fixed_pbe_ks_density"
+            or canonical_semantics.get("force_hessian_branch")
+            != "model_self_consistent_complete_total_relaxed_pes"
+            or canonical_semantics.get("one_scalar_energy_owner") is not True
+            or canonical_loss.get("density", {}).get("target")
+            != "projected_structures25_kin_plus_xc_gradient_label"
+            or canonical_loss.get("density", {}).get("reduction")
+            != "mean_squared_error_over_untransformed_coefficients"
+            or canonical_loss.get("force", {}).get("evaluation_point")
+            != "strictly_converged_model_self_consistent_density"
+            or "relative_fraction" not in canonical_loss.get("force", {})
+            or canonical_loss.get("hvp", {}).get("input_projection")
+            != "complete_internal"
+            or canonical_loss.get("hvp", {}).get("output_projection")
+            != "complete_internal"
+            or canonical_loss.get("hvp", {}).get("reduction")
+            != "mean_internal_matrix"
+            or reference_record.get("coefficient_label_key")
+            != "of_labels/spatial/coeffs"
+            or reference_record.get("energy_label_key")
+            != "of_labels/energies/e_kin_plus_xc"
+            or reference_record.get("gradient_label_key")
+            != "of_labels/spatial/grad_kin_plus_xc"
+            or set(reference_record.get("require_same_index_for", []))
+            != required_common_label_keys
+            or reference_record.get("reference_hessian_symmetrization")
+            != "before_internal_projection"
+            or not args.egf_label_density_replay
+            or not args.analytic_relaxed_hvp
+            or not args.implicit_density_parameter_response
+            or args.center_electron_number_residual_max is None
+            or not math.isclose(
+                float(args.center_electron_number_residual_max),
+                float(
+                    protocol.get("gates", {})[
+                        "center_electron_number_residual_max"
+                    ]
+                ),
+                rel_tol=0.0,
+                abs_tol=1.0e-15,
+            )
+            or args.analytic_response_constraint_tolerance is None
+            or not math.isclose(
+                float(args.analytic_response_constraint_tolerance),
+                float(
+                    protocol.get("gates", {})[
+                        "analytic_response_constraint_residual_max"
+                    ]
+                ),
+                rel_tol=0.0,
+                abs_tol=1.0e-15,
+            )
+        ):
+            raise ValueError("Canonical E/G/F/H physical semantics preflight failed")
+        canonical_gates = protocol.get("gates", {})
+        canonical_gate_values = {
+            "density_solver_target": args.density_strict_threshold,
+            "center_projected_density_gradient_max": (
+                _training_density_stationarity_threshold(args)
+            ),
+            "center_electron_number_residual_max": (
+                args.center_electron_number_residual_max
+            ),
+            "analytic_response_residual_max": (
+                args.analytic_response_residual_tolerance
+            ),
+            "analytic_response_constraint_residual_max": (
+                args.analytic_response_constraint_tolerance
+            ),
+            "response_correction_fraction_max": (
+                args.response_correction_fraction_max
+            ),
+            "cancellation_index_max": args.cancellation_index_max,
+        }
+        canonical_gate_drift = [
+            key
+            for key, actual in canonical_gate_values.items()
+            if actual is None
+            or key not in canonical_gates
+            or not math.isclose(
+                float(actual),
+                float(canonical_gates[key]),
+                rel_tol=0.0,
+                abs_tol=1.0e-15,
+            )
+        ]
+        if canonical_gate_drift:
+            raise ValueError(
+                "Canonical numerical gates drifted from protocol: "
+                + ", ".join(canonical_gate_drift)
+            )
+    if args.evaluation_mode == "density_cost":
+        screen = protocol.get("density_cost_screen")
+        if not isinstance(screen, dict):
+            raise ValueError("density-cost audit requires a frozen protocol screen")
+        actual_replay_lr = (
+            args.replay_learning_rate
+            if args.replay_learning_rate is not None
+            else args.learning_rate
+        )
+        numeric_settings = {
+            "steps": args.max_steps,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
+            "gradient_clip_norm": args.gradient_clip_norm,
+            "checkpoint_interval": args.checkpoint_interval,
+            "density_predictor_damping": args.density_predictor_damping,
+            "density_parameter_trust_threshold": (
+                args.density_parameter_trust_threshold
+            ),
+            "density_parameter_trust_minimum_scale": (
+                args.density_parameter_trust_minimum_scale
+            ),
+            "density_predictor_corrector_threshold": (
+                args.density_predictor_corrector_threshold
+            ),
+        }
+        if args.alternating_hvp_updates:
+            numeric_settings.update(
+                {
+                    "replay_learning_rate": actual_replay_lr,
+                    "hvp_learning_rate": (
+                        args.hvp_learning_rate
+                        if args.hvp_learning_rate is not None
+                        else args.learning_rate
+                    ),
+                    "replay_update_period": args.replay_update_period,
+                }
+            )
+        drift = [
+            key
+            for key, value in numeric_settings.items()
+            if key not in screen
+            or not math.isclose(
+                float(value), float(screen[key]), rel_tol=0.0, abs_tol=1.0e-15
+            )
+        ]
+        if (
+            screen.get("evaluation_mode") != args.evaluation_mode
+            or bool(screen.get("alternating_hvp_updates"))
+            != args.alternating_hvp_updates
+        ):
+            drift.append("categorical_settings")
+        if drift:
+            raise ValueError(
+                "density-cost screen settings drifted from protocol: "
+                + ", ".join(drift)
+            )
+    if canonical_physics or protocol.get("protocol_id") in {
+        "qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3",
+    }:
+        formal = protocol.get("formal_training", {})
+        screen = protocol.get("density_cost_screen", {})
+        calibration_smoke = protocol.get("gradient_calibration", {}).get(
+            "smoke", {}
+        )
+        canonical_zero_lr_smoke = bool(
+            canonical_physics and args.evaluation_mode == "none"
+        )
+        registered_learning_rate = (
+            calibration_smoke.get("learning_rate")
+            if canonical_zero_lr_smoke
+            else formal.get("learning_rate")
+        )
+        registered_gradient_clip_norm = (
+            calibration_smoke.get(
+                "gradient_clip_norm", formal.get("gradient_clip_norm")
+            )
+            if canonical_zero_lr_smoke
+            else args.gradient_clip_norm
+            if gradient_clip_ablation is not None
+            and args.evaluation_mode == "full"
+            and selected_gradient_clip_arm is not None
+            else formal.get("gradient_clip_norm")
+        )
+        replay_lr = (
+            args.replay_learning_rate
+            if args.replay_learning_rate is not None
+            else args.learning_rate
+        )
+        registered_numeric = {
+            "learning_rate": (args.learning_rate, registered_learning_rate),
+            "weight_decay": (args.weight_decay, formal.get("weight_decay")),
+            "gradient_clip_norm": (
+                args.gradient_clip_norm,
+                registered_gradient_clip_norm,
+            ),
+            "density_predictor_damping": (
+                args.density_predictor_damping,
+                screen.get("density_predictor_damping"),
+            ),
+            "density_parameter_trust_threshold": (
+                args.density_parameter_trust_threshold,
+                screen.get("density_parameter_trust_threshold"),
+            ),
+            "density_parameter_trust_minimum_scale": (
+                args.density_parameter_trust_minimum_scale,
+                screen.get("density_parameter_trust_minimum_scale"),
+            ),
+            "density_predictor_corrector_threshold": (
+                args.density_predictor_corrector_threshold,
+                screen.get("density_predictor_corrector_threshold"),
+            ),
+        }
+        expected_alternating = bool(
+            formal.get("alternating_hvp_updates", False)
+        )
+        if expected_alternating:
+            registered_numeric.update(
+                {
+                    "replay_learning_rate": (
+                        replay_lr,
+                        (
+                            registered_learning_rate
+                            if canonical_zero_lr_smoke
+                            else formal.get("replay_learning_rate")
+                        ),
+                    ),
+                    "hvp_learning_rate": (
+                        args.hvp_learning_rate
+                        if args.hvp_learning_rate is not None
+                        else args.learning_rate,
+                        (
+                            registered_learning_rate
+                            if canonical_zero_lr_smoke
+                            else formal.get("hvp_learning_rate")
+                        ),
+                    ),
+                    "replay_update_period": (
+                        args.replay_update_period,
+                        formal.get("replay_update_period"),
+                    ),
+                }
+            )
+        registered_drift = [
+            key
+            for key, (actual, expected) in registered_numeric.items()
+            if expected is None
+            or actual is None
+            or not math.isclose(
+                float(actual), float(expected), rel_tol=0.0, abs_tol=1.0e-15
+            )
+        ]
+        if args.alternating_hvp_updates != expected_alternating:
+            registered_drift.append("alternating_hvp_updates")
+        if not args.density_parameter_trust_region:
+            registered_drift.append("density_parameter_trust_region")
+        if not args.density_predictor_corrector_first:
+            registered_drift.append("density_predictor_corrector_first")
+        if canonical_zero_lr_smoke:
+            if (
+                args.max_steps != int(calibration_smoke.get("steps", -1))
+                or args.evaluation_mode
+                != calibration_smoke.get("evaluation_mode")
+                or args.lambda_h is None
+                or not math.isclose(
+                    float(args.lambda_h),
+                    float(calibration_smoke.get("lambda_H", math.nan)),
+                    rel_tol=0.0,
+                    abs_tol=1.0e-15,
+                )
+            ):
+                registered_drift.append("canonical_gradient_calibration_smoke")
+        if args.evaluation_mode == "full":
+            expected_steps = int(
+                formal.get(
+                    "resume_additional_steps"
+                    if args.resume_capacity_optimizer
+                    else "steps",
+                    5 if args.resume_capacity_optimizer else -1,
+                )
+            )
+            if (
+                args.max_steps != expected_steps
+                or args.checkpoint_interval != int(formal.get("checkpoint_interval", -1))
+                or args.eval_interval != int(formal.get("evaluation_interval", -1))
+            ):
+                registered_drift.append("formal_schedule")
+        if registered_drift:
+            raise ValueError(
+                "registered trust/corrector settings drifted from protocol: "
+                + ", ".join(registered_drift)
+            )
+    frozen_asset_reuse = protocol.get("frozen_train_only_asset_reuse")
+    if frozen_asset_reuse is not None:
+        parent_binding_valid = (
+            frozen_asset_reuse.get("allowed") is True
+            and frozen_asset_reuse.get("parent_manifest_sha256")
+            == manifest_sha256
+            and frozen_asset_reuse.get("source_protocol_id")
+            == manifest.get("protocol_id")
+            and frozen_asset_reuse.get("source_protocol_sha256")
+            == manifest.get("protocol_sha256")
+        )
+    else:
+        parent_binding_valid = (
+            manifest.get("protocol_id") == protocol["protocol_id"]
+            and manifest.get("protocol_sha256") == protocol_sha256
+        )
     if (
         manifest.get("validation_accessed") is not False
         or manifest.get("test100_accessed") is not False
         or manifest.get("old_original_a_identity_used") is not False
-        or manifest.get("protocol_id") != protocol["protocol_id"]
-        or manifest.get("protocol_sha256") != protocol_sha256
+        or not parent_binding_valid
     ):
         raise ValueError(
             "Capacity manifest does not certify the new frozen train-only branch"
@@ -1761,12 +3933,27 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 f"{direction_manifest_hash} != {args.direction_manifest_sha256}"
             )
         direction_manifest = json.loads(args.direction_manifest.read_text())
+        if frozen_asset_reuse is not None:
+            direction_binding_valid = (
+                frozen_asset_reuse.get("direction_manifest_sha256")
+                == direction_manifest_hash
+                and frozen_asset_reuse.get("source_protocol_id")
+                == direction_manifest.get("protocol_id")
+                and frozen_asset_reuse.get("source_protocol_sha256")
+                == direction_manifest.get("protocol_sha256")
+            )
+        else:
+            direction_binding_valid = (
+                direction_manifest.get("protocol_id")
+                == protocol["protocol_id"]
+                and direction_manifest.get("protocol_sha256")
+                == protocol_sha256
+            )
         if (
             direction_manifest.get("validation_accessed") is not False
             or direction_manifest.get("test100_accessed") is not False
             or direction_manifest.get("old_original_a_identity_used") is not False
-            or direction_manifest.get("protocol_id") != protocol["protocol_id"]
-            or direction_manifest.get("protocol_sha256") != protocol_sha256
+            or not direction_binding_valid
             or direction_manifest.get("parent_manifest_sha256")
             != manifest_sha256
         ):
@@ -1777,6 +3964,28 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             str(row["molecule_id"]): row
             for row in direction_manifest["parents"]
         }
+    expected_label_density_replay = canonical_physics or (
+        protocol.get("training_semantics", {}).get("egf_branch")
+        == "fixed_pbe_ks_density_complete_total_replay"
+    )
+    if bool(args.egf_label_density_replay) != expected_label_density_replay:
+        raise ValueError(
+            "fixed-label-density replay branch does not match the frozen protocol: "
+            f"cli={args.egf_label_density_replay} "
+            f"protocol={expected_label_density_replay}"
+        )
+    expected_alternating = protocol.get("formal_training", {}).get(
+        "alternating_hvp_updates"
+    )
+    if (
+        expected_alternating is not None
+        and bool(args.alternating_hvp_updates) != bool(expected_alternating)
+    ):
+        raise ValueError(
+            "Alternating-update mode does not match the frozen protocol: "
+            f"cli={args.alternating_hvp_updates} "
+            f"protocol={expected_alternating}"
+        )
     requested_ids = set(args.molecules.split(",")) if args.molecules else None
     entries = [
         row
@@ -1787,6 +3996,29 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("No Stage-1 molecules selected")
     if requested_ids is not None and {row["molecule_id"] for row in entries} != requested_ids:
         raise ValueError("Requested molecule is absent from the frozen Stage-1 manifest")
+    registered_molecule_ids = (
+        frozen_asset_reuse.get("molecule_ids")
+        if isinstance(frozen_asset_reuse, dict)
+        else None
+    )
+    selected_molecule_ids = [str(row["molecule_id"]) for row in entries]
+    if registered_molecule_ids is not None and selected_molecule_ids != [
+        str(value) for value in registered_molecule_ids
+    ]:
+        raise ValueError(
+            "CLI molecule selection does not match the frozen protocol molecule set/order"
+        )
+    registered_evaluation_molecule = protocol.get("evaluation", {}).get(
+        "train_molecule"
+    )
+    if (
+        canonical_physics
+        and registered_evaluation_molecule is not None
+        and selected_molecule_ids != [str(registered_evaluation_molecule)]
+    ):
+        raise ValueError(
+            "canonical CLI molecule does not match evaluation.train_molecule"
+        )
     if args.direction_limit is not None or direction_manifest is not None:
         low_mode_count = 0
     else:
@@ -1814,6 +4046,98 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         )
         for row in entries
     ]
+    if canonical_physics:
+        missing_functional_jet = [
+            molecule.molecule_id
+            for molecule in molecules
+            if molecule.reference_label_index is None
+            or molecule.structures25_kin_plus_xc_energy is None
+            or molecule.structures25_kin_plus_xc_gradient is None
+            or molecule.structures25_kin_plus_xc_gradient.shape
+            != molecule.label_coefficients.shape
+            or not math.isfinite(molecule.structures25_kin_plus_xc_energy)
+            or not bool(torch.isfinite(molecule.label_coefficients).all())
+            or not bool(
+                torch.isfinite(
+                    molecule.structures25_kin_plus_xc_gradient
+                ).all()
+            )
+            or not math.isfinite(molecule.pbe_total_energy)
+            or not bool(np.isfinite(molecule.pbe_force).all())
+            or not bool(np.isfinite(molecule.pbe_hessian).all())
+        ]
+        if missing_functional_jet:
+            raise ValueError(
+                "Canonical E/G training requires matched final-index Structures25 "
+                "e_kin_plus_xc and grad_kin_plus_xc labels for: "
+                + ", ".join(missing_functional_jet)
+            )
+        hessian_symmetry_limit = float(
+            protocol["gates"][
+                "reference_hessian_antisymmetric_over_symmetric_fro_max"
+            ]
+        )
+        for molecule in molecules:
+            _symmetrize_canonical_reference_hessian(
+                molecule,
+                antisymmetric_over_symmetric_frobenius_max=(
+                    hessian_symmetry_limit
+                ),
+            )
+            _assert_canonical_internal_basis(molecule, protocol["directions"])
+        if registered_direction_strategy in {
+            "cyclic_orthogonal_internal_basis_blocks",
+            "cyclic_full_rank_rademacher_pool_blocks",
+        }:
+            if not args.alternating_hvp_updates:
+                raise ValueError(
+                    "cyclic multidirection analytic training requires alternating H updates"
+                )
+            invalid_counts = [
+                molecule.molecule_id
+                for molecule in molecules
+                if molecule.expected_internal_dimension is None
+                or (
+                    registered_direction_strategy
+                    == "cyclic_orthogonal_internal_basis_blocks"
+                    and args.directions_per_step
+                    > int(molecule.expected_internal_dimension)
+                )
+                or (
+                    registered_direction_strategy
+                    == "cyclic_full_rank_rademacher_pool_blocks"
+                    and (
+                        registered_direction_pool_size is None
+                        or registered_direction_pool_size
+                        < int(molecule.expected_internal_dimension)
+                    )
+                )
+            ]
+            if invalid_counts:
+                raise ValueError(
+                    "multidirection pool/count is incompatible with the internal "
+                    "dimension for: "
+                    + ", ".join(invalid_counts)
+                )
+    rademacher_probe_pool_metrics: dict[
+        str, dict[str, float | int | str]
+    ] = {}
+    if (
+        registered_direction_strategy
+        == "cyclic_full_rank_rademacher_pool_blocks"
+    ):
+        assert registered_direction_pool_size is not None
+        assert registered_direction_pool_condition_max is not None
+        for molecule in molecules:
+            _, pool_metrics = _fixed_full_rank_rademacher_internal_probe_pool(
+                molecule,
+                pool_size=registered_direction_pool_size,
+                seed=args.seed,
+                condition_number_max=(
+                    registered_direction_pool_condition_max
+                ),
+            )
+            rademacher_probe_pool_metrics[molecule.molecule_id] = pool_metrics
     if args.direction_limit is not None:
         for molecule in molecules:
             molecule.directions = molecule.directions[: args.direction_limit]
@@ -1835,6 +4159,31 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         )
     context = _load_context(run_spec, density_args, device)
     context.model.to(torch.float64)
+    model_parameter_count = int(
+        sum(parameter.numel() for parameter in context.model.net.parameters())
+    )
+    model_trainable_parameter_count = int(
+        sum(
+            parameter.numel()
+            for parameter in context.model.net.parameters()
+            if parameter.requires_grad
+        )
+    )
+    if canonical_physics:
+        expected_model_class = str(protocol["baseline"]["model_class"])
+        expected_parameter_count = int(protocol["baseline"]["parameter_count"])
+        if (
+            context.model.net.__class__.__name__ != expected_model_class
+            or model_parameter_count != expected_parameter_count
+            or model_trainable_parameter_count != expected_parameter_count
+        ):
+            raise ValueError(
+                "Canonical scalar Graphformer identity failed: "
+                f"class={context.model.net.__class__.__name__} "
+                f"parameters={model_parameter_count} "
+                f"trainable={model_trainable_parameter_count}; expected "
+                f"{expected_model_class}/{expected_parameter_count}"
+            )
     source_payload = torch.load(run_spec.ckpt, map_location="cpu", weights_only=False)
     capacity_state = source_payload.get("complete_total_capacity")
     if capacity_state is None:
@@ -1846,19 +4195,43 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("Source checkpoint is not the fixed-step rebuild baseline")
     loss_config = protocol["loss"]
     weights = dict(loss_config["initial_weights"])
+    if canonical_physics:
+        if "lambda_G" not in weights or "lambda_rho" in weights:
+            raise ValueError(
+                "Canonical loss weights must name the Structures25 term lambda_G"
+            )
+        if args.lambda_g is None or args.lambda_rho is not None:
+            raise ValueError(
+                "Canonical training requires --lambda-g and forbids --lambda-rho"
+            )
+        # The optimizer internals keep the historical key so old checkpoint
+        # serialization remains readable; every canonical external artifact
+        # records this alias explicitly as lambda_G.
+        weights["lambda_rho"] = float(weights.pop("lambda_G"))
+        gradient_weight_override = args.lambda_g
+    else:
+        if args.lambda_g is not None:
+            raise ValueError("--lambda-g is reserved for canonical semantics")
+        gradient_weight_override = args.lambda_rho
     weights.setdefault("lambda_Q", 0.0)
     for key, override in (
         ("lambda_E", args.lambda_e),
         ("lambda_F", args.lambda_f),
-        ("lambda_rho", args.lambda_rho),
+        ("lambda_rho", gradient_weight_override),
         ("lambda_H", args.lambda_h),
         ("lambda_Q", args.lambda_q),
         ("lambda_spec", args.lambda_spec),
     ):
         if override is not None:
             weights[key] = float(override)
+    semantic_loss_weights = dict(weights)
+    if canonical_physics:
+        semantic_loss_weights["lambda_G"] = semantic_loss_weights.pop(
+            "lambda_rho"
+        )
     if args.require_complete_total_relaxed_hvp:
         failures = []
+        training_density_threshold = _training_density_stationarity_threshold(args)
         if direction_manifest is None:
             failures.append("a frozen structured direction manifest is required")
         if not args.implicit_density_parameter_response:
@@ -1872,12 +4245,42 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             failures.append("density-response unrolling is forbidden")
         if args.density_strict_threshold > 1.0e-8:
             failures.append("density strict threshold must be <=1e-8")
+        if training_density_threshold > 1.0e-8:
+            failures.append(
+                "training density stationarity threshold must be <=1e-8"
+            )
+        if training_density_threshold < args.density_strict_threshold:
+            failures.append(
+                "training density stationarity threshold must be >= the "
+                "density solver target"
+            )
         if args.direction_limit is not None:
             failures.append("direction truncation is forbidden")
         if args.analytic_relaxed_hvp:
-            if args.directions_per_step != 1:
+            if (
+                registered_direction_strategy == "internal_space_rademacher"
+                and args.directions_per_step != 1
+            ):
                 failures.append(
                     "analytic Hutchinson training requires directions-per-step=1"
+                )
+            if (
+                registered_direction_strategy
+                == "cyclic_orthogonal_internal_basis_blocks"
+                and args.directions_per_step <= 1
+            ):
+                failures.append(
+                    "cyclic orthogonal analytic training requires "
+                    "directions-per-step>1"
+                )
+            if (
+                registered_direction_strategy
+                == "cyclic_full_rank_rademacher_pool_blocks"
+                and args.directions_per_step <= 1
+            ):
+                failures.append(
+                    "cyclic Rademacher-pool analytic training requires "
+                    "directions-per-step>1"
                 )
             if args.direction_role != "all":
                 failures.append(
@@ -1907,6 +4310,17 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 if capacity_state.get("protocol_id") != protocol["protocol_id"]:
                     failures.append("capacity checkpoint protocol mismatch")
                 if (
+                    canonical_physics
+                    and capacity_state.get("protocol_sha256") != protocol_sha256
+                ):
+                    failures.append("capacity checkpoint protocol-hash mismatch")
+                if capacity_state.get(
+                    "physical_definition_id", LEGACY_PHYSICAL_DEFINITION_ID
+                ) != physical_definition_id:
+                    failures.append(
+                        "capacity checkpoint physical-definition mismatch"
+                    )
+                if (
                     capacity_state.get("direction_manifest_sha256")
                     != direction_manifest_hash
                 ):
@@ -1918,6 +4332,52 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     failures.append("capacity checkpoint molecule set/order mismatch")
                 if capacity_state.get("direction_role") != args.direction_role:
                     failures.append("capacity checkpoint direction role mismatch")
+                if (
+                    capacity_state.get(
+                        "training_direction_strategy",
+                        "internal_space_rademacher",
+                    )
+                    != registered_direction_strategy
+                ):
+                    failures.append(
+                        "capacity checkpoint direction strategy mismatch"
+                    )
+                if int(
+                    capacity_state.get(
+                        "directions_per_step",
+                        1,
+                    )
+                ) != int(args.directions_per_step):
+                    failures.append(
+                        "capacity checkpoint directions-per-step mismatch"
+                    )
+                if registered_direction_strategy in {
+                    "cyclic_orthogonal_internal_basis_blocks",
+                    "cyclic_full_rank_rademacher_pool_blocks",
+                }:
+                    checkpoint_step = int(capacity_state.get("step", -1))
+                    expected_cursor = args.directions_per_step * (
+                        _hvp_updates_before_step(
+                            checkpoint_step + 1,
+                            hvp_update_period=args.hvp_update_period,
+                            replay_update_period=args.replay_update_period,
+                        )
+                    )
+                    if int(
+                        capacity_state.get("hvp_direction_schedule_cursor", -1)
+                    ) != expected_cursor:
+                        failures.append(
+                            "capacity checkpoint direction schedule cursor mismatch"
+                        )
+                if (
+                    registered_direction_strategy
+                    == "cyclic_full_rank_rademacher_pool_blocks"
+                    and capacity_state.get("rademacher_probe_pool_metrics")
+                    != rademacher_probe_pool_metrics
+                ):
+                    failures.append(
+                        "capacity checkpoint Rademacher probe-pool mismatch"
+                    )
                 if (
                     bool(capacity_state.get("analytic_relaxed_hvp", False))
                     != args.analytic_relaxed_hvp
@@ -1949,6 +4409,103 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 if capacity_state.get("loss_weights") != weights:
                     failures.append("capacity checkpoint loss-weight mismatch")
+                if (
+                    canonical_physics
+                    and capacity_state.get("semantic_loss_weights")
+                    != semantic_loss_weights
+                ):
+                    failures.append(
+                        "capacity checkpoint semantic loss-weight mismatch"
+                    )
+                if (
+                    canonical_physics
+                    and capacity_state.get("code_provenance")
+                    != code_provenance
+                ):
+                    failures.append(
+                        "capacity checkpoint canonical-code provenance mismatch"
+                    )
+                if (
+                    canonical_physics
+                    and capacity_state.get("reference_label_indices")
+                    != {
+                        molecule.molecule_id: molecule.reference_label_index
+                        for molecule in molecules
+                    }
+                ):
+                    failures.append(
+                        "capacity checkpoint common label-index provenance mismatch"
+                    )
+                if canonical_physics and (
+                    capacity_state.get("model_parameter_count")
+                    != model_parameter_count
+                    or capacity_state.get("model_trainable_parameter_count")
+                    != model_trainable_parameter_count
+                ):
+                    failures.append(
+                        "capacity checkpoint scalar Graphformer parameter-count mismatch"
+                    )
+                if (
+                    canonical_physics
+                    and capacity_state.get("hvp_calibration")
+                    != canonical_calibration_provenance
+                ):
+                    failures.append(
+                        "capacity checkpoint HVP-calibration provenance mismatch"
+                    )
+                if (
+                    bool(capacity_state.get("egf_label_density_replay", False))
+                    != args.egf_label_density_replay
+                ):
+                    failures.append("capacity checkpoint E/G/F replay-branch mismatch")
+                if protocol.get("protocol_id") == "qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3":
+                    replay_lr = (
+                        args.replay_learning_rate
+                        if args.replay_learning_rate is not None
+                        else args.learning_rate
+                    )
+                    checkpoint_numeric = {
+                        "replay_learning_rate": replay_lr,
+                        "hvp_learning_rate": (
+                            args.hvp_learning_rate
+                            if args.hvp_learning_rate is not None
+                            else args.learning_rate
+                        ),
+                        "gradient_clip_norm": args.gradient_clip_norm,
+                        "weight_decay": args.weight_decay,
+                        "replay_update_period": args.replay_update_period,
+                        "density_predictor_damping": args.density_predictor_damping,
+                        "density_parameter_trust_threshold": (
+                            args.density_parameter_trust_threshold
+                        ),
+                        "density_parameter_trust_minimum_scale": (
+                            args.density_parameter_trust_minimum_scale
+                        ),
+                        "density_predictor_corrector_threshold": (
+                            args.density_predictor_corrector_threshold
+                        ),
+                    }
+                    for key, expected in checkpoint_numeric.items():
+                        recorded = capacity_state.get(key)
+                        if recorded is None or not math.isclose(
+                            float(recorded),
+                            float(expected),
+                            rel_tol=0.0,
+                            abs_tol=1.0e-15,
+                        ):
+                            failures.append(f"capacity checkpoint {key} mismatch")
+                    checkpoint_boolean = {
+                        "density_parameter_trust_region": (
+                            args.density_parameter_trust_region
+                        ),
+                        "density_predictor_corrector_first": (
+                            args.density_predictor_corrector_first
+                        ),
+                        "alternating_hvp_updates": args.alternating_hvp_updates,
+                    }
+                    for key, expected in checkpoint_boolean.items():
+                        if capacity_state.get(key) is not expected:
+                            failures.append(f"capacity checkpoint {key} mismatch")
         elif args.resume_capacity_optimizer:
             failures.append(
                 "--resume-capacity-optimizer requires a bound capacity checkpoint"
@@ -1958,6 +4515,20 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             and args.root_source_checkpoint_sha256 != source_checkpoint_sha256
         ):
             failures.append("root source hash does not match untouched checkpoint")
+        if args.skip_resume_initial_full_hessian:
+            if not isinstance(capacity_state, dict) or not args.resume_capacity_optimizer:
+                failures.append(
+                    "skipping the resume initial Hessian requires a bound "
+                    "capacity checkpoint and optimizer resume"
+                )
+            elif not capacity_state.get("root_initial_full_hessian_metrics"):
+                failures.append(
+                    "skipping the resume initial Hessian requires frozen root metrics"
+                )
+            if args.evaluation_mode != "full":
+                failures.append(
+                    "skipping the resume initial Hessian requires final full evaluation"
+                )
         if args.three_body_geometry_residual or args.freeze_base_model:
             failures.append("the Graphformer-only branch forbids auxiliary residual heads")
         if context.model.net.__class__.__name__ != "Graphformer":
@@ -1971,6 +4542,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             )
     source_capacity_step = (
         int(capacity_state["step"]) if isinstance(capacity_state, dict) else 0
+    )
+    restored_center_density_count = _restore_center_density_checkpoint_state(
+        molecules,
+        capacity_state if isinstance(capacity_state, dict) else None,
+        source_capacity_step,
     )
     root_source_checkpoint_sha256 = (
         str(capacity_state["root_source_checkpoint_sha256"])
@@ -2024,9 +4600,14 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             if parameter.requires_grad
         )
     parameters = [parameter for _, parameter in named_parameters]
+    replay_learning_rate = (
+        args.replay_learning_rate
+        if args.replay_learning_rate is not None
+        else args.learning_rate
+    )
     optimizer = torch.optim.AdamW(
         parameters,
-        lr=args.learning_rate,
+        lr=replay_learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.weight_decay,
     )
@@ -2049,7 +4630,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             )
         optimizer.load_state_dict(capacity_state["optimizer_state_dict"])
         for parameter_group in optimizer.param_groups:
-            parameter_group["lr"] = args.learning_rate
+            parameter_group["lr"] = replay_learning_rate
             parameter_group["betas"] = (args.adam_beta1, args.adam_beta2)
             parameter_group["weight_decay"] = args.weight_decay
         if hvp_optimizer is not None:
@@ -2069,12 +4650,38 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 parameter_group["weight_decay"] = args.weight_decay
     bundle_cache = IntegralBundleCache(context, args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_definition = (
-        "complete-total KKT-relaxed HVP internal-Hutchinson fit with "
-        "directional numerical PySCF integral response"
-        if args.analytic_relaxed_hvp
-        else "block-coordinate complete-total relaxed-force secant capacity fit"
-    )
+    if canonical_physics:
+        if args.integral_derivative_backend == "torch_autograd_dqc":
+            checkpoint_definition = (
+                "canonical Structures25 E/G functional-jet replay plus complete-total "
+                "model-self-consistent relaxed F/H from one scalar owner; internal-projected "
+                "KKT-Hutchinson H objective with DQC/libcint Torch-autograd nuclear-coordinate "
+                "integrals and Torch double backward; no JAX or finite-difference primary path"
+            )
+        elif args.integral_derivative_backend == "pyscfad_autodiff":
+            checkpoint_definition = (
+                "canonical Structures25 E/G functional-jet replay plus complete-total "
+                "model-self-consistent relaxed F/H from one scalar owner; internal-projected "
+                "KKT-Hutchinson H objective with PySCFAD/JAX nuclear-coordinate integral "
+                "derivatives and torch parameter autograd; no finite-difference primary path"
+            )
+        else:
+            checkpoint_definition = (
+                "canonical Structures25 E/G functional-jet replay plus complete-total "
+                "model-self-consistent relaxed F/H from one scalar owner; internal-projected "
+                "KKT-Hutchinson H objective with directional numerical PySCF integral response"
+            )
+    else:
+        checkpoint_definition = (
+            "legacy complete-total KKT-relaxed HVP internal-Hutchinson fit with "
+            "directional numerical PySCF integral response"
+            if args.analytic_relaxed_hvp
+            else "legacy block-coordinate complete-total relaxed-force secant capacity fit"
+        )
+        if args.egf_label_density_replay:
+            checkpoint_definition += (
+                " and fixed-PBE-density complete-total E/G/F replay"
+            )
 
     density_rows = (
         _refresh_base_densities(
@@ -2089,16 +4696,28 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             context, molecules, density_args, refresh_index=0
         )
     )
-    _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
-    hessian_rows = (
-        _analytic_full_hessian_metrics(
-            context, bundle_cache, molecules, step=source_capacity_step
-        )
-        if args.analytic_relaxed_hvp
-        else _full_hessian_metrics(
-            context, bundle_cache, molecules, step=source_capacity_step
-        )
+    for row in density_rows:
+        row["physical_definition_id"] = physical_definition_id
+    _assert_density_refresh_cost_gates(
+        density_rows, protocol, density_args, source_capacity_step
     )
+    _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
+    hessian_rows = []
+    if (
+        args.evaluation_mode == "full"
+        and not args.skip_resume_initial_full_hessian
+    ):
+        hessian_rows = (
+            _analytic_full_hessian_metrics(
+                context, bundle_cache, molecules, step=source_capacity_step
+            )
+            if args.analytic_relaxed_hvp
+            else _full_hessian_metrics(
+                context, bundle_cache, molecules, step=source_capacity_step
+            )
+        )
+    for row in hessian_rows:
+        row["physical_definition_id"] = physical_definition_id
     _write_csv(args.output_dir / "full_hessian_metrics.csv", hessian_rows)
     initial_metrics_for_checkpoint = [
         row for row in hessian_rows if row["step"] == source_capacity_step
@@ -2110,26 +4729,129 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         else initial_metrics_for_checkpoint
     )
     checkpoint_provenance = {
+        "physical_definition_id": physical_definition_id,
+        "semantic_version": protocol.get("semantic_version"),
+        "code_provenance": code_provenance,
+        "model_class": context.model.net.__class__.__name__,
+        "model_parameter_count": model_parameter_count,
+        "model_trainable_parameter_count": model_trainable_parameter_count,
+        "optimizer_state_origin": (
+            "resumed_same_canonical_v4"
+            if canonical_physics and capacity_state is not None
+            else "fresh_from_source_weights"
+        ),
+        "legacy_capacity_optimizer_loaded": False if canonical_physics else None,
         "root_source_checkpoint_sha256": root_source_checkpoint_sha256,
         "protocol_id": protocol["protocol_id"],
         "protocol_sha256": protocol_sha256,
         "manifest_sha256": manifest_sha256,
         "direction_manifest_sha256": direction_manifest_hash,
         "molecules": [molecule.molecule_id for molecule in molecules],
+        "reference_label_indices": {
+            molecule.molecule_id: molecule.reference_label_index
+            for molecule in molecules
+        },
+        "reference_record": (
+            protocol.get("reference_record") if canonical_physics else None
+        ),
         "direction_role": args.direction_role,
+        "training_direction_strategy": registered_direction_strategy,
+        "directions_per_step": args.directions_per_step,
+        "hvp_direction_schedule": (
+            "cumulative_hvp_update_ordinal"
+            if registered_direction_strategy
+            in {
+                "cyclic_orthogonal_internal_basis_blocks",
+                "cyclic_full_rank_rademacher_pool_blocks",
+            }
+            else "cumulative_parameter_step"
+        ),
+        "hvp_direction_schedule_cursor": (
+            args.directions_per_step
+            * _hvp_updates_before_step(
+                source_capacity_step + 1,
+                hvp_update_period=args.hvp_update_period,
+                replay_update_period=args.replay_update_period,
+            )
+            if registered_direction_strategy
+            in {
+                "cyclic_orthogonal_internal_basis_blocks",
+                "cyclic_full_rank_rademacher_pool_blocks",
+            }
+            else None
+        ),
+        "hvp_backprop_direction_evaluations": (
+            int(
+                capacity_state.get("hvp_backprop_direction_evaluations", 0)
+            )
+            if isinstance(capacity_state, dict)
+            else 0
+        ),
+        "hvp_backprop_unique_basis_indices": (
+            list(capacity_state.get("hvp_backprop_unique_basis_indices", []))
+            if isinstance(capacity_state, dict)
+            else []
+        ),
+        "rademacher_probe_pool_metrics": rademacher_probe_pool_metrics,
+        "internal_basis_metrics": {
+            molecule.molecule_id: molecule.internal_basis_metrics
+            for molecule in molecules
+        },
         "strict_active_density_refresh": args.strict_active_density_refresh,
+        "density_solver_target": args.density_strict_threshold,
+        "training_density_stationarity_threshold": (
+            _training_density_stationarity_threshold(args)
+        ),
         "implicit_density_parameter_response": (
             args.implicit_density_parameter_response
         ),
         "analytic_relaxed_hvp": args.analytic_relaxed_hvp,
         "symmetric_matrix_power_mode": symmetric_matrix_power_mode,
+        "analytic_response_residual_tolerance": (
+            args.analytic_response_residual_tolerance
+        ),
+        "analytic_response_constraint_tolerance": (
+            args.analytic_response_constraint_tolerance
+        ),
+        "center_electron_number_residual_max": (
+            args.center_electron_number_residual_max
+        ),
         "density_parameter_response_predictor": (
             args.density_parameter_response_predictor
         ),
+        "density_predictor_damping": args.density_predictor_damping,
+        "density_parameter_trust_region": args.density_parameter_trust_region,
+        "density_parameter_trust_threshold": (
+            args.density_parameter_trust_threshold
+        ),
+        "density_parameter_trust_minimum_scale": (
+            args.density_parameter_trust_minimum_scale
+        ),
+        "density_predictor_corrector_first": (
+            args.density_predictor_corrector_first
+        ),
+        "density_predictor_corrector_threshold": (
+            args.density_predictor_corrector_threshold
+        ),
+        "replay_learning_rate": replay_learning_rate,
+        "hvp_learning_rate": (
+            args.hvp_learning_rate
+            if args.hvp_learning_rate is not None
+            else args.learning_rate
+        ),
+        "gradient_clip_norm": args.gradient_clip_norm,
+        "gradient_clipping_enabled": args.gradient_clip_norm > 0.0,
+        "gradient_clip_arm": selected_gradient_clip_arm,
+        "weight_decay": args.weight_decay,
+        "alternating_hvp_updates": args.alternating_hvp_updates,
+        "replay_update_period": args.replay_update_period,
+        "egf_label_density_replay": args.egf_label_density_replay,
         "proxy_hvp_fallback_allowed": False,
         "validation_accessed": False,
         "test100_accessed": False,
         "loss_weights": weights,
+        "semantic_loss_weights": semantic_loss_weights,
+        "hvp_calibration": canonical_calibration_provenance,
         "root_initial_full_hessian_metrics": (
             root_initial_metrics_for_checkpoint
         ),
@@ -2147,8 +4869,26 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             geometry_residual,
             definition=checkpoint_definition,
             provenance_update=checkpoint_provenance,
+            center_density_state=_center_density_checkpoint_state(
+                molecules,
+                source_capacity_step,
+                args.density_strict_threshold,
+            ),
         )
     loss_rows = []
+    hvp_backprop_direction_evaluations = int(
+        capacity_state.get("hvp_backprop_direction_evaluations", 0)
+        if isinstance(capacity_state, dict)
+        else 0
+    )
+    hvp_backprop_basis_indices = set(
+        int(value)
+        for value in (
+            capacity_state.get("hvp_backprop_unique_basis_indices", [])
+            if isinstance(capacity_state, dict)
+            else []
+        )
+    )
     refresh_index = 0
     density_parameter_step = source_capacity_step
     refresh_needed = False
@@ -2161,26 +4901,72 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             torch.cuda.reset_peak_memory_stats(device)
         reported_step = source_capacity_step + step
         current_parameter_step = reported_step - 1
-        selected_by_molecule = {
-            molecule.molecule_id: (
-                [
-                    _hutchinson_direction(
-                        molecule,
-                        step=reported_step + molecule_offset,
-                        seed=args.seed,
-                    )
-                ]
-                if args.analytic_relaxed_hvp
-                else _selected_directions(
+        update_kind = "joint"
+        if hvp_optimizer is not None:
+            update_kind = alternating_update_kind(
+                reported_step,
+                hvp_update_period=args.hvp_update_period,
+                replay_update_period=args.replay_update_period,
+            )
+        diagnostics_due = args.gradient_diagnostics_interval > 0 and (
+            step == 1 or step % args.gradient_diagnostics_interval == 0
+        )
+        hvp_update_ordinal = (
+            _hvp_updates_before_step(
+                reported_step,
+                hvp_update_period=args.hvp_update_period,
+                replay_update_period=args.replay_update_period,
+            )
+            if hvp_optimizer is not None
+            else current_parameter_step
+        )
+        selected_by_molecule = {}
+        for molecule_offset, molecule in enumerate(molecules):
+            if not args.analytic_relaxed_hvp:
+                selected = _selected_directions(
                     molecule,
                     reported_step + molecule_offset,
                     args.directions_per_step,
                     args.direction_repeat_steps,
                     args.seed,
                 )
-            )
-            for molecule_offset, molecule in enumerate(molecules)
-        }
+            elif registered_direction_strategy == "internal_space_rademacher":
+                selected = [
+                    _hutchinson_direction(
+                        molecule,
+                        step=reported_step + molecule_offset,
+                        seed=args.seed,
+                    )
+                ]
+            elif (
+                registered_direction_strategy
+                == "cyclic_orthogonal_internal_basis_blocks"
+            ):
+                selected = _cyclic_orthogonal_internal_directions(
+                    molecule,
+                    hvp_update_ordinal=hvp_update_ordinal,
+                    count=args.directions_per_step,
+                    seed=args.seed,
+                )
+            elif (
+                registered_direction_strategy
+                == "cyclic_full_rank_rademacher_pool_blocks"
+            ):
+                assert registered_direction_pool_size is not None
+                assert registered_direction_pool_condition_max is not None
+                selected = _cyclic_full_rank_rademacher_internal_directions(
+                    molecule,
+                    hvp_update_ordinal=hvp_update_ordinal,
+                    count=args.directions_per_step,
+                    pool_size=registered_direction_pool_size,
+                    seed=args.seed,
+                    condition_number_max=(
+                        registered_direction_pool_condition_max
+                    ),
+                )
+            else:  # pragma: no cover - rejected during protocol validation
+                raise AssertionError(registered_direction_strategy)
+            selected_by_molecule[molecule.molecule_id] = selected
         refresh_scope = _density_refresh_scope(
             strict_active=args.strict_active_density_refresh,
             current_parameter_step=current_parameter_step,
@@ -2212,6 +4998,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 refreshed = _refresh_densities(
                     context, molecules, density_args, refresh_index=refresh_index
                 )
+            for row in refreshed:
+                row["physical_definition_id"] = physical_definition_id
+            _assert_density_refresh_cost_gates(
+                refreshed, protocol, density_args, source_capacity_step
+            )
             density_rows.extend(refreshed)
             _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
             density_parameter_step = current_parameter_step
@@ -2233,9 +5024,36 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "curvature": [],
             "spectrum": [],
         }
+        memory_safe_hvp_microbatch = bool(
+            canonical_physics
+            and args.analytic_relaxed_hvp
+            and registered_direction_strategy
+            in {
+                "cyclic_orthogonal_internal_basis_blocks",
+                "cyclic_full_rank_rademacher_pool_blocks",
+            }
+        )
+        need_hvp_parameter_gradients = bool(
+            memory_safe_hvp_microbatch
+            and (update_kind == "hvp" or diagnostics_due)
+        )
+        accumulated_hvp_gradients: list[torch.Tensor | None] | None = (
+            [None for _ in parameters]
+            if need_hvp_parameter_gradients
+            else None
+        )
+        step_hvp_direction_indices: list[int] = []
         active_directions = []
         analytic_response_rows: list[dict[str, float | int | str | bool]] = []
         max_density_norm = 0.0
+        max_label_density_gradient_norm = 0.0
+        max_structures25_gradient_error_norm = 0.0
+        max_reference_euler_residual_norm = 0.0
+        max_reference_euler_residual_rms = 0.0
+        max_reference_euler_residual_component = 0.0
+        max_gradient_identity_residual = 0.0
+        max_matched_total_energy_closure = 0.0
+        max_label_electron_number_residual = 0.0
         response_enabled = (
             args.implicit_density_parameter_response
             or args.density_response_unroll_steps > 0
@@ -2244,63 +5062,164 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             float(weights["lambda_E"]) != 0.0
             or float(weights["lambda_Q"]) != 0.0
         )
+        hvp_microbatch_count = sum(
+            len(selected_by_molecule[molecule.molecule_id])
+            for molecule in molecules
+        )
         for molecule_offset, molecule in enumerate(molecules):
-            base = _evaluate_point_graph(
-                context, bundle_cache, molecule, molecule.base, create_graph=True
-            )
-            base_envelope = base
-            if response_enabled and needs_envelope_energy:
-                base_envelope = _evaluate_point_graph(
+            if args.egf_label_density_replay:
+                replay = _evaluate_point_graph(
                     context,
                     bundle_cache,
                     molecule,
-                    molecule.base,
+                    _label_density_replay_point(molecule),
                     create_graph=True,
                     attach_density_parameter_response=False,
                 )
-            component_values["energy"].append(
-                normalized_energy_l1(
-                    base_envelope.energies.total_energy,
-                    molecule.pbe_total_energy,
-                    absolute_scale_hartree=float(
-                        loss_config["energy"]["absolute_scale_hartree"]
+                replay_envelope = replay
+                if molecule.base is None:
+                    raise RuntimeError("implicit HVP training requires a center density")
+                max_density_norm = max(
+                    max_density_norm, float(molecule.base.final_gradient_norm)
+                )
+                max_label_density_gradient_norm = max(
+                    max_label_density_gradient_norm,
+                    float(replay.projected_density_gradient_norm.detach().cpu()),
+                )
+            else:
+                replay = _evaluate_point_graph(
+                    context, bundle_cache, molecule, molecule.base, create_graph=True
+                )
+                replay_envelope = replay
+                if response_enabled and needs_envelope_energy:
+                    replay_envelope = _evaluate_point_graph(
+                        context,
+                        bundle_cache,
+                        molecule,
+                        molecule.base,
+                        create_graph=True,
+                        attach_density_parameter_response=False,
+                    )
+                max_density_norm = max(
+                    max_density_norm,
+                    float(
+                        replay.projected_density_gradient_norm.detach().cpu()
                     ),
                 )
-            )
-            component_values["force"].append(
-                mixed_absolute_relative_l1(
-                    base.force,
-                    torch.as_tensor(molecule.pbe_force, dtype=base.force.dtype),
-                    absolute_scale=float(
-                        loss_config["force"]["absolute_scale_hartree_per_bohr"]
-                    ),
-                    relative_floor=float(
-                        loss_config["force"]["relative_rms_floor_hartree_per_bohr"]
-                    ),
-                    relative_fraction=float(
-                        loss_config["force"]["absolute_relative_mix"]
+            if canonical_physics:
+                canonical_terms = _canonical_structures25_replay_terms(
+                    replay,
+                    molecule,
+                    loss_config,
+                )
+                _assert_canonical_replay_closures(
+                    canonical_terms,
+                    protocol["canonical_replay_closure_gates"],
+                    molecule.molecule_id,
+                )
+                component_values["energy"].append(
+                    canonical_terms["energy_loss"]
+                )
+                # ``density`` is retained as the historical CSV/component key,
+                # but in the canonical definition it is exactly the direct
+                # Structures25 G-label loss, never a stationarity residual.
+                component_values["density"].append(
+                    canonical_terms["gradient_loss"]
+                )
+                max_structures25_gradient_error_norm = max(
+                    max_structures25_gradient_error_norm,
+                    float(
+                        canonical_terms[
+                            "projected_gradient_error_norm"
+                        ].detach().cpu()
                     ),
                 )
-            )
-            component_values["density"].append(
-                (base.projected_density_gradient_norm / args.density_loss_scale) ** 2
-            )
-            max_density_norm = max(
-                max_density_norm,
-                float(base.projected_density_gradient_norm.detach().cpu()),
-            )
+                max_reference_euler_residual_norm = max(
+                    max_reference_euler_residual_norm,
+                    float(
+                        canonical_terms[
+                            "reference_euler_residual_norm"
+                        ].detach().cpu()
+                    ),
+                )
+                max_reference_euler_residual_rms = max(
+                    max_reference_euler_residual_rms,
+                    float(
+                        canonical_terms[
+                            "reference_euler_residual_rms"
+                        ].detach().cpu()
+                    ),
+                )
+                max_reference_euler_residual_component = max(
+                    max_reference_euler_residual_component,
+                    float(
+                        canonical_terms[
+                            "reference_euler_residual_max_abs"
+                        ].detach().cpu()
+                    ),
+                )
+                max_gradient_identity_residual = max(
+                    max_gradient_identity_residual,
+                    float(
+                        canonical_terms[
+                            "gradient_identity_max_abs"
+                        ].detach().cpu()
+                    ),
+                )
+                max_matched_total_energy_closure = max(
+                    max_matched_total_energy_closure,
+                    float(
+                        canonical_terms[
+                            "matched_total_energy_closure_abs"
+                        ].detach().cpu()
+                    ),
+                )
+                max_label_electron_number_residual = max(
+                    max_label_electron_number_residual,
+                    float(
+                        canonical_terms[
+                            "label_electron_number_residual_abs"
+                        ].detach().cpu()
+                    ),
+                )
+            else:
+                component_values["energy"].append(
+                    normalized_energy_l1(
+                        replay_envelope.energies.total_energy,
+                        molecule.pbe_total_energy,
+                        absolute_scale_hartree=float(
+                            loss_config["energy"]["absolute_scale_hartree"]
+                        ),
+                    )
+                )
+                component_values["density"].append(
+                    (
+                        replay.projected_density_gradient_norm
+                        / args.density_loss_scale
+                    )
+                    ** 2
+                )
+            canonical_center = None
             selected = selected_by_molecule[molecule.molecule_id]
             for direction in selected:
                 if args.analytic_relaxed_hvp:
-                    hvp, density_norms, analytic_diagnostics = (
-                        _analytic_relaxed_direction_prediction(
-                            context,
-                            bundle_cache,
-                            molecule,
-                            direction,
-                            create_graph=True,
-                        )
+                    (
+                        hvp,
+                        density_norms,
+                        analytic_diagnostics,
+                        center,
+                    ) = _analytic_relaxed_direction_prediction_with_center(
+                        context,
+                        bundle_cache,
+                        molecule,
+                        direction,
+                        create_graph=(
+                            not memory_safe_hvp_microbatch
+                            or need_hvp_parameter_gradients
+                        ),
                     )
+                    if canonical_physics and not memory_safe_hvp_microbatch:
+                        canonical_center = center
                     analytic_response_rows.append(analytic_diagnostics)
                     plus_energy = None
                     minus_energy = None
@@ -2370,23 +5289,81 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     direction.target_hvp, dtype=hvp.dtype, device=hvp.device
                 )
                 if args.analytic_relaxed_hvp:
-                    internal_dimension = int(
-                        molecule.expected_internal_dimension
-                    )
                     absolute_scale = float(
                         loss_config["hvp"][
                             "absolute_scale_hartree_per_bohr2"
                         ]
                     )
-                    component_values["hvp"].append(
-                        hutchinson_internal_frobenius_squared_loss(
-                            hvp,
-                            target_hvp,
-                            internal_dimension=internal_dimension,
-                            reduction="mean_internal_matrix",
+                    if canonical_physics:
+                        internal_basis = torch.as_tensor(
+                            np.stack(
+                                [
+                                    item.vector.reshape(-1)
+                                    for item in sorted(
+                                        molecule.directions,
+                                        key=lambda item: item.index,
+                                    )
+                                ]
+                            ),
+                            dtype=hvp.dtype,
+                            device=hvp.device,
                         )
-                        / absolute_scale**2
-                    )
+                        hvp_component_loss = (
+                            hutchinson_internal_projected_frobenius_squared_loss(
+                                hvp,
+                                target_hvp,
+                                internal_basis,
+                                reduction="mean_internal_matrix",
+                            )
+                            / absolute_scale**2
+                        )
+                    else:
+                        internal_dimension = int(
+                            molecule.expected_internal_dimension
+                        )
+                        hvp_component_loss = (
+                            hutchinson_internal_frobenius_squared_loss(
+                                hvp,
+                                target_hvp,
+                                internal_dimension=internal_dimension,
+                                reduction="mean_internal_matrix",
+                            )
+                            / absolute_scale**2
+                        )
+                    if memory_safe_hvp_microbatch:
+                        component_values["hvp"].append(
+                            hvp_component_loss.detach()
+                        )
+                        step_hvp_direction_indices.append(int(direction.index))
+                        if need_hvp_parameter_gradients:
+                            assert accumulated_hvp_gradients is not None
+                            weighted_microbatch = (
+                                float(weights["lambda_H"])
+                                * hvp_component_loss
+                                / float(hvp_microbatch_count)
+                            )
+                            microbatch_gradients = torch.autograd.grad(
+                                weighted_microbatch,
+                                parameters,
+                                allow_unused=True,
+                            )
+                            for parameter_index, gradient in enumerate(
+                                microbatch_gradients,
+                            ):
+                                if gradient is not None:
+                                    detached_gradient = gradient.detach()
+                                    accumulator = accumulated_hvp_gradients[
+                                        parameter_index
+                                    ]
+                                    if accumulator is None:
+                                        accumulated_hvp_gradients[
+                                            parameter_index
+                                        ] = detached_gradient.clone()
+                                    else:
+                                        accumulator.add_(detached_gradient)
+                            del weighted_microbatch, microbatch_gradients
+                    else:
+                        component_values["hvp"].append(hvp_component_loss)
                 else:
                     hvp_loss_function = (
                         mixed_absolute_relative_rmse
@@ -2412,9 +5389,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                             ),
                         )
                     )
-                component_values["density"].extend(
-                    (norm / args.density_loss_scale) ** 2 for norm in density_norms
-                )
+                if not canonical_physics:
+                    component_values["density"].extend(
+                        (norm / args.density_loss_scale) ** 2
+                        for norm in density_norms
+                    )
                 if direction.kind == "low_mode":
                     component_values["spectrum"].append(
                         low_mode_curvature_loss(
@@ -2438,10 +5417,96 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 active_directions.append(
                     f"{molecule.molecule_id}:{direction.kind}:{direction.index}"
                 )
+                if memory_safe_hvp_microbatch:
+                    center = None
+                    hvp = None
+                    target_hvp = None
+                    hvp_component_loss = None
+                    density_norms = []
+                    gc.collect()
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
 
+            if canonical_physics:
+                if memory_safe_hvp_microbatch:
+                    # The H micrographs were deliberately released one at a
+                    # time. Rebuild one direction-independent center graph for
+                    # the canonical relaxed-force value/diagnostics.
+                    canonical_center = _evaluate_point_graph(
+                        context,
+                        bundle_cache,
+                        molecule,
+                        molecule.base,
+                        create_graph=True,
+                    )
+                if canonical_center is None:
+                    raise RuntimeError(
+                        "canonical relaxed-force training requires the same "
+                        "model-self-consistent center used by analytic HVP"
+                    )
+                force_prediction = canonical_center.force
+            else:
+                force_prediction = replay.force
+            component_values["force"].append(
+                mixed_absolute_relative_l1(
+                    force_prediction,
+                    torch.as_tensor(
+                        molecule.pbe_force,
+                        dtype=force_prediction.dtype,
+                        device=force_prediction.device,
+                    ),
+                    absolute_scale=float(
+                        loss_config["force"][
+                            "absolute_scale_hartree_per_bohr"
+                        ]
+                    ),
+                    relative_floor=float(
+                        loss_config["force"][
+                            "relative_rms_floor_hartree_per_bohr"
+                        ]
+                    ),
+                    relative_fraction=float(
+                        loss_config["force"][
+                            "relative_fraction"
+                            if canonical_physics
+                            else "absolute_relative_mix"
+                        ]
+                    ),
+                )
+            )
+
+        maximum_response_correction_fraction = max(
+            (
+                float(item["response_correction_fraction_of_relaxed_norm"])
+                for item in analytic_response_rows
+            ),
+            default=0.0,
+        )
+        maximum_cancellation_index = max(
+            (
+                float(item["cancellation_index"])
+                for item in analytic_response_rows
+            ),
+            default=0.0,
+        )
+        if (
+            maximum_response_correction_fraction
+            > args.response_correction_fraction_max
+        ):
+            raise RuntimeError(
+                "Density-response correction fraction exceeds fail-closed "
+                f"threshold: {maximum_response_correction_fraction:.6g} > "
+                f"{args.response_correction_fraction_max:.6g}"
+            )
+        if maximum_cancellation_index > args.cancellation_index_max:
+            raise RuntimeError(
+                "Partial/response cancellation index exceeds fail-closed "
+                f"threshold: {maximum_cancellation_index:.6g} > "
+                f"{args.cancellation_index_max:.6g}"
+            )
         _assert_training_density_stationarity(
             max_density_norm,
-            args.density_strict_threshold,
+            _training_density_stationarity_threshold(args),
             enabled=args.strict_active_density_refresh,
         )
         components = {}
@@ -2463,25 +5528,41 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "curvature": float(weights["lambda_Q"]) * components["curvature"],
             "spectrum": float(weights["lambda_spec"]) * components["spectrum"],
         }
-        update_kind = "joint"
-        backward_terms = weighted
-        if hvp_optimizer is not None:
-            update_kind = alternating_update_kind(
-                reported_step,
-                hvp_update_period=args.hvp_update_period,
-                replay_update_period=args.replay_update_period,
-            )
-            if update_kind == "hvp":
-                backward_terms = {"hvp": weighted["hvp"]}
-            else:
-                backward_terms = {
-                    name: value for name, value in weighted.items() if name != "hvp"
-                }
+        backward_terms = _select_backward_terms(
+            weighted,
+            alternating_hvp_updates=hvp_optimizer is not None,
+            update_kind=update_kind,
+        )
+        component_symbols = {
+            "energy": "E",
+            "density": "G",
+            "force": "F",
+            "hvp": "H",
+            "curvature": "Q",
+            "spectrum": "spectrum",
+        }
+        weight_keys = {
+            "energy": "lambda_E",
+            "density": "lambda_rho",
+            "force": "lambda_F",
+            "hvp": "lambda_H",
+            "curvature": "lambda_Q",
+            "spectrum": "lambda_spec",
+        }
+        computed_components = [
+            component_symbols[name]
+            for name, values in component_values.items()
+            if values
+        ]
+        backpropagated_components = [
+            component_symbols[name]
+            for name in backward_terms
+            if component_values[name]
+            and float(weights[weight_keys[name]]) != 0.0
+        ]
         total_loss = torch.stack(list(backward_terms.values())).sum()
         diagnostics = {}
-        if args.gradient_diagnostics_interval > 0 and (
-            step == 1 or step % args.gradient_diagnostics_interval == 0
-        ):
+        if diagnostics_due:
             diagnostic_terms = {
                 name: value
                 for name, value in weighted.items()
@@ -2497,10 +5578,25 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 ])
                 != 0.0
             }
+            precomputed_diagnostic_gradients = None
+            if memory_safe_hvp_microbatch:
+                diagnostic_terms.pop("hvp", None)
+                if accumulated_hvp_gradients is None:
+                    raise RuntimeError(
+                        "H gradient diagnostics require accumulated microbatch gradients"
+                    )
+                precomputed_diagnostic_gradients = {
+                    "hvp": tuple(accumulated_hvp_gradients)
+                }
+            if canonical_physics:
+                diagnostic_terms["aggregate_egf"] = torch.stack(
+                    [weighted[name] for name in ("energy", "density", "force")]
+                ).sum()
             diagnostics = parameter_gradient_diagnostics(
                 diagnostic_terms,
                 parameters,
                 parameter_names=[name for name, _ in named_parameters],
+                precomputed_gradients=precomputed_diagnostic_gradients,
             )
         balance_diagnostics = {}
         if device.type == "cuda":
@@ -2518,8 +5614,19 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 curvature_loss,
                 parameters,
             )
+        elif memory_safe_hvp_microbatch and update_kind == "hvp":
+            if accumulated_hvp_gradients is None:
+                raise RuntimeError("H update lacks accumulated microbatch gradients")
+            for parameter, gradient in zip(
+                parameters, accumulated_hvp_gradients, strict=True
+            ):
+                # Preserve the semantics of an ordinary ``backward`` call:
+                # AdamW must skip parameters unused by every H microbatch,
+                # rather than seeing a fabricated zero gradient and applying
+                # decoupled weight decay to them.
+                parameter.grad = gradient
         else:
-            total_loss.backward()
+            assign_parameter_only_gradients(total_loss, parameters)
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         backward_seconds = time.perf_counter() - backward_started
@@ -2529,10 +5636,17 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             for item in implicit_diagnostics
             if int(item["iterations"]) > 0
         ]
-        gradient_norm = torch.nn.utils.clip_grad_norm_(parameters, args.gradient_clip_norm)
+        gradient_clip_diagnostics = _clip_parameter_gradients_with_diagnostics(
+            parameters,
+            args.gradient_clip_norm,
+        )
+        capture_parameter_steps = bool(
+            args.density_parameter_response_predictor
+            or record_optimizer_step_diagnostics
+        )
         old_parameter_values = (
             [parameter.detach().clone() for parameter in parameters]
-            if args.density_parameter_response_predictor
+            if capture_parameter_steps
             else []
         )
         if device.type == "cuda":
@@ -2543,22 +5657,91 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             hvp_optimizer.step()
         else:
             optimizer.step()
+        new_parameter_values = (
+            [parameter.detach().clone() for parameter in parameters]
+            if capture_parameter_steps
+            else []
+        )
+        optimizer_step_diagnostics = (
+            _optimizer_parameter_step_diagnostics(
+                named_parameters,
+                old_parameter_values,
+                new_parameter_values,
+            )
+            if capture_parameter_steps
+            else {}
+        )
+        if memory_safe_hvp_microbatch and update_kind == "hvp":
+            hvp_backprop_direction_evaluations += len(step_hvp_direction_indices)
+            hvp_backprop_basis_indices.update(step_hvp_direction_indices)
+            checkpoint_provenance.update(
+                {
+                    "hvp_direction_schedule_cursor": (
+                        (hvp_update_ordinal + 1) * args.directions_per_step
+                    ),
+                    "hvp_backprop_direction_evaluations": (
+                        hvp_backprop_direction_evaluations
+                    ),
+                    "hvp_backprop_unique_basis_indices": sorted(
+                        hvp_backprop_basis_indices
+                    ),
+                }
+            )
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         optimizer_seconds = time.perf_counter() - optimizer_started
+        total_loss_value = float(total_loss.detach().cpu())
+        component_loss_values = {
+            name: float(value.detach().cpu())
+            for name, value in components.items()
+        }
+
+        # The response predictor and trust trials build a fresh coefficient graph.
+        # Release the much larger relaxed-HVP training graph before doing so.
+        component_values.clear()
+        components.clear()
+        weighted.clear()
+        backward_terms = {}
+        diagnostic_terms = {}
+        replay = None
+        replay_envelope = None
+        base_envelope = None
+        canonical_terms = None
+        canonical_center = None
+        force_prediction = None
+        center = None
+        internal_basis = None
+        hvp_component_loss = None
+        density_norms = []
+        accumulated_hvp_gradients = None
+        hvp = None
+        target_hvp = None
+        total_loss = None
+        optimizer.zero_grad(set_to_none=True)
+        if hvp_optimizer is not None:
+            hvp_optimizer.zero_grad(set_to_none=True)
+        gc.collect()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
         density_predictor_seconds = 0.0
-        density_predictor_correction_norms: list[float] = []
+        density_predictor_diagnostics: list[dict[str, float | str]] = []
         if args.density_parameter_response_predictor:
             predictor_started = time.perf_counter()
-            density_predictor_correction_norms = (
+            density_predictor_diagnostics = (
                 _predict_next_parameter_step_densities(
                     context,
                     molecules,
                     parameters,
                     old_parameter_values,
-                    [parameter.detach().clone() for parameter in parameters],
+                    new_parameter_values,
                     charge=args.charge,
-                    damping=args.analytic_response_damping,
+                    damping=args.density_predictor_damping,
+                    trust_region=args.density_parameter_trust_region,
+                    trust_threshold=args.density_parameter_trust_threshold,
+                    trust_minimum_scale=(
+                        args.density_parameter_trust_minimum_scale
+                    ),
                 )
             )
             if device.type == "cuda":
@@ -2566,13 +5749,63 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             density_predictor_seconds = time.perf_counter() - predictor_started
         row = {
             "step": reported_step,
-            "total_loss": float(total_loss.detach().cpu()),
-            "parameter_gradient_norm_before_clip": float(gradient_norm.detach().cpu()),
+            "physical_definition_id": physical_definition_id,
+            "computed_components": ";".join(computed_components),
+            "backpropagated_components": ";".join(
+                backpropagated_components
+            ),
+            "total_loss": total_loss_value,
+            "gradient_clip_norm_configured": args.gradient_clip_norm,
+            "gradient_clip_arm": selected_gradient_clip_arm,
             "max_cached_density_gradient_norm": max_density_norm,
+            "max_label_density_projected_gradient_norm": (
+                max_label_density_gradient_norm
+            ),
+            "max_structures25_projected_gradient_error_norm": (
+                max_structures25_gradient_error_norm
+            ),
+            "max_reference_euler_residual_norm": (
+                max_reference_euler_residual_norm
+            ),
+            "max_reference_euler_residual_rms": (
+                max_reference_euler_residual_rms
+            ),
+            "max_reference_euler_residual_component_abs": (
+                max_reference_euler_residual_component
+            ),
+            "max_gradient_identity_residual": (
+                max_gradient_identity_residual
+            ),
+            "max_matched_total_energy_closure_hartree": (
+                max_matched_total_energy_closure
+            ),
+            "max_label_electron_number_residual_abs": (
+                max_label_electron_number_residual
+            ),
             "density_parameter_step": density_parameter_step,
             "strict_active_density_refresh": args.strict_active_density_refresh,
             "active_directions": ";".join(active_directions),
             "update_kind": update_kind,
+            "training_direction_strategy": registered_direction_strategy,
+            "training_direction_count": len(step_hvp_direction_indices)
+            if memory_safe_hvp_microbatch
+            else len(active_directions),
+            "hvp_update_ordinal": hvp_update_ordinal,
+            "hvp_backprop_direction_count": (
+                len(step_hvp_direction_indices)
+                if memory_safe_hvp_microbatch and update_kind == "hvp"
+                else 0
+            ),
+            "hvp_backprop_basis_indices": (
+                ";".join(str(value) for value in step_hvp_direction_indices)
+                if memory_safe_hvp_microbatch and update_kind == "hvp"
+                else ""
+            ),
+            "hvp_direction_schedule_cursor": (
+                (hvp_update_ordinal + (1 if update_kind == "hvp" else 0))
+                * args.directions_per_step
+            ),
+            "memory_safe_hvp_microbatch": memory_safe_hvp_microbatch,
             "implicit_response_solve_count": len(implicit_diagnostics),
             "implicit_response_total_iterations": sum(
                 int(item["iterations"]) for item in implicit_diagnostics
@@ -2631,17 +5864,106 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 default=0.0,
             ),
+            "analytic_response_max_stationarity_residual": max(
+                (
+                    float(item["response_stationarity_residual"])
+                    for item in analytic_response_rows
+                ),
+                default=0.0,
+            ),
+            "analytic_response_max_constraint_residual": max(
+                (
+                    float(item["response_constraint_residual"])
+                    for item in analytic_response_rows
+                ),
+                default=0.0,
+            ),
+            "analytic_center_electron_number_residual_max": max(
+                (
+                    float(item["center_electron_number_residual_abs"])
+                    for item in analytic_response_rows
+                ),
+                default=0.0,
+            ),
+            "analytic_density_response_norm_mean": (
+                float(
+                    np.mean(
+                        [
+                            float(item["density_response_norm"])
+                            for item in analytic_response_rows
+                        ]
+                    )
+                )
+                if analytic_response_rows
+                else 0.0
+            ),
+            "analytic_response_correction_fraction_max": (
+                maximum_response_correction_fraction
+            ),
+            "analytic_cancellation_index_max": maximum_cancellation_index,
+            "analytic_partial_response_cosine_mean": (
+                float(
+                    np.mean(
+                        [
+                            float(item["partial_response_cosine"])
+                            for item in analytic_response_rows
+                        ]
+                    )
+                )
+                if analytic_response_rows
+                else 0.0
+            ),
             "backward_seconds": backward_seconds,
             "optimizer_seconds": optimizer_seconds,
             "density_parameter_predictor_seconds": density_predictor_seconds,
             "density_parameter_predictor_mean_correction_norm": (
-                float(np.mean(density_predictor_correction_norms))
-                if density_predictor_correction_norms
+                float(
+                    np.mean(
+                        [
+                            float(item["raw_correction_norm"])
+                            for item in density_predictor_diagnostics
+                        ]
+                    )
+                )
+                if density_predictor_diagnostics
                 else 0.0
             ),
             "density_parameter_predictor_max_correction_norm": (
-                max(density_predictor_correction_norms)
-                if density_predictor_correction_norms
+                max(
+                    float(item["raw_correction_norm"])
+                    for item in density_predictor_diagnostics
+                )
+                if density_predictor_diagnostics
+                else 0.0
+            ),
+            "density_parameter_predictor_accepted_scale": (
+                min(
+                    float(item["accepted_scale"])
+                    for item in density_predictor_diagnostics
+                )
+                if density_predictor_diagnostics
+                else 1.0
+            ),
+            "density_parameter_predictor_max_projected_gradient_norm": (
+                max(
+                    float(item["projected_gradient_norm"])
+                    for item in density_predictor_diagnostics
+                )
+                if density_predictor_diagnostics
+                else 0.0
+            ),
+            "density_parameter_predictor_raw_parameter_step_norm": (
+                float(density_predictor_diagnostics[0]["raw_parameter_step_norm"])
+                if density_predictor_diagnostics
+                else 0.0
+            ),
+            "density_parameter_predictor_accepted_parameter_step_norm": (
+                float(
+                    density_predictor_diagnostics[0][
+                        "accepted_parameter_step_norm"
+                    ]
+                )
+                if density_predictor_diagnostics
                 else 0.0
             ),
             "step_seconds": time.perf_counter() - step_started,
@@ -2650,12 +5972,48 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 if device.type == "cuda"
                 else 0.0
             ),
-            **{f"loss/{name}": float(value.detach().cpu()) for name, value in components.items()},
+            **{
+                f"loss/{name}": value
+                for name, value in component_loss_values.items()
+            },
             **diagnostics,
             **balance_diagnostics,
+            **gradient_clip_diagnostics,
+            **optimizer_step_diagnostics,
         }
         loss_rows.append(row)
         _write_csv(args.output_dir / "training_curve.csv", loss_rows)
+
+        # Higher-order autograd tensors otherwise survive in loop-local containers
+        # until the next iteration (or final full-Hessian evaluation) has already
+        # constructed another E_cc graph. Drop them before either operation.
+        component_values.clear()
+        components.clear()
+        weighted.clear()
+        backward_terms = {}
+        diagnostic_terms = {}
+        replay = None
+        replay_envelope = None
+        base_envelope = None
+        canonical_terms = None
+        canonical_center = None
+        force_prediction = None
+        center = None
+        internal_basis = None
+        hvp_component_loss = None
+        density_norms = []
+        accumulated_hvp_gradients = None
+        hvp = None
+        target_hvp = None
+        total_loss = None
+        old_parameter_values = []
+        new_parameter_values = []
+        optimizer.zero_grad(set_to_none=True)
+        if hvp_optimizer is not None:
+            hvp_optimizer.zero_grad(set_to_none=True)
+        gc.collect()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
         evaluate_now = step == args.max_steps or step % args.eval_interval == 0
         checkpoint_now = (
@@ -2675,6 +6033,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 geometry_residual,
                 definition=checkpoint_definition,
                 provenance_update=checkpoint_provenance,
+                center_density_state=_center_density_checkpoint_state(
+                    molecules,
+                    reported_step,
+                    args.density_strict_threshold,
+                ),
             )
         if evaluate_now:
             refresh_index += 1
@@ -2694,18 +6057,27 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     refresh_index=refresh_index,
                 )
             )
+            for row in refreshed:
+                row["physical_definition_id"] = physical_definition_id
+            _assert_density_refresh_cost_gates(
+                refreshed, protocol, density_args, source_capacity_step
+            )
             density_rows.extend(refreshed)
             _write_csv(args.output_dir / "density_refresh_points.csv", density_rows)
             density_parameter_step = reported_step
-            new_metrics = (
-                _analytic_full_hessian_metrics(
-                    context, bundle_cache, molecules, step=reported_step
+            new_metrics = []
+            if args.evaluation_mode == "full":
+                new_metrics = (
+                    _analytic_full_hessian_metrics(
+                        context, bundle_cache, molecules, step=reported_step
+                    )
+                    if args.analytic_relaxed_hvp
+                    else _full_hessian_metrics(
+                        context, bundle_cache, molecules, step=reported_step
+                    )
                 )
-                if args.analytic_relaxed_hvp
-                else _full_hessian_metrics(
-                    context, bundle_cache, molecules, step=reported_step
-                )
-            )
+            for row in new_metrics:
+                row["physical_definition_id"] = physical_definition_id
             hessian_rows.extend(new_metrics)
             _write_csv(args.output_dir / "full_hessian_metrics.csv", hessian_rows)
             _save_checkpoint(
@@ -2718,22 +6090,31 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 geometry_residual,
                 definition=checkpoint_definition,
                 provenance_update=checkpoint_provenance,
+                center_density_state=_center_density_checkpoint_state(
+                    molecules,
+                    reported_step,
+                    args.density_strict_threshold,
+                ),
             )
-            median_relative = float(
-                np.median([row["relative_frobenius"] for row in new_metrics])
-            )
-            all_below_gate = all(
-                row["relative_frobenius"]
-                <= float(
-                    protocol["stage1"]["gate"][
-                        "training_all_parent_relative_frobenius_max"
-                    ]
+            if new_metrics:
+                median_relative = float(
+                    np.median([row["relative_frobenius"] for row in new_metrics])
                 )
-                for row in new_metrics
-            )
-            if median_relative <= args.early_stop_relative_frobenius and all_below_gate:
-                stopped_early = True
-                break
+                all_below_gate = all(
+                    row["relative_frobenius"]
+                    <= float(
+                        protocol["stage1"]["gate"][
+                            "training_all_parent_relative_frobenius_max"
+                        ]
+                    )
+                    for row in new_metrics
+                )
+                if (
+                    median_relative <= args.early_stop_relative_frobenius
+                    and all_below_gate
+                ):
+                    stopped_early = True
+                    break
         elif (
             not args.strict_active_density_refresh
             and max_density_norm > args.density_drift_trigger
@@ -2781,15 +6162,211 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         )
         for row in final_metrics
     )
+    transition_density_rows = [
+        row
+        for row in density_rows
+        if row.get("parameter_step") is not None
+        and int(row["parameter_step"]) > source_capacity_step
+        and row.get("kind") == "base"
+    ]
+    density_cost_audit = {
+        "transition_count": len(transition_density_rows),
+        "total_cycles": int(
+            sum(int(row.get("cycles", 0)) for row in transition_density_rows)
+        ),
+        "maximum_cycles": max(
+            (int(row.get("cycles", 0)) for row in transition_density_rows),
+            default=0,
+        ),
+        "fallback_cycles_total": int(
+            sum(
+                int(row.get("fallback_cycles", 0))
+                for row in transition_density_rows
+            )
+        ),
+        "full_fallback_count": sum(
+            int(row.get("fallback_cycles", 0))
+            >= int(args.density_fallback_max_cycles)
+            for row in transition_density_rows
+        ),
+        "fast_path_success_count": sum(
+            bool(row.get("response_predictor_fast_path_succeeded", False))
+            for row in transition_density_rows
+        ),
+        "total_point_elapsed_s": float(
+            sum(
+                float(row.get("total_point_elapsed_s", 0.0))
+                for row in transition_density_rows
+            )
+        ),
+        "maximum_point_elapsed_s": max(
+            (
+                float(row.get("total_point_elapsed_s", 0.0))
+                for row in transition_density_rows
+            ),
+            default=0.0,
+        ),
+        "all_strictly_converged": bool(transition_density_rows)
+        and all(
+            float(row.get("final_gradient_norm", math.inf))
+            < args.density_strict_threshold
+            for row in transition_density_rows
+        ),
+    }
+    accepted_trust_scales = [
+        float(row["density_parameter_predictor_accepted_scale"])
+        for row in loss_rows
+        if "density_parameter_predictor_accepted_scale" in row
+    ]
+    density_cost_audit["median_parameter_trust_scale"] = (
+        float(np.median(accepted_trust_scales))
+        if accepted_trust_scales
+        else math.nan
+    )
+    density_gates = protocol.get("gates", {})
+    density_cost_gate_required = any(
+        key in density_gates
+        for key in (
+            "density_refresh_max_cycles",
+            "density_fallback_full_count",
+            "median_parameter_trust_scale_min",
+        )
+    )
+    density_cost_gate_passed = True
+    if density_cost_gate_required:
+        density_cost_gate_passed = bool(transition_density_rows) and bool(
+            density_cost_audit["all_strictly_converged"]
+        )
+    if "density_refresh_max_cycles" in density_gates:
+        density_cost_gate_passed = density_cost_gate_passed and (
+            density_cost_audit["maximum_cycles"]
+            <= int(density_gates["density_refresh_max_cycles"])
+        )
+    if "density_fallback_full_count" in density_gates:
+        density_cost_gate_passed = density_cost_gate_passed and (
+            density_cost_audit["full_fallback_count"]
+            <= int(density_gates["density_fallback_full_count"])
+        )
+    if "median_parameter_trust_scale_min" in density_gates:
+        density_cost_gate_passed = density_cost_gate_passed and (
+            bool(accepted_trust_scales)
+            and density_cost_audit["median_parameter_trust_scale"]
+            >= float(density_gates["median_parameter_trust_scale_min"])
+        )
+    jax_module_loaded = any(
+        name == "jax" or name.startswith("jax.") for name in sys.modules
+    )
+    if args.integral_derivative_backend == "torch_autograd_dqc" and jax_module_loaded:
+        raise RuntimeError("JAX entered a PyTorch-only training process")
     summary = {
-        "definition": "block-coordinate complete-total relaxed scalar-energy capacity fit",
+        "definition": checkpoint_definition,
+        "physical_definition_id": physical_definition_id,
+        "semantic_version": protocol.get("semantic_version"),
+        "code_provenance": code_provenance,
+        "model_class": context.model.net.__class__.__name__,
+        "model_parameter_count": model_parameter_count,
+        "model_trainable_parameter_count": model_trainable_parameter_count,
+        "scalar_owner": (
+            protocol.get("definitions", {}).get("scalar_owner")
+            if canonical_physics
+            else None
+        ),
+        "optimizer_state_origin": (
+            "resumed_same_canonical_v4"
+            if canonical_physics and capacity_state is not None
+            else "fresh_from_source_weights"
+        ),
+        "legacy_capacity_optimizer_loaded": False if canonical_physics else None,
+        "physical_quantity_definitions": (
+            {
+                "learned_scalar": "A_theta(R,c)=T_s+E_xc",
+                "complete_total_scalar": (
+                    "E_theta_total=A_theta+E_H+E_ext+E_nn"
+                ),
+                "relaxed_pes": (
+                    "Ebar_theta(R)=min_{q^T c=N_e} E_theta_total(R,c)"
+                ),
+                "E": (
+                    "A_theta(R,c_KS) versus Structures25 "
+                    "e_kin_plus_xc at the matched final label index"
+                ),
+                "G": (
+                    "mean((P_q(dA_theta/dc-grad_kin_plus_xc)/s_G)^2) "
+                    "at the matched c_KS"
+                ),
+                "F": "-d Ebar_theta/dR at model c_theta_star",
+                "H": (
+                    "B(d2 Ebar_theta/dR2-H_PBE)B^T internal Hessian; "
+                    + (
+                        "one fresh Rademacher probe gives an unbiased "
+                        "Frobenius-square estimator"
+                        if registered_direction_strategy
+                        == "internal_space_rademacher"
+                        else "a cyclic sqrt(d)-scaled orthogonal basis block "
+                        "gives a full-cycle-exact Frobenius-square estimator"
+                    )
+                ),
+            }
+            if canonical_physics
+            else {
+                "status": "legacy hybrid semantics retained for reproducibility",
+                "E": "complete-total energy at the replay density",
+                "G": "projected complete-total stationarity residual",
+                "F": "complete-total force at the replay density",
+                "H": "relaxed HVP with right-internal input projection only",
+            }
+        ),
+        "energy_training_point": (
+            "fixed_pbe_ks_label_density" if canonical_physics else "legacy_replay"
+        ),
+        "gradient_training_target": (
+            "projected_structures25_kin_plus_xc_gradient_label"
+            if canonical_physics
+            else "legacy_complete_total_stationarity"
+        ),
+        "force_training_point": (
+            "model_self_consistent_relaxed_density"
+            if canonical_physics
+            else "legacy_replay"
+        ),
+        "hessian_training_point": (
+            "model_self_consistent_relaxed_density"
+            if canonical_physics
+            else "legacy_relaxed_density"
+        ),
+        "hessian_input_projection": "complete_internal",
+        "hessian_output_projection": (
+            "complete_internal" if canonical_physics else "none_legacy"
+        ),
+        "reference_hessian_symmetrization": (
+            "before_internal_projection" if canonical_physics else "legacy_raw"
+        ),
+        "reference_hessian_antisymmetric_over_symmetric_frobenius": {
+            molecule.molecule_id: (
+                molecule.reference_hessian_antisymmetric_over_symmetric_frobenius
+            )
+            for molecule in molecules
+        },
+        "reference_label_indices": {
+            molecule.molecule_id: molecule.reference_label_index
+            for molecule in molecules
+        },
+        "reference_record": (
+            protocol.get("reference_record") if canonical_physics else None
+        ),
+        "internal_basis_metrics": {
+            molecule.molecule_id: molecule.internal_basis_metrics
+            for molecule in molecules
+        },
         "protocol_id": protocol["protocol_id"],
+        "protocol_sha256": protocol_sha256,
         "source_run_name": run_spec.name,
         "source_run_dir": str(run_spec.run_dir),
         "source_checkpoint": str(run_spec.ckpt),
         "source_checkpoint_sha256": source_checkpoint_sha256,
         "root_source_checkpoint_sha256": root_source_checkpoint_sha256,
         "source_capacity_step": source_capacity_step,
+        "restored_center_density_count": restored_center_density_count,
         "source_is_untouched_original_checkpoint": capacity_state is None,
         "direction_manifest": (
             str(args.direction_manifest)
@@ -2798,22 +6375,105 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "direction_manifest_sha256": direction_manifest_hash,
         "direction_role": args.direction_role,
+        "training_direction_strategy": registered_direction_strategy,
+        "directions_per_step": args.directions_per_step,
+        "hvp_direction_schedule": (
+            "cumulative_hvp_update_ordinal"
+            if registered_direction_strategy
+            in {
+                "cyclic_orthogonal_internal_basis_blocks",
+                "cyclic_full_rank_rademacher_pool_blocks",
+            }
+            else "cumulative_parameter_step"
+        ),
+        "hvp_direction_schedule_cursor": checkpoint_provenance.get(
+            "hvp_direction_schedule_cursor"
+        ),
+        "hvp_backprop_direction_evaluations": (
+            hvp_backprop_direction_evaluations
+        ),
+        "hvp_backprop_unique_basis_indices": sorted(
+            hvp_backprop_basis_indices
+        ),
+        "hvp_backprop_unique_basis_direction_count": len(
+            hvp_backprop_basis_indices
+        ),
+        "rademacher_probe_pool_metrics": rademacher_probe_pool_metrics,
+        "hvp_backprop_complete_internal_cycles": (
+            hvp_backprop_direction_evaluations
+            // int(molecules[0].expected_internal_dimension)
+            if (
+                len(molecules) == 1
+                and molecules[0].expected_internal_dimension is not None
+                and registered_direction_strategy
+                == "cyclic_orthogonal_internal_basis_blocks"
+            )
+            else None
+        ),
+        "hvp_backprop_complete_rademacher_pool_cycles": (
+            hvp_backprop_direction_evaluations
+            // int(registered_direction_pool_size)
+            if (
+                len(molecules) == 1
+                and registered_direction_pool_size is not None
+                and registered_direction_strategy
+                == "cyclic_full_rank_rademacher_pool_blocks"
+            )
+            else None
+        ),
         "complete_total_relaxed_hvp_graph_required": (
             args.require_complete_total_relaxed_hvp
         ),
         "proxy_hvp_fallback_allowed": False,
         "additional_training_steps": args.max_steps,
+        "evaluation_mode": args.evaluation_mode,
+        "skipped_resume_initial_full_hessian": (
+            args.skip_resume_initial_full_hessian
+        ),
+        "two_step_failure_reproduction": args.two_step_failure_reproduction,
         "checkpoint_interval": args.checkpoint_interval,
         "resumed_capacity_optimizer": args.resume_capacity_optimizer,
         "alternating_hvp_updates": args.alternating_hvp_updates,
         "hvp_update_period": args.hvp_update_period,
         "replay_update_period": args.replay_update_period,
+        "replay_learning_rate": replay_learning_rate,
         "hvp_learning_rate": (
             args.hvp_learning_rate
             if args.hvp_learning_rate is not None
             else args.learning_rate
         ),
-        "hvp_loss_norm": args.hvp_loss_norm,
+        "hvp_loss_norm": None if canonical_physics else args.hvp_loss_norm,
+        "legacy_hvp_loss_norm_cli": args.hvp_loss_norm,
+        "hvp_objective": (
+            "unbiased_mean_squared_two_sided_internal_hessian_error"
+            if canonical_physics
+            else "legacy_unbiased_right_internal_hessian_error"
+        ),
+        "density_loss_scale": (
+            float(
+                loss_config["density"][
+                    "scale_hartree_per_density_coefficient"
+                ]
+            )
+            if canonical_physics
+            else args.density_loss_scale
+        ),
+        "computed_components_each_step": sorted(
+            {
+                symbol
+                for row in loss_rows
+                for symbol in str(row.get("computed_components", "")).split(";")
+                if symbol
+            }
+        ),
+        "backpropagation_schedule": [
+            {
+                "step": int(row["step"]),
+                "update_kind": row["update_kind"],
+                "components": str(row["backpropagated_components"]).split(";"),
+            }
+            for row in loss_rows
+        ],
         "analytic_relaxed_hvp": args.analytic_relaxed_hvp,
         "symmetric_matrix_power_mode": symmetric_matrix_power_mode,
         "analytic_response_solver": (
@@ -2825,17 +6485,67 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "analytic_response_residual_tolerance": (
             args.analytic_response_residual_tolerance
         ),
+        "analytic_response_constraint_tolerance": (
+            args.analytic_response_constraint_tolerance
+        ),
+        "center_electron_number_residual_max": (
+            args.center_electron_number_residual_max
+        ),
         "integral_directional_second_step": (
             args.integral_directional_second_step
         ),
+        "integral_derivative_backend": args.integral_derivative_backend,
+        "autodiff_framework": (
+            "torch"
+            if args.integral_derivative_backend == "torch_autograd_dqc"
+            else "jax_plus_torch"
+            if args.integral_derivative_backend == "pyscfad_autodiff"
+            else None
+        ),
+        "jax_module_loaded": jax_module_loaded,
+        "observed_integral_derivative_backends": sorted(
+            bundle_cache.observed_derivative_backends
+        ),
+        "observed_integral_directional_second_backends": sorted(
+            bundle_cache.observed_directional_second_backends
+        ),
+        "finite_difference_primary_path_used": not autodiff_integrals,
+        "jax_primary_path_used": (
+            args.integral_derivative_backend == "pyscfad_autodiff"
+        ),
         "training_direction_estimator": (
             "one_fresh_internal_rademacher_hutchinson_probe_per_step"
+            if (
+                args.analytic_relaxed_hvp
+                and registered_direction_strategy
+                == "internal_space_rademacher"
+            )
+            else "cyclic_scaled_orthogonal_internal_basis_block"
             if args.analytic_relaxed_hvp
             else "explicit_direction_secant"
         ),
         "density_parameter_response_predictor": (
             args.density_parameter_response_predictor
         ),
+        "density_predictor_damping": args.density_predictor_damping,
+        "density_parameter_trust_region": args.density_parameter_trust_region,
+        "density_parameter_trust_threshold": (
+            args.density_parameter_trust_threshold
+        ),
+        "density_parameter_trust_minimum_scale": (
+            args.density_parameter_trust_minimum_scale
+        ),
+        "density_predictor_corrector_first": (
+            args.density_predictor_corrector_first
+        ),
+        "density_predictor_corrector_threshold": (
+            args.density_predictor_corrector_threshold
+        ),
+        "egf_label_density_replay": args.egf_label_density_replay,
+        "response_correction_fraction_max": (
+            args.response_correction_fraction_max
+        ),
+        "cancellation_index_max": args.cancellation_index_max,
         "loss_balance_mode": args.loss_balance_mode,
         "three_body_geometry_residual": args.three_body_geometry_residual,
         "three_body_initial_coefficients": (
@@ -2845,13 +6555,26 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "freeze_base_model": args.freeze_base_model,
         "adam_betas": [args.adam_beta1, args.adam_beta2],
+        "gradient_clip_norm": args.gradient_clip_norm,
+        "gradient_clipping_enabled": args.gradient_clip_norm > 0.0,
+        "gradient_clip_arm": selected_gradient_clip_arm,
+        "weight_decay": args.weight_decay,
         "test100_accessed": False,
         "test100_evaluations_used": 0,
         "validation_accessed": False,
+        "strict_cartesian_force_difference_hessian_executed": False,
+        "strict_cartesian_force_difference_hessian_status": "not_run",
+        "strict_cartesian_force_difference_hessian_note": (
+            "the capacity-training runner evaluates the analytic complete "
+            "internal Hessian; strict Cartesian force-difference closure is a "
+            "separate evaluation"
+        ),
         "molecules": [molecule.molecule_id for molecule in molecules],
         "final_step": final_step,
         "stopped_early": stopped_early,
         "density_refresh_count": refresh_index + 1,
+        "density_cost_audit": density_cost_audit,
+        "density_cost_gate_passed": density_cost_gate_passed,
         "density_response_unroll_steps": args.density_response_unroll_steps,
         "density_response_unroll_lr": args.density_response_unroll_lr,
         "connect_lagrange_multiplier_response": (
@@ -2869,25 +6592,32 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "implicit_response_solver": args.implicit_response_solver,
         "implicit_response_warm_start": args.implicit_response_warm_start,
         "strict_active_density_refresh": args.strict_active_density_refresh,
+        "density_solver_target": args.density_strict_threshold,
+        "training_density_stationarity_threshold": (
+            _training_density_stationarity_threshold(args)
+        ),
         "training_density_stationarity_gate_passed": bool(loss_rows)
         and all(
             row["max_cached_density_gradient_norm"]
-            < args.density_strict_threshold
+            < _training_density_stationarity_threshold(args)
             for row in loss_rows
         ),
         "loss_weights": weights,
+        "semantic_loss_weights": semantic_loss_weights,
+        "hvp_calibration": canonical_calibration_provenance,
         "initial_full_hessian_metrics": initial_metrics,
         "root_initial_full_hessian_metrics": root_initial_metrics,
         "final_full_hessian_metrics": final_metrics,
         "energy_force_regression_gate_passed": energy_force_gate_passed,
         "energy_force_relative_regression_max": energy_force_regression_limit,
         "stage1_gate_passed": bool(final_metrics)
+        and density_cost_gate_passed
         and energy_force_gate_passed
         and (
             not args.strict_active_density_refresh
             or all(
                 row["max_cached_density_gradient_norm"]
-                < args.density_strict_threshold
+                < _training_density_stationarity_threshold(args)
                 for row in loss_rows
             )
         )
@@ -2937,6 +6667,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run", required=True, help="name=run_dir=checkpoint")
     parser.add_argument("--source-checkpoint-sha256", default=None)
     parser.add_argument("--root-source-checkpoint-sha256", default=None)
+    parser.add_argument("--hvp-calibration-artifact", type=Path, default=None)
+    parser.add_argument("--hvp-calibration-sha256", default=None)
     parser.add_argument(
         "--require-complete-total-relaxed-hvp",
         action="store_true",
@@ -2966,6 +6698,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260717)
     parser.add_argument("--max-steps", type=int, default=1000)
     parser.add_argument("--learning-rate", type=float, default=3.0e-5)
+    parser.add_argument(
+        "--replay-learning-rate",
+        type=float,
+        default=None,
+        help=(
+            "Independent E/G/F replay AdamW learning rate. Defaults to "
+            "--learning-rate; HVP updates remain controlled separately."
+        ),
+    )
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument(
         "--three-body-geometry-residual",
@@ -2989,6 +6730,14 @@ def parse_args() -> argparse.Namespace:
         "--resume-capacity-optimizer",
         action="store_true",
         help="Restore AdamW state and cumulative step from a capacity-fit checkpoint.",
+    )
+    parser.add_argument(
+        "--skip-resume-initial-full-hessian",
+        action="store_true",
+        help=(
+            "On a provenance-bound optimizer resume, reuse the frozen root "
+            "initial metrics and avoid recomputing an intermediate full Hessian."
+        ),
     )
     parser.add_argument(
         "--alternating-hvp-updates",
@@ -3021,17 +6770,86 @@ def parse_args() -> argparse.Namespace:
             "HVP/curvature/spectrum losses."
         ),
     )
+    parser.add_argument(
+        "--egf-label-density-replay",
+        action="store_true",
+        help=(
+            "Evaluate E/G/F at the fixed PBE/KS label density while keeping "
+            "the analytic HVP on the model-self-consistent density branch."
+        ),
+    )
+    parser.add_argument(
+        "--response-correction-fraction-max",
+        type=float,
+        default=math.inf,
+        help="Fail before an update if ||response correction||/||relaxed HVP|| exceeds this.",
+    )
+    parser.add_argument(
+        "--cancellation-index-max",
+        type=float,
+        default=math.inf,
+        help=(
+            "Fail before an update if "
+            "(||partial HVP||+||response correction||)/||relaxed HVP|| "
+            "exceeds this."
+        ),
+    )
     parser.add_argument("--directions-per-step", type=int, default=2)
+    parser.add_argument(
+        "--direction-strategy",
+        choices=(
+            "internal_space_rademacher",
+            "cyclic_orthogonal_internal_basis_blocks",
+            "cyclic_full_rank_rademacher_pool_blocks",
+        ),
+        default=None,
+        help=(
+            "Explicit analytic-HVP direction strategy. Historical v1--v4 "
+            "single-Rademacher launchers may omit it; new strategies must "
+            "match the frozen protocol."
+        ),
+    )
     parser.add_argument("--direction-repeat-steps", type=int, default=8)
     parser.add_argument("--direction-limit", type=int, default=None)
     parser.add_argument("--displacement", type=float, default=1.0e-3)
+    parser.add_argument(
+        "--evaluation-mode",
+        choices=("full", "density_cost", "none"),
+        default="full",
+        help=(
+            "Use 'density_cost' only for a bounded four-step trust/corrector "
+            "screen; formal training retains initial/final full-Hessian evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--two-step-failure-reproduction",
+        action="store_true",
+        help=(
+            "Allow at most two nonzero-LR steps without matrix evaluation, "
+            "with a checkpoint every step, solely to reproduce a registered failure."
+        ),
+    )
     parser.add_argument("--eval-interval", type=int, default=100)
     parser.add_argument("--checkpoint-interval", type=int, default=0)
     parser.add_argument("--early-stop-relative-frobenius", type=float, default=0.01)
-    parser.add_argument("--gradient-clip-norm", type=float, default=1.0)
+    parser.add_argument(
+        "--gradient-clip-norm",
+        type=float,
+        default=1.0,
+        help=(
+            "Global parameter-gradient norm threshold. Set to 0 to disable "
+            "clipping while retaining before/after norm diagnostics."
+        ),
+    )
     parser.add_argument("--gradient-diagnostics-interval", type=int, default=25)
     parser.add_argument("--lambda-e", type=float, default=None)
     parser.add_argument("--lambda-f", type=float, default=None)
+    parser.add_argument(
+        "--lambda-g",
+        type=float,
+        default=None,
+        help="Canonical Structures25 projected density-gradient label weight.",
+    )
     parser.add_argument("--lambda-rho", type=float, default=None)
     parser.add_argument("--lambda-h", type=float, default=None)
     parser.add_argument(
@@ -3058,9 +6876,35 @@ def parse_args() -> argparse.Namespace:
         "--density-parameter-response-predictor",
         action="store_true",
         help=(
-            "Use the exact KKT response to the accepted model-parameter step "
-            "as the next strict density-corrector initial guess."
+            "Solve the linearized constrained KKT parameter response to form "
+            "a first-order initial guess for the next strict density corrector."
         ),
+    )
+    parser.add_argument("--density-predictor-damping", type=float, default=0.0)
+    parser.add_argument(
+        "--density-parameter-trust-region",
+        action="store_true",
+        help=(
+            "Backtrack the accepted AdamW parameter step until the response-predicted "
+            "density satisfies the configured projected-gradient trust threshold."
+        ),
+    )
+    parser.add_argument(
+        "--density-parameter-trust-threshold", type=float, default=5.0e-6
+    )
+    parser.add_argument(
+        "--density-parameter-trust-minimum-scale", type=float, default=1.0 / 128.0
+    )
+    parser.add_argument(
+        "--density-predictor-corrector-first",
+        action="store_true",
+        help=(
+            "For a trusted response-predicted density, run LBFGS/Newton-PCG before "
+            "the legacy Adam chain; failure restarts the untouched legacy path."
+        ),
+    )
+    parser.add_argument(
+        "--density-predictor-corrector-threshold", type=float, default=5.0e-6
     )
     parser.add_argument(
         "--connect-lagrange-multiplier-response",
@@ -3098,16 +6942,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--density-fallback-max-cycles", type=int, default=10000)
     parser.add_argument("--density-fallback-threshold", type=float, default=1.0e-5)
     parser.add_argument("--density-strict-threshold", type=float, default=1.0e-8)
+    parser.add_argument(
+        "--training-density-stationarity-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Independent fail-closed gate for the density gradient recomputed "
+            "on the training graph. Defaults to --density-strict-threshold; "
+            "set the solver target tighter to leave numerical verification margin."
+        ),
+    )
     parser.add_argument("--lbfgs-max-iterations", type=int, default=500)
     parser.add_argument("--newton-max-iterations", type=int, default=6)
     parser.add_argument("--integral-derivative-step", type=float, default=1.0e-4)
+    parser.add_argument(
+        "--integral-derivative-backend",
+        choices=(
+            "finite_difference_pyscf",
+            "pyscfad_autodiff",
+            "torch_autograd_dqc",
+        ),
+        default="finite_difference_pyscf",
+        help=(
+            "Geometry-integral derivative backend. torch_autograd_dqc keeps "
+            "libcint values, force derivatives, and HVP double backward in one "
+            "Torch graph and forbids JAX/numerical primary paths."
+        ),
+    )
     parser.add_argument(
         "--integral-directional-second-step",
         type=float,
         default=1.0e-4,
         help=(
-            "Finite-difference step used only to differentiate PySCF first "
-            "integral derivatives along the analytic HVP probe."
+            "Finite-difference step used only by the numerical reference backend; "
+            "must be zero for automatic-differentiation backends."
         ),
     )
     parser.add_argument("--integral-derivative-workers", type=int, default=4)
@@ -3117,6 +6985,21 @@ def parse_args() -> argparse.Namespace:
         "--analytic-response-residual-tolerance",
         type=float,
         default=1.0e-8,
+    )
+    parser.add_argument(
+        "--analytic-response-constraint-tolerance",
+        type=float,
+        default=None,
+        help=(
+            "Independent fail-closed tolerance for q^T dc/dR. Defaults to "
+            "--analytic-response-residual-tolerance outside canonical v4."
+        ),
+    )
+    parser.add_argument(
+        "--center-electron-number-residual-max",
+        type=float,
+        default=None,
+        help="Fail if the model-self-consistent center violates |q^T c-N_e|.",
     )
     return parser.parse_args()
 

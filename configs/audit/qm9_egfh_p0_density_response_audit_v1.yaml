@@ -1,0 +1,76 @@
+protocol_id: qm9_egfh_p0_density_response_audit_v1
+frozen_at: 2026-07-31
+stage: read_only_train_parent_density_response_diagnosis
+validation_access_allowed: false
+test100_access_allowed: false
+training_allowed: false
+
+definition:
+  purpose: >-
+    Compare the released article initialization, EGFH step 100, and EGFH
+    step 1300 on the same train-only molecule and internal direction. Decompose
+    the complete-total relaxed HVP into fixed-density curvature and the
+    density-response correction, audit the projected density Hessian spectrum,
+    and compare the implicit result with strict centered force differences.
+  relaxed_hvp: >-
+    H_relaxed v = E_RR v - E_Rc E_cc^-1 E_cR v in the
+    electron-number-conserving density tangent space.
+  no_training: true
+  independent_force_or_hessian_head_used: false
+
+implementation:
+  base_analytic_protocol: configs/audit/qm9_graphformer_complete_total_analytic_relaxed_hvp_v2.yaml
+  symmetric_matrix_power_mode: eigh_second_order_audit
+  dtype: float64
+
+assets:
+  parent_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/manifests/train20_parent_manifest.json
+  parent_manifest_sha256: 4d2c8841d550951eb518021009e12c2b6a29862f28afb0d07d32fd4da8484d01
+  direction_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/graphformer_hybrid_relaxed_hvp_rebuild_v1/directions/train20/manifest.json
+  direction_manifest_sha256: 1ea9fe04a971b5998620d49f5e68567938ab4f505f17636fb2065085b8c73804
+  molecule_id: "0016298"
+  direction_index: 0
+  direction_role: all
+  split_role: train_only
+
+checkpoints:
+  - name: article
+    run_dir: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_graphformer_egfh10_force_secant_article_warmstart_s100_v1
+    checkpoint: /home/shenwei01/xzh_node02_20260724/runtime_parent/_runtime/models/train/runs/trained-on-qm9/checkpoints/last.ckpt
+    checkpoint_sha256: 9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+    training_step: 0
+  - name: step100
+    run_dir: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_graphformer_egfh10_force_secant_article_warmstart_s100_v1
+    checkpoint: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_graphformer_egfh10_force_secant_article_warmstart_s100_v1/checkpoints/last.ckpt
+    checkpoint_sha256: 26e244691456c42f2ed1000583da690a9b2b3eefdf1ddd22d9c94ea8b7dc8b85
+    training_step: 100
+  - name: step1300
+    run_dir: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_graphformer_egfh10_force_secant_article_warmstart_ultralow_lr_tail_s1300_v1
+    checkpoint: /home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_graphformer_egfh10_force_secant_article_warmstart_ultralow_lr_tail_s1300_v1/checkpoints/last.ckpt
+    checkpoint_sha256: 7c40f4dfb442f606a278b796e973d2669108b3a306a6b1e065143ee9e3e71545
+    training_step: 1300
+
+numerics:
+  force_fd_displacements_bohr: [1.0e-3, 3.0e-4, 1.0e-4]
+  strict_density_gradient_threshold: 1.0e-8
+  diagnostic_acceptance_threshold: 1.0e-6
+  density_spectrum_relative_zero_threshold: 1.0e-10
+  analytic_response_residual_threshold: 1.0e-8
+
+reporting:
+  fixed_density_hvp: true
+  density_response_correction: true
+  relaxed_hvp: true
+  pbe_hvp_reference: true
+  density_response_secant: true
+  projected_density_hessian_spectrum: true
+  endpoint_cycles_and_residuals: true
+  wall_time_and_peak_memory: true
+
+gates:
+  require_all_checkpoint_hashes: true
+  require_asset_hashes: true
+  require_center_density_strict: true
+  require_finite_analytic_hvp: true
+  validation_accessed: false
+  test100_accessed: false

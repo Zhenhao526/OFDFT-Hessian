@@ -1,11 +1,149 @@
 import numpy as np
+import pytest
 import torch
 
 from mldft.ofdft.geometry_integrals import (
+    AutodiffPySCFIntegralProvider,
     FiniteDifferencePySCFIntegralProvider,
     classical_energy_from_bundle,
     linearized_integral_tensor,
 )
+
+
+def test_pyscfad_directional_integral_curvature_matches_scalar_oracle():
+    pytest.importorskip("pyscfad")
+    positions_np = np.asarray([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]])
+    direction = np.asarray([[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]])
+    direction /= np.linalg.norm(direction)
+    provider = AutodiffPySCFIntegralProvider(
+        atomic_numbers=np.asarray([1, 1]),
+        basis="sto-3g",
+        derivative_step_bohr=0.0,
+    )
+    bundle = provider.evaluate_with_directional_second_derivatives(
+        positions_np,
+        direction,
+        directional_step_bohr=0.0,
+    )
+    assert bundle.derivative_backend == "pyscfad_jax_autodiff"
+    assert bundle.directional_second_backend == (
+        "pyscfad_jacfwd_of_jvp_with_traceable_rinv"
+    )
+    assert bundle.derivative_step_bohr == 0.0
+    assert bundle.directional_second_step_bohr == 0.0
+
+    numerical_reference = FiniteDifferencePySCFIntegralProvider(
+        atomic_numbers=np.asarray([1, 1]),
+        basis="sto-3g",
+        derivative_step_bohr=1.0e-4,
+    ).evaluate_with_derivatives(positions_np)
+    np.testing.assert_allclose(
+        bundle.values.nuclear_attraction,
+        numerical_reference.values.nuclear_attraction,
+        atol=2.0e-12,
+        rtol=2.0e-12,
+    )
+    np.testing.assert_allclose(
+        bundle.derivatives.nuclear_attraction,
+        numerical_reference.derivatives.nuclear_attraction,
+        atol=2.0e-7,
+        rtol=2.0e-7,
+    )
+
+    coeffs_np = np.asarray([0.35, 0.42])
+    positions = torch.tensor(
+        positions_np, dtype=torch.float64, requires_grad=True
+    )
+    energy = classical_energy_from_bundle(
+        torch.tensor(coeffs_np, dtype=torch.float64),
+        positions,
+        torch.tensor([1, 1]),
+        bundle,
+    )
+    gradient = torch.autograd.grad(energy, positions, create_graph=True)[0]
+    hvp = torch.autograd.grad(
+        gradient,
+        positions,
+        grad_outputs=torch.as_tensor(direction, dtype=torch.float64),
+    )[0]
+    autodiff_curvature = float(
+        torch.sum(hvp * torch.as_tensor(direction, dtype=torch.float64))
+    )
+
+    oracle_step = 3.0e-4
+    plus_values = provider.evaluate(positions_np + oracle_step * direction)
+    center_values = provider.evaluate(positions_np)
+    minus_values = provider.evaluate(positions_np - oracle_step * direction)
+    direction_flat = direction.reshape(-1)
+    directional = bundle.directional_second_derivatives
+    assert directional is not None
+    component_curvatures = {
+        "coulomb_ad": float(
+            0.5
+            * coeffs_np
+            @ np.tensordot(direction_flat, directional.coulomb, axes=([0], [0]))
+            @ coeffs_np
+        ),
+        "coulomb_fd": float(
+            0.5
+            * coeffs_np
+            @ (
+                plus_values.coulomb
+                - 2.0 * center_values.coulomb
+                + minus_values.coulomb
+            )
+            @ coeffs_np
+            / oracle_step**2
+        ),
+        "attraction_ad": float(
+            coeffs_np
+            @ np.tensordot(
+                direction_flat, directional.nuclear_attraction, axes=([0], [0])
+            )
+        ),
+        "attraction_fd": float(
+            coeffs_np
+            @ (
+                plus_values.nuclear_attraction
+                - 2.0 * center_values.nuclear_attraction
+                + minus_values.nuclear_attraction
+            )
+            / oracle_step**2
+        ),
+        "nuclear_ad": float(
+            direction_flat @ directional.nuclear_repulsion
+        ),
+        "nuclear_fd": float(
+            (
+                plus_values.nuclear_repulsion
+                - 2.0 * center_values.nuclear_repulsion
+                + minus_values.nuclear_repulsion
+            )
+            / oracle_step**2
+        ),
+    }
+    scalar_oracle = (
+        _classical_energy_direct(
+            provider, positions_np + oracle_step * direction, coeffs_np
+        )
+        - 2.0 * _classical_energy_direct(provider, positions_np, coeffs_np)
+        + _classical_energy_direct(
+            provider, positions_np - oracle_step * direction, coeffs_np
+        )
+    ) / oracle_step**2
+    assert np.isclose(
+        autodiff_curvature, scalar_oracle, atol=2.0e-5, rtol=2.0e-5
+    ), component_curvatures
+
+
+def test_pyscfad_backend_rejects_coordinate_difference_steps():
+    pytest.importorskip("pyscfad")
+    with pytest.raises(ValueError, match="finite differences are forbidden"):
+        AutodiffPySCFIntegralProvider(
+            atomic_numbers=np.asarray([1, 1]),
+            basis="sto-3g",
+            derivative_step_bohr=1.0e-4,
+        )
 
 
 def _classical_energy_direct(provider, positions, coeffs):

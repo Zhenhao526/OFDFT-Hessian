@@ -199,6 +199,7 @@ class QM9GeometryPerturbed(QM9):
         name: str = "QM9GeometryPerturbed",
         num_perturbations: int = 1,
         perturbation_std: float = 0.01,
+        perturbation_distribution: str = "gaussian",
         max_displacement: float | None = 0.05,
         random_seed: int = 20260701,
         include_reference: bool = True,
@@ -208,6 +209,7 @@ class QM9GeometryPerturbed(QM9):
     ):
         self.num_perturbations = int(num_perturbations)
         self.perturbation_std = float(perturbation_std)
+        self.perturbation_distribution = str(perturbation_distribution).lower()
         self.max_displacement = None if max_displacement is None else float(max_displacement)
         self.random_seed = int(random_seed)
         self.include_reference = bool(include_reference)
@@ -217,6 +219,10 @@ class QM9GeometryPerturbed(QM9):
             raise ValueError("num_perturbations must be non-negative.")
         if self.perturbation_std < 0:
             raise ValueError("perturbation_std must be non-negative.")
+        if self.perturbation_distribution not in {"gaussian", "rademacher"}:
+            raise ValueError(
+                "perturbation_distribution must be 'gaussian' or 'rademacher'."
+            )
         if self.paired_perturbations and self.num_perturbations % 2 != 0:
             raise ValueError("paired_perturbations requires an even num_perturbations.")
         super().__init__(
@@ -246,7 +252,15 @@ class QM9GeometryPerturbed(QM9):
         if sample_id in (None, 0):
             return positions.copy()
         rng = self._rng_for_sample(id, sample_id)
-        displacement = rng.normal(loc=0.0, scale=self.perturbation_std, size=positions.shape)
+        if self.perturbation_distribution == "gaussian":
+            displacement = rng.normal(
+                loc=0.0, scale=self.perturbation_std, size=positions.shape
+            )
+        else:
+            displacement = (
+                rng.choice(np.asarray([-1.0, 1.0]), size=positions.shape)
+                * self.perturbation_std
+            )
         if self.remove_translation:
             displacement = displacement - displacement.mean(axis=0, keepdims=True)
         if self.max_displacement is not None:
@@ -298,6 +312,7 @@ class QM9GeometryPerturbed(QM9):
             "perturbation_std_angstrom": float(
                 0.0 if sample_id in (None, 0) else self.perturbation_std
             ),
+            "perturbation_distribution": self.perturbation_distribution,
             "max_displacement_angstrom": float(
                 -1.0 if self.max_displacement is None else self.max_displacement
             ),

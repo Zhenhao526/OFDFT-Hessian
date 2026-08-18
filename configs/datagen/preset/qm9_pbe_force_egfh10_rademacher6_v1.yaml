@@ -1,0 +1,37 @@
+# @package _global_
+defaults:
+  - override /dataset: qm9_geom_perturbed
+
+dataset:
+  name: QM9PBEForceEGFH10Rademacher6V1
+  filename: qm9_pbe_force_egfh10_rademacher6_v1
+  num_perturbations: 12
+  perturbation_std: 0.01
+  perturbation_distribution: rademacher
+  max_displacement: 0.05
+  include_reference: true
+  remove_translation: false
+  paired_perturbations: true
+  random_seed: 20260730
+
+n_molecules: -1
+start_idx: 0
+num_processes: 10
+num_threads_per_process: 1
+max_memory_per_process: 6000
+verify_files: true
+remove_broken_files: false
+log_level: INFO
+
+kohn_sham:
+  basis: "6-31G(2df,p)"
+  xc: "PBE"
+  initialization: "minao"
+  grid_level: 3
+  prune_method: nwchem_prune
+  density_fit_basis: def2-universal-jfit
+  density_fit_threshold: 30
+  convergence_tolerance: 1.0e-9
+  compute_forces: true
+  compute_hessian: false
+  use_perturbation: false

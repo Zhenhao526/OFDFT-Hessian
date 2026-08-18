@@ -8,6 +8,7 @@ label_dir: ${oc.env:DFT_DATA}/${dataset.name}/labels/
 
 num_perturbations: 1
 perturbation_std: 0.01
+perturbation_distribution: gaussian
 max_displacement: 0.05
 random_seed: 20260701
 include_reference: true

@@ -1,0 +1,94 @@
+# @package _global_
+
+defaults:
+  - str25/default
+  - override /data: qm9_pbe_force_full
+  - override /model/loss_function: l1_force_relaxed_force_secant
+  - override /trainer: default
+  - override /callbacks: qm9_full_scale
+  - override /logger: tensorboard
+  - _self_
+
+name: qm9_pbe_force_egfh10_force_secant_scratch_v1
+tags:
+  - qm9
+  - graphformer
+  - scratch
+  - train10
+  - egfh
+  - conservative_force_secant
+
+seed: 20260730
+train: true
+validate: false
+test: false
+ckpt_path: null
+weight_ckpt_path: null
+
+model:
+  force_supervision: true
+  profile_timing: true
+  logging_mixin_interval: null
+  metric_interval: 0
+  loss_gradient_norm_interval: 1
+  loss_gradient_norm_max_logs: 20
+  loss_balance_mode: none
+  loss_function:
+    energy_loss:
+      weight: 0.1
+    gradient_loss:
+      weight: 0.8
+    force_loss:
+      weight: 1.0
+    relaxed_force_secant_loss:
+      weight: 0.01
+      loss:
+        strict_pairs: false
+        reference_scale_floor: 1.0e-2
+        max_normalized_loss: 10.0
+
+data:
+  dataset_name: QM9PBEForceEGFH10ScratchV1
+  datamodule:
+    batch_size: 4
+    num_workers: 0
+    pin_memory: true
+    shuffle_train: true
+    shuffle_val: false
+    train_only: true
+    pair_grouped_train_batches: true
+    pair_batch_seed: ${seed}
+    pair_source_markers: [QM9PBEForceEGFH10ScratchV1]
+    infer_pair_metadata_from_filename: true
+    dataset_kwargs:
+      limit_scf_iterations: [-1]
+      keep_initial_guess: false
+      load_force_label: true
+      load_pair_metadata: true
+      load_hvp_label: false
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  max_epochs: 100
+  max_steps: 20
+  limit_val_batches: 0
+  num_sanity_val_steps: 0
+  log_every_n_steps: 1
+  accumulate_grad_batches: 1
+  use_distributed_sampler: false
+
+callbacks:
+  model_checkpoint:
+    monitor: null
+    save_top_k: 0
+    save_last: true
+    every_n_train_steps: 20
+    every_n_epochs: null
+    save_on_train_epoch_end: false
+  throughput_monitor:
+    estimate_num_samples: 30
+    target_num_devices: 1
+    log_every_n_steps: 1
+    warmup_steps: 0

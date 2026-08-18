@@ -1,0 +1,360 @@
+protocol_id: qm9_graphformer_egfh_100mol_ddp8_v11
+semantic_version: qm9_complete_total_relaxed_egfh_v1
+distributed_semantic_version: qm9_complete_total_relaxed_egfh_multimolecule_ddp_v1
+status: frozen_for_ddp_consistency_and_train80_calibration
+frozen_at: 2026-08-18
+host: node05
+local_storage_only: true
+scratch_paths_forbidden: true
+method_name: "自动微分积分与密度/KKT响应的complete-total relaxed-HVP"
+fully_analytic_libcint_second_integrals: true
+fully_autodiff_geometry_integrals: true
+primary_derivative_backend: torch_autograd_dqc_libcint
+finite_difference_primary_path_allowed: false
+jax_primary_path_allowed: false
+validation_access_allowed: true
+test100_access_allowed: false
+
+definitions:
+  physical_definition_id: qm9_complete_total_relaxed_egfh_v1
+  normative_specification: docs/qm9_ofdft_canonical_physical_definitions_v1.md
+  scalar_owner: >-
+    A_theta(R,c)=E_Graphformer_kin_plus_xc(R,c;theta), and
+    E_total_theta(R,c)=A_theta(R,c)+E_H(R,c)+E_ext(R,c)+E_nn(R).
+    Energy, gradient, relaxed force, and relaxed Hessian all derive from this
+    single scalar. Independent force and Hessian heads are forbidden.
+  energy_gradient_branch: structures25_kin_plus_xc_at_fixed_pbe_ks_density
+  force_hessian_branch: model_self_consistent_complete_total_relaxed_pes
+  forbidden_fallbacks:
+    - independent_force_head
+    - independent_hessian_head
+    - fixed_density_force_or_hvp
+    - detached_force_or_hvp
+    - finite_difference_training_target
+    - numerical_hessian_model_selection
+    - amp_fp16_bf16
+    - tf32
+    - torch_compile_before_high_order_consistency_gate
+
+identity:
+  old_original_a_identity_allowed: false
+  old_checkpoint_or_manifest_hash_reuse_allowed: false
+  baseline_name: released_article_qm9_scalar_graphformer
+  initialization: released_article_qm9_weight_checkpoint
+  source_checkpoint: /home/shenwei01/xzh_node02_20260724/runtime_parent/_runtime/models/train/runs/trained-on-qm9/checkpoints/last.ckpt
+  source_checkpoint_sha256: 9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+  source_hparams_sha256: 4a7df80f1743658e4cb94330d2be93aecb33a11a3aad83e2d047cd961ba19675
+  optimizer_initialization: fresh_shared_egfh_adamw_state
+  v10_checkpoint_or_optimizer_reuse_allowed: false
+  v10_lambda_h_reuse_allowed: false
+
+baseline:
+  model_class: Graphformer
+  parameter_count: 18692586
+  max_steps: 1656810
+  validation_enabled: false
+  test_enabled: false
+
+data:
+  canonical_source: deepchem_qm9_sdf_mirror
+  raw_archive_sha256: f11d3f8ecc3097a72656a35c4847767852e6f346bf99a54619a1a3b6389ddc02
+  sdf_sha256: 98c4e97d50ac549b8c9f0b2114b348a9a944718e17e50d9a724b729f1deaa28e
+  candidate_manifest: /home/shenwei01/xzh_node02_20260724/data/qm9_graphformer_egfh_100mol_ddp8_v11/candidate120/candidate120_manifest.json
+  candidate_manifest_sha256: f1a6a16be453bfbf9898831922b6e482d5581c268ecaaf77d60dff18a97eb0e8
+  candidate_count: 120
+  final_split_manifest: /home/shenwei01/xzh_node02_20260724/data/qm9_graphformer_egfh_100mol_ddp8_v11/frozen_split/final100_split_manifest.json
+  final_split_manifest_sha256: ee9ae196bfeb89a776b19c01fc7acbb7cd4d77d233bca697ad2049565e8fed20
+  train_schedule: /home/shenwei01/xzh_node02_20260724/data/qm9_graphformer_egfh_100mol_ddp8_v11/frozen_split/train80_ddp8_schedule.json
+  train_schedule_sha256: e254661dfd4359e80a98262ab2f6be1670cb43e5e507f654d503467649fdd11c
+  final_count: 100
+  train_count: 80
+  validation_count: 10
+  test_count: 10
+  split_seed: 20260817
+  molecule_and_scaffold_uniqueness_required: true
+  stratification_fields:
+    - atom_count
+    - heavy_atom_count
+    - element_composition
+    - radius_of_gyration
+    - maximum_pair_distance
+    - force_target_scale
+    - hessian_target_scale
+  validation_or_test_metrics_used_for_selection: false
+  test_access_policy: one_evaluation_only_after_all_choices_and_stop_step_frozen
+
+reference_labels:
+  method: pbe
+  reference_geometry_only: true
+  e_g_f_dataset_sha256_manifest: /home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_100mol_ddp8_v11/labelgen_candidate120/labels_sha256.txt
+  e_g_f_dataset_sha256_manifest_sha256: 23b80c664c2fb3f39723adb82ea35aa936eab4591ef3dd7de91f8a7674497c5a
+  full_hessian_sha256_manifest: /home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_100mol_ddp8_v11/hessian_candidate120_ddp8_attempt2/hessian_sha256.txt
+  full_hessian_sha256_manifest_sha256: 078f628d08da63a37f95ff51d3db7014c2152c1e76e5acdafa8e263f7b7ba684
+  internal_basis_manifest: /home/shenwei01/xzh_node02_20260724/data/qm9_graphformer_egfh_100mol_ddp8_v11/candidate120_internal_bases/manifest.json
+  internal_basis_manifest_sha256: 79d45275a29cb57af4cdf9c5896280bbe8211433ada1c2e04fb108e6b6e6976d
+  reference_hessian_backend: gpu4pyscf_analytic_pbe
+  reference_hessian_symmetrization: before_internal_projection
+  require_checkpoint_byte_identity_before_after_hessian: true
+  require_all_finite: true
+  hessian_symmetry_max_abs: 1.0e-10
+
+distributed:
+  launcher: torchrun --standalone --nproc_per_node=8
+  process_group_backend: nccl
+  world_size: 8
+  rank_device_binding: cuda:${LOCAL_RANK}
+  model_parallelism: torch.nn.parallel.DistributedDataParallel
+  data_parallelism: one_distinct_train_molecule_per_rank_per_global_update
+  gradient_aggregation: explicit_float64_sum_all_reduce_then_divide_by_8
+  global_loss_reduction: mean_over_8_distinct_molecules
+  train_molecules_per_epoch: 80
+  global_updates_per_epoch: 10
+  local_molecules_per_rank_per_epoch: 10
+  batch_schedule: deterministic_size_balanced_10x8
+  checkpoint_writer: rank0_atomic_only
+  checkpoint_required_state:
+    - model
+    - fresh_adamw_optimizer
+    - global_step
+    - epoch
+    - per_rank_torch_cpu_rng
+    - per_rank_torch_cuda_rng
+    - per_rank_numpy_rng
+    - per_rank_python_rng
+    - sampler_state
+    - hvp_direction_sequence_state
+    - per_molecule_density_predictor_state
+
+numerics:
+  dtype: float64
+  amp_enabled: false
+  tf32_enabled: false
+  integral_derivative_backend: torch_autograd_dqc
+  integral_derivative_step_bohr: 0.0
+  integral_directional_second_step_bohr: 0.0
+  dqc_git_commit: 0fe821fc92cb3457fb14f6dff0c223641c514ddb
+  dqclibs_version: 0.1.1
+  dqclibs_wheel_sha256: 912a0103f2157a89a1117f8b2a432a9fd32ceb020e1cdcb89948ae4fac2da083
+  torch_version: 2.4.1
+  symmetric_matrix_power_mode: eigh_second_order_audit
+  density_solver_target: 5.0e-9
+  training_density_stationarity_max: 1.0e-8
+  center_electron_number_residual_max: 1.0e-10
+  analytic_response_residual_max: 1.0e-8
+  analytic_response_constraint_residual_max: 1.0e-10
+
+canonical_runtime_namespace:
+  registration_id: qm9_v11_canonical_namespace_binding_v1
+  required_field_count: 46
+  audit_report: /home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_100mol_ddp8_v11/canonical_namespace_audit_20260818b/report.json
+  audit_report_sha256: 9d5c6901a5c818fe1ffaf5b522b4a42fd1ad7d90678361dbab0533f33432b421
+  value_source: v10_final_trusted_summary_runtime_semantics_only
+  source_summary: /home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10/node05_joint_v10_convergence_resume_s2940to3160_20260812a/summary.json
+  source_summary_sha256: be6cc789c49c7493a86fd43105b4aa339509e1cf33ab3183e5f50e000f22c9e4
+  v10_checkpoint_optimizer_or_lambda_h_reused: false
+  fields:
+    connect_lagrange_multiplier_response: true
+    density_response_unroll_steps: 0
+    density_response_unroll_lr: 1.0e-3
+    implicit_density_parameter_response: true
+    implicit_response_tolerance: 3.0e-5
+    implicit_response_max_iterations: 2500
+    implicit_response_damping: 1.0e-8
+    implicit_response_diagonal_probes: 0
+    implicit_response_solver: direct
+    implicit_response_warm_start: true
+
+directions:
+  training_direction:
+    count_per_step: 1
+    distribution: internal_space_rademacher
+    resample_each_step: true
+    normalization: unnormalized_pm1_in_orthonormal_internal_coordinates
+    input_projection: complete_internal
+    output_projection: complete_internal
+    estimator: unbiased_internal_projected_hessian_frobenius_squared
+  remove_translation_rotation: true
+  complete_basis_required: true
+  internal_basis_orthonormality_max_abs: 1.0e-10
+  internal_external_overlap_max_abs: 1.0e-10
+  projector_idempotence_max_abs: 1.0e-10
+
+loss:
+  reduction: per_molecule_then_global_mean
+  lambda_E: 0.1
+  lambda_G: 0.8
+  lambda_F: 1.0
+  lambda_H: null
+  lambda_H_source: required_same_v11_train80_ddp8_calibration_artifact
+  energy:
+    target: structures25_e_kin_plus_xc_label
+    evaluation_point: fixed_pbe_ks_label_density
+    reduction: absolute_scaled_l1
+    absolute_scale_hartree: 0.1
+  density:
+    canonical_name: gradient
+    target: projected_structures25_kin_plus_xc_gradient_label
+    evaluation_point: fixed_pbe_ks_label_density
+    projection: electron_number_tangent
+    reduction: mean_squared_error_over_untransformed_coefficients
+    scale_hartree_per_density_coefficient: 1.0e-2
+    solver_stationarity_contribution: forbidden
+  force:
+    target: complete_pbe_relaxed_force
+    evaluation_point: strictly_converged_model_self_consistent_density
+    parameter_density_response: implicit_required
+    reduction: mixed_absolute_relative_l1
+    relative_fraction: 0.5
+    absolute_scale_hartree_per_bohr: 0.01
+    relative_rms_floor_hartree_per_bohr: 1.0e-3
+  hvp:
+    target: symmetric_complete_pbe_relaxed_hessian
+    evaluation_point: strictly_converged_model_self_consistent_density
+    input_projection: complete_internal
+    output_projection: complete_internal
+    reduction: mean_internal_matrix
+    stochastic_formula: rademacher_expectation_equals_internal_matrix_frobenius_mse
+    absolute_scale_hartree_per_bohr2: 0.1
+  initial_weights:
+    lambda_E: 0.1
+    lambda_G: 0.8
+    lambda_F: 1.0
+    lambda_H: null
+  hessian_training_direction:
+    count_per_rank_per_update: 1
+    distribution: internal_space_rademacher
+    resample_each_use: true
+    estimator: unbiased_internal_projected_hessian_frobenius_squared
+  gradient_calibration:
+    population: Train80_only
+    initialization: released_article_checkpoint
+    learning_rate: 0.0
+    aggregate: global_mean_over_all_80_molecules_and_registered_directions
+    record_per_molecule_norms: true
+    target_weighted_h_to_egf_gradient_ratio: 0.25
+    lambda_h_min: 1.0e-4
+    lambda_h_max: 1.0
+
+ddp_consistency_gate:
+  required_before_any_nonzero_lr_update: true
+  population: same_fixed_8_train_molecules_and_same_8_hvp_directions
+  compare:
+    - raw_component_losses
+    - weighted_component_losses
+    - per_parameter_e_gradient
+    - per_parameter_g_gradient
+    - per_parameter_f_gradient
+    - per_parameter_h_gradient
+    - aggregate_gradient
+    - one_adamw_parameter_update
+  tolerance:
+    scalar_atol: 1.0e-11
+    scalar_rtol: 1.0e-10
+    gradient_max_abs: 1.0e-10
+    gradient_relative_l2: 1.0e-9
+    update_max_abs: 1.0e-11
+    update_relative_l2: 1.0e-10
+  failure_action: stop_without_training
+
+learning_rate_pilots:
+  candidates: [3.0e-7, 1.0e-6, 3.0e-6]
+  preferred_first: 1.0e-6
+  initialization_reset_for_each_candidate: true
+  optimizer_reset_for_each_candidate: true
+  train_population: Train80
+  validation_population: Validation10
+  global_updates: 20
+  epochs: 2
+  identical_global_batches_and_hvp_directions: true
+  selection: highest_learning_rate_passing_all_gates_then_lowest_validation_composite
+  gates:
+    all_finite: true
+    density_and_kkt_pass_rate: 1.0
+    analytic_response_pass_rate: 1.0
+    gradient_clip_fraction_max: 0.20
+    sustained_explosion_window_updates: 5
+    sustained_explosion_multiplier_vs_initial_median: 5.0
+    validation_energy_force_hessian_finite: true
+  test_access_allowed: false
+
+formal_training:
+  learning_rate: null
+  learning_rate_source: required_frozen_pilot_selection_artifact
+  lambda_H: null
+  lambda_H_source: required_frozen_v11_calibration_artifact
+  optimizer: AdamW
+  fresh_optimizer_state: true
+  weight_decay: 0.0
+  adam_betas: [0.9, 0.999]
+  gradient_clip_norm: 1.0
+  validation_interval_epochs: 1
+  checkpoint_interval_global_updates: 10
+  full_hessian_validation: true
+  minimum_validation_intervals_before_stop: 4
+  stop_requires_consecutive_intervals: 3
+  validation_composite: >-
+    mean over molecules of the equally weighted normalized Energy absolute
+    error, Force MAE, Hessian MAE, and Hessian relative Frobenius error, with
+    normalization constants frozen from Train80 before pilot selection.
+  platform_or_improvement_rule: >-
+    Each qualifying interval must either improve the validation composite by
+    at least 0.5 percent relative to the best earlier interval, or have absolute
+    relative change no greater than 1 percent while Force MAE and Hessian
+    relative Frobenius do not regress by more than 1 percent. Three consecutive
+    qualifying intervals are required.
+  model_selection: lowest_validation_composite_among_eligible_checkpoints
+  test_access_allowed: false
+
+canonical_replay_closure_gates:
+  threshold_source: v10_canonical_label_contract_reused_as_numerical_definition_only
+  frozen_before_training: true
+  failure_action: raise_without_training_update
+  reference_euler_residual_rms_max: 5.0e-6
+  label_electron_number_residual_abs_max: 2.0e-3
+  gradient_identity_max_abs: 1.0e-10
+  matched_total_energy_closure_max_hartree: 1.0e-6
+
+gates:
+  density_solver_target: 5.0e-9
+  center_projected_density_gradient_max: 1.0e-8
+  center_electron_number_residual_max: 1.0e-10
+  analytic_response_residual_max: 1.0e-8
+  analytic_response_constraint_residual_max: 1.0e-10
+  response_correction_fraction_max: 5.0
+  cancellation_index_max: 10.0
+  reference_hessian_antisymmetric_over_symmetric_fro_max: 0.005
+  require_all_finite: true
+  require_nonzero_hvp_parameter_gradient: true
+  validation_accessed: false
+  test100_accessed: false
+
+evaluation:
+  validation_parallelism: molecule_and_internal_basis_direction_sharded_over_8_gpus
+  metrics:
+    - energy_absolute_error
+    - force_mae
+    - hessian_mae
+    - hessian_relative_frobenius
+    - hessian_symmetry_max_abs
+    - density_projected_gradient_residual
+    - kkt_residual
+  aggregate_statistics: [mean, median, p90]
+  final_test_once: true
+  retraining_after_test_forbidden: true
+
+performance_audit:
+  same_global_batch_and_numerical_definition: true
+  warmup_global_updates: 2
+  measured_global_updates: 20
+  configurations: [one_gpu_serial_8_molecules, eight_gpu_ddp_8_molecules]
+  target_end_to_end_speedup: 4.0
+  report:
+    - end_to_end_step_time
+    - hvp_backward_time
+    - density_response_time
+    - integral_derivative_time
+    - communication_time
+    - full_hessian_evaluation_time
+    - gpu_utilization
+    - peak_gpu_memory
+  below_target_action: report_bottleneck_without_claiming_success

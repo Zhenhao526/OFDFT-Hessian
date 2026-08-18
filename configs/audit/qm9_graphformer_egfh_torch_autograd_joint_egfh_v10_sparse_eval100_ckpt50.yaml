@@ -1,0 +1,381 @@
+protocol_id: qm9_graphformer_egfh_torch_autograd_joint_egfh_v10
+semantic_version: qm9_complete_total_relaxed_egfh_v1
+branch_id: graphformer_canonical_torch_only_joint_egfh_20260810
+frozen_at: 2026-08-10
+stage: one_smaller_train_parent_joint_egfh_calibration_then_matched_10_step_formal
+method_name: "自动微分积分与密度/KKT响应的complete-total relaxed-HVP"
+fully_analytic_libcint_second_integrals: true
+fully_autodiff_geometry_integrals: true
+primary_derivative_backend: torch_autograd_dqc_libcint
+finite_difference_primary_path_allowed: false
+jax_primary_path_allowed: false
+validation_access_allowed: false
+test100_access_allowed: false
+
+definitions:
+  physical_definition_id: qm9_complete_total_relaxed_egfh_v1
+  normative_specification: docs/qm9_ofdft_canonical_physical_definitions_v1.md
+  scalar_owner: >-
+    A_theta(R,c)=E_Graphformer_kin_plus_xc(R,c;theta), and
+    E_total_theta(R,c)=A_theta(R,c)+E_H(R,c)+E_ext(R,c)+E_nn(R).
+    There is no independent force or Hessian owner.
+  structures25_energy: >-
+    E supervision is A_theta(R,c_KS) against the Structures25
+    of_labels/energies/e_kin_plus_xc label at the common final converged label
+    index. It is not a complete-total energy loss.
+  structures25_density_gradient: >-
+    G supervision is the direct electron-number-tangent projection of
+    grad_c A_theta(R,c_KS)-grad_kin_plus_xc_label at that same index, reduced as
+    a mean squared error over untransformed density coefficients.
+  total_relaxed_force: >-
+    F_theta(R)=-d E_total_theta(R,c_theta_star(R))/dR at the strictly converged
+    model-self-consistent constrained density, with implicit parameter response.
+  complete_total_relaxed_hvp: >-
+    H_theta v is the constrained KKT Schur-complement response at the strictly
+    converged model-self-consistent density. DQC/libcint torch.autograd.Function primitives supply nuclear-coordinate
+    integral Jacobians and higher derivatives; PyTorch owns the scalar, geometry,
+    density-response, and model-parameter graph. No JAX or numerical displacement is used.
+  solver_stationarity: >-
+    Density, electron-number, KKT, predictor, and corrector residuals are
+    diagnostic-only fail-closed gates and never enter E, G, F, or H losses.
+  forbidden_fallbacks:
+    - fixed_density_force_or_hvp
+    - displaced_ks_density_hvp
+    - stale_model_density
+    - detached_force_or_hvp
+    - independent_force_head
+    - independent_hessian_head
+    - stationarity_residual_as_g_label
+    - legacy_capacity_optimizer_resume
+    - numerical_integral_derivative_primary_path
+    - relaxed_force_finite_difference_training_target
+    - finite_difference_hessian_model_selection
+
+identity:
+  old_original_a_identity_allowed: false
+  old_checkpoint_or_manifest_hash_reuse_allowed: false
+  baseline_name: released_article_qm9_scalar_graphformer
+  initialization: released_article_qm9_weight_checkpoint
+  source_checkpoint: /home/shenwei01/xzh_node02_20260724/runtime_parent/_runtime/models/train/runs/trained-on-qm9/checkpoints/last.ckpt
+  source_checkpoint_sha256: 9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+  optimizer_initialization: fresh_shared_egfh_adamw_state
+  density_transition_state_initialization: fresh_from_article_checkpoint
+  legacy_capacity_checkpoint_resume_allowed: false
+  v1_v2_v3_v4_checkpoint_resume_allowed: false
+  v10_same_protocol_resume_allowed: true
+
+baseline:
+  model_class: Graphformer
+  parameter_count: 18692586
+  max_steps: 1656810
+  validation_enabled: false
+  test_enabled: false
+
+frozen_train_only_asset_reuse:
+  allowed: true
+  role: raw_train_only_labels_hessian_and_internal_basis_only
+  canonical_semantic_revalidation_required: true
+  source_protocol_id: qm9_graphformer_small_molecule_assets_0003374_v1
+  source_protocol_sha256: 6e2df7bb1708cf83644dba29d840a034fe2b1af7e67e0437c359434f7353c8a0
+  parent_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/qm9_graphformer_small_molecule_assets_v1/0003374/parent_manifest.json
+  parent_manifest_sha256: 5eea79a72d900a99371b9bd9d334e4549f69b6035e1680244e980c650aeba0ef
+  direction_manifest: /home/shenwei01/xzh_node02_20260724/artifacts/qm9_graphformer_small_molecule_assets_v1/0003374/directions/manifest.json
+  direction_manifest_sha256: 12853f299f3b0f7292ccf4e86ddc167e503df73416c5137e8078de3f4f5feafe
+  molecule_ids: ["0003374"]
+  split_role: train_only
+
+reference_record:
+  common_label_index_rule: last_true_ks_labels_energies_has_energy_label
+  coefficient_label_key: of_labels/spatial/coeffs
+  energy_label_key: of_labels/energies/e_kin_plus_xc
+  gradient_label_key: of_labels/spatial/grad_kin_plus_xc
+  require_same_index_for:
+    - of_labels/spatial/coeffs
+    - of_labels/energies/e_kin_plus_xc
+    - of_labels/spatial/grad_kin_plus_xc
+    - ks_labels/energies/e_tot
+  coefficient_representation: independent_untransformed_auxiliary_density
+  require_valid_energy_label: true
+  reference_hessian_symmetrization: before_internal_projection
+
+training_semantics:
+  energy_gradient_branch: structures25_kin_plus_xc_at_fixed_pbe_ks_density
+  force_hessian_branch: model_self_consistent_complete_total_relaxed_pes
+  energy_evaluation_point: fixed_pbe_ks_label_density
+  gradient_evaluation_point: fixed_pbe_ks_label_density
+  force_evaluation_point: strictly_converged_model_self_consistent_density
+  hessian_evaluation_point: strictly_converged_model_self_consistent_density
+  density_stationarity_role: diagnostic_only_fail_closed_gate
+  one_scalar_energy_owner: true
+
+directions:
+  training_direction:
+    count_per_step: 1
+    distribution: internal_space_rademacher
+    resample_each_step: true
+    normalization: unnormalized_pm1_in_orthonormal_internal_coordinates
+    input_projection: complete_internal
+    output_projection: complete_internal
+    estimator: unbiased_internal_projected_hessian_frobenius_squared
+  remove_translation_rotation: true
+  complete_basis_required: true
+  internal_basis_orthonormality_max_abs: 1.0e-10
+  internal_external_overlap_max_abs: 1.0e-10
+  projector_idempotence_max_abs: 1.0e-10
+
+numerics:
+  dtype: float64
+  integral_derivative_step_bohr: 0.0
+  integral_directional_second_step_bohr: 0.0
+  integral_derivative_backend: torch_autograd_dqc
+  finite_difference_oracle:
+    enabled_for_primary_training: false
+    enabled_for_model_selection: false
+    allowed_only_in_separate_postfit_correctness_audit: true
+  autodiff_dependency:
+    package: dqc
+    git_commit: 0fe821fc92cb3457fb14f6dff0c223641c514ddb
+    integral_library: dqclibs
+    dqclibs_version: 0.1.1
+    dqclibs_wheel_sha256: 912a0103f2157a89a1117f8b2a432a9fd32ceb020e1cdcb89948ae4fac2da083
+    backend: torch
+    torch_version: 2.4.1
+    dtype: float64
+    isolated_overlay_required: true
+    jax_forbidden: true
+  nuclear_attraction_representation:
+    formula: negative_sum_over_nuclei_of_Z_times_int1e_rinv
+    rinv_origin: explicit_torch_coordinate
+    implementation: dqc_libcint_torch_autograd_function
+    displaced_geometries_used: false
+  integral_cache_entries: 4
+  density:
+    initialization: label_reference
+    stage1_adam_lr: 1.0e-3
+    stage1_max_cycles: 1000
+    stage1_threshold: 1.0e-2
+    fallback_adam_lr: 3.0e-4
+    fallback_max_cycles: 10000
+    fallback_threshold: 1.0e-5
+    strict_projected_gradient_threshold: 5.0e-9
+    training_graph_projected_gradient_threshold: 1.0e-8
+    lbfgs_refine: true
+    newton_refine: true
+  analytic_response:
+    solver: dense_direct_implicit_adjoint
+    damping: 0.0
+    residual_tolerance: 1.0e-8
+  implicit_parameter_response:
+    solver: direct
+    tolerance: 3.0e-5
+    max_iterations: 2500
+    damping: 1.0e-8
+    warm_start: true
+  density_transition:
+    predictor: exact_solve_of_linearized_constrained_parameter_response
+    predictor_damping: 0.0
+    trust_filter: projected_stationarity_backtracking
+    trust_threshold: 5.0e-6
+    minimum_scale: 0.0078125
+    corrector_first: true
+    corrector_entry_threshold: 5.0e-6
+
+loss:
+  formula: >-
+    Every optimizer update uses one shared AdamW state and one parameter-only
+    backward traversal of lambda_E*L_E+lambda_G*L_G+lambda_F*L_F+lambda_H*L_H.
+    L_H uses one fresh Rademacher HVP computed through the complete DQC/libcint
+    PyTorch automatic-differentiation graph. Solver residuals contribute no loss samples.
+  energy:
+    target: structures25_e_kin_plus_xc_label
+    evaluation_point: fixed_pbe_ks_label_density
+    reduction: absolute_scaled_l1
+    absolute_scale_hartree: 0.1
+  density:
+    canonical_name: gradient
+    target: projected_structures25_kin_plus_xc_gradient_label
+    evaluation_point: fixed_pbe_ks_label_density
+    projection: electron_number_tangent
+    reduction: mean_squared_error_over_untransformed_coefficients
+    scale_hartree_per_density_coefficient: 1.0e-2
+    solver_stationarity_contribution: forbidden
+  force:
+    target: complete_pbe_relaxed_force
+    evaluation_point: strictly_converged_model_self_consistent_density
+    parameter_density_response: implicit_required
+    reduction: mixed_absolute_relative_l1
+    relative_fraction: 0.5
+    absolute_scale_hartree_per_bohr: 0.01
+    relative_rms_floor_hartree_per_bohr: 1.0e-3
+  hvp:
+    target: symmetric_complete_pbe_relaxed_hessian
+    evaluation_point: strictly_converged_model_self_consistent_density
+    input_projection: complete_internal
+    output_projection: complete_internal
+    reduction: mean_internal_matrix
+    stochastic_formula: rademacher_expectation_equals_internal_matrix_frobenius_mse
+    absolute_scale_hartree_per_bohr2: 0.1
+  low_mode:
+    mode_count: 0
+    wrong_curvature_multiplier: 2.0
+  calibration_probe_weights:
+    lambda_E: 0.1
+    lambda_G: 0.8
+    lambda_F: 1.0
+    lambda_H: 0.01
+  initial_weights:
+    lambda_E: 0.1
+    lambda_F: 1.0
+    lambda_G: 0.8
+    lambda_H: 0.01
+    lambda_Q: 0.0
+    lambda_spec: 0.0
+  legacy_lambda_h_or_calibration_reuse_allowed: false
+  formal_lambda_h_source: required_same_protocol_v10_joint_torch_calibration_artifact
+
+gradient_calibration:
+  required_before_formal: true
+  legacy_calibration_artifact_allowed: false
+  smoke:
+    steps: 1
+    learning_rate: 0.0
+    evaluation_mode: none
+    lambda_H: 0.01
+    directions_per_step: 1
+    direction_strategy: internal_space_rademacher
+    alternating_hvp_updates: false
+  formal_lambda_h_rule: >-
+    lambda_H=clip(0.01*0.25*||grad_theta(lambda_E L_E + lambda_G L_G +
+    lambda_F L_F)||/||grad_theta(lambda_H mean_k L_H,k)|_{lambda_H=0.01}||,
+    1e-4,1.0), using directly differentiated aggregate losses.
+  target_hvp_to_egf_gradient_ratio: 0.25
+  lambda_h_min: 1.0e-4
+  lambda_h_max: 1.0
+  artifact_requirements:
+    protocol_id: qm9_graphformer_egfh_torch_autograd_joint_egfh_v10
+    physical_definition_id: qm9_complete_total_relaxed_egfh_v1
+    molecule_ids: ["0003374"]
+    directions_per_step: 1
+    direction_strategy: internal_space_rademacher
+    protocol_sha256_must_match_runtime: true
+    training_curve_sha256_required: true
+    training_summary_sha256_required: true
+    canonical_code_provenance_must_match_formal_runtime: true
+
+canonical_replay_closure_gates:
+  threshold_source: train_only_label_contract_audit_0003374_revalidated_before_v9_training
+  frozen_before_formal: true
+  failure_action: raise_without_training_update
+  observed_reference_euler_residual_norm: 1.4857265532e-4
+  observed_reference_euler_residual_rms: 4.9414530115e-6
+  observed_label_electron_number_residual_abs: 1.0449477595e-3
+  reference_euler_residual_rms_max: 5.0e-6
+  label_electron_number_residual_abs_max: 2.0e-3
+  gradient_identity_max_abs: 1.0e-10
+  matched_total_energy_closure_max_hartree: 1.0e-6
+
+density_cost_screen:
+  steps: 4
+  learning_rate: 1.0e-7
+  weight_decay: 0.0
+  alternating_hvp_updates: false
+  expected_joint_updates: 4
+  gradient_clip_norm: 1.0
+  checkpoint_interval: 1
+  evaluation_mode: density_cost
+  density_predictor_damping: 0.0
+  density_parameter_trust_threshold: 5.0e-6
+  density_parameter_trust_minimum_scale: 0.0078125
+  density_predictor_corrector_threshold: 5.0e-6
+
+formal_training:
+  initialization_checkpoint: released_article_qm9_weight_checkpoint
+  fresh_optimizer_states_required: true
+  resume_from_legacy_capacity_checkpoint_allowed: false
+  steps: 10
+  # User-authorized convergence-first continuation from cumulative step 80.
+  # One 220-update resume reaches cumulative step 300 without forcing a dense
+  # full-Hessian evaluation at every former 40-step chunk boundary.
+  resume_additional_steps: 220
+  learning_rate: 1.0e-7
+  lambda_H: from_required_same_protocol_calibration_artifact
+  weight_decay: 0.0
+  adam_betas: [0.9, 0.999]
+  alternating_hvp_updates: false
+  expected_joint_updates: 10
+  expected_hvp_updates: 10
+  expected_replay_updates: 0
+  directions_per_hvp_update: 1
+  expected_hvp_backpropagated_directions: 10
+  gradient_clip_norm: 1.0
+  checkpoint_interval: 50
+  evaluation_interval: 100
+  gradient_diagnostics_interval: 5
+  evaluation_mode: full
+  checkpoint_selection: final_step_without_validation
+
+user_authorized_schedule_override:
+  authorized_at: 2026-08-11
+  reason: prioritize_training_convergence_over_dense_full_hessian_monitoring
+  source_protocol_sha256: 3ec061c6fc7dc849141f7c29d944eb2423095520652255e572b8d65364e210ba
+  source_checkpoint_step: 80
+  network_configuration_changed: false
+  optimizer_or_loss_configuration_changed: false
+  checkpoint_interval: 50
+  complete_hessian_interval: 100
+  target_cumulative_step: 300
+
+resume_policy:
+  allowed: true
+  same_protocol_id_required: qm9_graphformer_egfh_torch_autograd_joint_egfh_v10
+  same_physical_definition_id_required: qm9_complete_total_relaxed_egfh_v1
+  same_protocol_sha256_required: true
+  optimizer_state_restore_required: true
+  center_density_state_restore_required: true
+  direction_schedule_continuity_required: true
+  root_source_checkpoint_sha256_required: 9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09
+  legacy_checkpoint_allowed: false
+
+gates:
+  density_solver_target: 5.0e-9
+  center_projected_density_gradient_max: 1.0e-8
+  center_electron_number_residual_max: 1.0e-10
+  predictor_projected_density_gradient_max: 5.0e-6
+  density_refresh_max_cycles: 500
+  density_fallback_full_count: 0
+  median_parameter_trust_scale_min: 0.25
+  analytic_response_residual_max: 1.0e-8
+  analytic_response_constraint_residual_max: 1.0e-10
+  response_correction_fraction_max: 5.0
+  cancellation_index_max: 10.0
+  require_all_finite: true
+  require_nonzero_hvp_parameter_gradient: true
+  require_common_reference_label_index: true
+  require_symmetric_reference_hessian: true
+  reference_hessian_antisymmetric_over_symmetric_fro_max: 0.005
+  validation_accessed: false
+  test100_accessed: false
+
+stage1:
+  gate:
+    training_all_parent_relative_frobenius_max: 0.90
+    antisymmetric_over_symmetric_fro_max: 0.005
+    energy_force_relative_regression_max: 1.10
+    energy_error_floor_hartree: 1.0e-8
+    force_error_floor_hartree_per_bohr: 1.0e-8
+
+evaluation:
+  train_molecule: "0003374"
+  physical_energy: model_self_consistent_relaxed_total_energy
+  physical_force: model_self_consistent_complete_total_relaxed_force
+  implicit_internal_full_hessian: true
+  internal_hessian_output_projection: complete_internal
+  internal_hessian_reference_symmetrization: before_projection
+  p0_schur_decomposition: true
+  strict_cartesian_force_difference_hessian: false
+  strict_cartesian_force_difference_status: forbidden_as_primary_or_model_selection_path
+  primary_hessian_backend: dqc_libcint_torch_double_backward_plus_torch_kkt_autograd
+  vibration_metrics: true
+  infrared_intensity_metrics: false
+  validation_accessed: false
+  test100_accessed: false

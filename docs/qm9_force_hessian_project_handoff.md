@@ -1,6 +1,6 @@
 # QM9 Force/Hessian Project Handoff
 
-Last updated: 2026-07-28 16:00 Asia/Singapore
+Last updated: 2026-08-13 10:25 Asia/Shanghai
 
 ## Purpose
 
@@ -8,14 +8,1177 @@ This is the handoff and continuity document for the QM9 P1-410 and random1000 fo
 
 Detailed reports remain in separate files under `docs/`; this document is the first file a new maintainer should read.
 
+### HORM-style shared-optimizer joint E/G/F/H v10 (2026-08-10; user-authorized step-300 monitor active)
+
+The requested HORM-style optimizer ablation is complete on the current v9
+scalar Graphformer mainline. The physical model, labels, PyTorch/DQC derivative
+backend, model-self-consistent relaxed F/H definition, internal Rademacher
+probe, density/KKT gates, and released article initialization are unchanged.
+Only optimizer ownership changes: every step now differentiates
+`lambda_E L_E + lambda_G L_G + lambda_F L_F + lambda_H L_H` once with respect
+to model parameters and applies one shared AdamW state. There are no separate
+H-only and E/G/F-replay AdamW states.
+
+The implementation adds protocol
+`configs/audit/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10.yaml`, a
+joint phase in
+`scripts/launch_qm9_graphformer_implicit_relaxed_hvp_pilot_node02.sh`, and an
+explicit loss-term selector in
+`scripts/qm9_complete_total_capacity_train.py`. Frozen alternating protocols
+remain reproducible. Focused derivative/training tests pass `80/80`; four
+optional PySCFAD/DQC environment tests are skipped. The detailed design and
+result report is `docs/qm9_graphformer_joint_egfh_v10_design.md`.
+
+The zero-LR calibration completed at
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10/node01_joint_v10_calibration_20260810a`.
+It records `update_kind=joint`,
+`backpropagated_components=E;F;G;H`, all finite nonzero component gradients,
+peak GPU allocation `52,864.63 MiB`, and
+`lambda_H=0.2647199267052535`. Calibration JSON SHA256 is
+`5410ca305d62b62fb204dc61d8599aee9bf54dd5dfe77410f2e47c8d2a45e13a`.
+
+The fresh ten-step formal run completed at
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10/node01_joint_v10_formal_s10_20260810a`.
+All ten rows are joint E/G/F/H updates using one shared optimizer. Every
+density, KKT response, backend, finiteness, symmetry, Validation/Test-access,
+and energy/force regression gate passes. Wall time is `3037.01 s`, peak GPU
+allocation `53,264.34 MiB`, and maximum RSS `6005.92 MiB`.
+
+| metric | step 0 | joint-v10 step 10 | change | alternating-v9 step 10 |
+| --- | ---: | ---: | ---: | ---: |
+| Relative Frobenius | 1.92257408 | 1.90471448 | -0.929% | 1.89413657 |
+| Hessian MAE | 0.05695264 | 0.05629258 | -1.159% | 0.05610792 |
+| Hessian RMSE | 0.13645060 | 0.13518306 | -0.929% | 0.13443231 |
+| force MAE | 0.02881133 | 0.02823202 | -2.011% | 0.02866193 |
+| energy absolute error | 0.00073360 | 0.00076494 | +4.272% | 0.00077316 |
+
+Joint optimization improves force and energy retention relative to v9, but
+its final Relative Frobenius is `0.01057791` higher (`0.558%` worse). A paired
+raw-PBE vibrational evaluation gives frequency MAE/RMSE
+`758.857/1156.758 cm^-1` for joint v10 versus
+`757.482/1151.635 cm^-1` for alternating v9; both have three imaginary modes
+versus PBE's one. Mean mode overlap changes only
+`0.66096 -> 0.66204`.
+
+At steps 1/5/10, the H-versus-aggregate-EGF parameter-gradient cosines are
+`0.2041/0.0242/0.0633`, so the tasks are weakly aligned rather than strongly
+opposed. The common AdamW history remains dominated by the much larger force
+gradient, and the stochastic H loss is noisy. The registered 40-step extension
+required joint-v10 Relative Frobenius to beat the matched v9 endpoint; that
+condition failed, so the initial preregistered decision was not to extend. The
+user explicitly authorized overriding that decision on 2026-08-10. A
+same-protocol resume from the step-10 checkpoint is therefore active on node01
+GPU 0, restoring the shared AdamW, center densities, and cumulative Rademacher
+schedule and adding 40 updates through cumulative step 50. Its launcher PID was
+`2171355`; output is
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10/node01_joint_v10_resume_s10to50_20260810a`.
+It evaluates complete Hessians at cumulative steps 20/30/40/50. This is an
+explicit user-authorized extension after a failed advancement condition, not a
+retrospective claim that the step-10 gate passed. Final conclusions remain
+pending.
+
+The user subsequently authorized continuing through cumulative step 300 and
+requested monitoring. To preserve the exact v10 protocol/code/calibration
+hashes, `scripts/monitor_and_extend_qm9_joint_v10_to_step300.sh` now waits for
+the active step-50 run, validates every final summary/Hessian/checkpoint, and
+then chains registered 40-step same-protocol resumes through cumulative steps
+90/130/170/210/250/290. The last registered chunk starts from step 290; the
+orchestrator stops it only after both the cumulative step-300 complete Hessian
+row and restorable `step_0000300.ckpt` are fully written and validated. It may
+not continue beyond 300.
+
+The step-10-to-50 continuation completed on node01. Its cumulative step-50
+complete-Hessian Relative Frobenius is `1.8444374146567872`; Validation and
+Test100 remained unread. A later node01 step-50-to-90 attempt reached training
+step 54 but was stopped at the user's request before its step-55 checkpoint,
+so the portable recovery point remains step 50.
+
+On 2026-08-11 the user requested migration to node05. The complete
+`/home/shenwei01/xzh_node02_20260724` project tree was copied from node01:
+`88,292` entries and `29,695,951,102` logical bytes. A second rsync dry run
+reported zero differences, and the source/destination step-50 checkpoint
+SHA256 is
+`8da6dc2f869f897979986fe9f3dd0bba837b94f0d47bc658aceb80aa3c821925`.
+Node05's former compatibility symlink was preserved as
+`/home/shenwei01/xzh_node02_20260724.pre_migration_symlink_20260811a`; the
+active path is now a real directory so strict calibration provenance retains
+the node01 absolute-path identity.
+
+The active detached orchestrator now runs on node05 as PID `120553`, using
+physical GPU 1 (`CUDA_VISIBLE_DEVICES` maps it to process-local `cuda:0`). Its
+step-50-to-90 output is
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10/node05_joint_v10_resume_s50to90_20260810a`.
+The node01 process tree is stopped. Orchestrator state and logs remain at
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10/step300_monitor_20260810a/status.json`
+and `orchestrator.log`. A Codex thread heartbeat named
+`监控 Hessian 联合训练至 step 300` (automation id `hessian-step-300`) checks the
+node05 state every 30 minutes and reports completion or failure without
+starting duplicate jobs. This extended trajectory remains a user-authorized
+diagnostic after the original step-10 advancement condition failed; it must
+not be relabelled as a preregistered gate pass.
+
+At cumulative step 80 the complete-Hessian Relative Frobenius reached
+`1.769428443513472`; `step_0000080.ckpt` and the complete-Hessian row were both
+fully written. On 2026-08-11 the user requested prioritizing convergence and
+making complete-Hessian evaluation materially sparser. The old step-50-to-90
+training tree and PID `120553` orchestrator were stopped only after the step-80
+artifacts were verified, and its monitor state is now `superseded`.
+
+The final user-selected schedule-only continuation uses
+`configs/audit/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10_sparse_eval100_ckpt50.yaml`
+(SHA256 `2954481ff6282149c57b68737b8af6fff00dad0904e6addeb5735dd5348dad90`).
+It preserves the network, physical definition, shared AdamW state, learning
+rate, density state, and cumulative Rademacher sequence. The regenerated
+same-protocol calibration differs from the original `lambda_H` only by
+`6.620681780589166e-11`, as recorded below.
+Periodic checkpoints are now every 50 updates, at cumulative steps
+`130/180/230/280`; the final step-300 evaluation also writes the required final
+checkpoint. Complete Hessians are due only at cumulative steps `180/280/300`,
+where step 300 is the mandatory final evaluation. A narrow migration first
+copies the step-80 checkpoint unchanged except for protocol-hash metadata and
+an explicit schedule-migration record. The source and first migrated
+checkpoint SHA256 values are
+`84307a5b67cf115042bd1a76f92fb047738fa59d48a637b67a8b2a32175c6847` and
+`77bcd64083916fd3a469cddda77c501b682e85bdd41d818c4500a6fbd349c78f`.
+
+The first sparse-schedule calibration was stopped before producing an artifact
+when an unrelated root process occupied GPU 1. The subsequent 50-step
+Hessian/5-step-checkpoint calibration was also stopped without an artifact when
+the user selected the final 100/50 schedule; both incomplete attempts are
+retained as abandoned history. The completed schedule-only calibration records
+`lambda_H=0.2647199266390467` and SHA256
+`02cc28ff8b45bc697bdde2ec4ea250aeed237ce67b42fb5911968a52da6783a5`.
+The original exact `1e-12` monitor check rejected its `6.62e-11` difference
+from `0.2647199267052535`. The user explicitly authorized an absolute tolerance
+of `1e-9`. A first restart then exposed the formal resume preflight's exact
+checkpoint metadata checks. Script
+`scripts/rebind_qm9_v10_schedule_calibration.py` (SHA256
+`c8e8394329e6844672c3dae5c705ba60a2b97f7799b71f1225ac6f0d5da4d355`)
+therefore produced
+`node05_joint_v10_sparse_eval100_ckpt50_migration_20260811a/step_0000080_relaxed_tol1e9.ckpt`
+(SHA256 `4566f976ddb0adf494b26ed5863551d9f5b305b635bb1638a6190f272f86e676`).
+It changes only the exact `lambda_H` and calibration-provenance metadata;
+model parameters, optimizer state, active densities, RNG state, direction
+cursor, and cumulative step remain unchanged.
+
+The detached node05 orchestrator ran as PID/PGID `494122` on physical GPU 3
+and completed successfully at 2026-08-11 23:38 Asia/Shanghai. Its script is
+`scripts/monitor_qm9_joint_v10_sparse_eval100_ckpt50_to_step300.sh` (SHA256
+`cbf0e09b0da1a45c31c06e469fd450df2209155d5451926b46e845fafb57ee13`).
+It passed the strict formal preflight and resumed once from cumulative step 80
+for 220 updates. The final validated complete-Hessian rows are at cumulative
+steps `180/280/300`; the final Relative Frobenius is `1.4549930687073167`,
+MAE `0.049556261974996865`, RMSE `0.10326503684797303`, force MAE
+`0.013427286352139581` Hartree/bohr, force RMSE `0.027120974076296114`, and
+total-energy absolute error `0.0008149499528826709` Hartree. Compared with the
+trusted step-80 Relative Frobenius `1.769428443513472`, the final value improves
+by `17.77%`. The Hessian antisymmetric/symmetric Frobenius ratio is
+`5.6578534043194965e-12`.
+Its state/log directory is
+`runs/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10/step300_sparse100_ckpt50_monitor_20260811a`,
+and its training output is
+`node05_joint_v10_sparse_eval100_ckpt50_resume_s80to300_20260811a`. The final
+checkpoint records cumulative step 300, `alternating_hvp_updates=false`, the
+joint E/G/F/H weights, and `validation_accessed=false` / `test100_accessed=false`.
+No process continued beyond step 300.
+
+Final checkpoint SHA256 is
+`f1f3e18c195dcb148cc1a1fce75c81e8f7f7fdf02e226e3856c20a3a8ca6b347`.
+Summary, training-curve and full-Hessian CSV SHA256 values are respectively
+`cfa27cdc5a251dd7291d551788beb7aa70fa5dbc6005f6bae2bb9f608cf50a87`,
+`a323fff65679ccc484f9e22c6b8641bd906df0cc63252d01304a9cc37a985eac`
+and `d09bc9c5a3544ba5c7d3a8f106d20a1c3843ba3eb206148bc58ecd95bd50b093`.
+
+On 2026-08-12 the user authorized continuing from step 300 until audited
+convergence. The detached node05 convergence orchestrator is PID/PGID `995769`
+on physical GPU 3. It uses
+`scripts/monitor_qm9_joint_v10_to_convergence.sh` (SHA256
+`1a4d10f7aafaf798d6978a7bd9bb4d8b88553a9a37060aafc3c0ae713f5a918d`)
+and began the first `300->520` same-protocol resume at
+`node05_joint_v10_convergence_resume_s300to520_20260812a`. The strict resume
+preflight passed. Network, shared AdamW, `1e-7` learning rate, E/G/F/H weights,
+calibration, density state, RNG, and direction cursor remain continuous.
+
+Convergence is evaluated outside the frozen training protocol so the protocol
+and checkpoint provenance do not drift. Each 220-update segment saves every 50
+steps and evaluates a complete Hessian every 100 steps plus at its terminal
+step. Stopping requires three consecutive complete-Hessian intervals with
+absolute change per 100 steps no greater than 1% for Relative Frobenius and
+Hessian MAE and 2% for force MAE; the final 50-step normalized total-loss and
+force-loss trends must each be no greater than 2% per 100 steps; total-energy
+error initially had to remain within 1.10 times the step-0 error; density gates must pass;
+and the terminal point must agree with the latest 100-step cadence point under
+the same thresholds. State and audit history are under
+`runs/qm9_graphformer_egfh_torch_autograd_joint_egfh_v10/convergence_monitor_20260812a`.
+A 30-minute Codex heartbeat named `监控 Hessian 联合训练至收敛` (automation id
+`hessian`) originally monitored it without restarting failed work or accessing
+Validation/Test100.
+
+The first segment completed and validated at cumulative step 520. Its terminal
+checkpoint is
+`node05_joint_v10_convergence_resume_s300to520_20260812a/checkpoints/step_0000520.ckpt`
+(SHA256 `027631ed026a29961908d87bf0f24896e570cb400b88b27fd4d1ae85b0fe8668`).
+The step-520 complete Hessian has Relative Frobenius
+`1.3586008618158347`, MAE `0.04583487799344745`, force MAE
+`0.008444789405133574` Hartree/bohr, and energy absolute error
+`0.0012925374031738102` Hartree. The audited plateau count remains `0/3`.
+The original orchestrator then stopped because its inherited `ERR` trap treated
+the assessor's intentional exit code 3 (valid segment but not converged) as a
+fatal error. No checkpoint or training result was lost.
+
+On 2026-08-13 the orchestrator was repaired by invoking the assessor in a shell
+conditional and by normalizing an explicitly supplied resume checkpoint to an
+absolute path. The repaired script SHA256 is
+`0e6149169448962e1b4c348d2549fbe6fec186084896946cdedb651878384398`.
+One zero-step launch with a relative checkpoint path was archived under
+`convergence_monitor_20260812a/abandoned_resume520_relative_path_20260813a`.
+The active replacement orchestrator PID/PGID is `1142709`, resuming on physical
+GPU 3 from step 520 into
+`node05_joint_v10_convergence_resume_s520to740_20260812a`. It keeps the exact
+same network, shared AdamW state, learning rate, loss weights, calibration,
+density/RNG/direction state and convergence rules. The earlier failed heartbeat
+was deleted, then a new 30-minute heartbeat was created for this continuation
+under the same automation id `hessian`.
+
+On 2026-08-13 the user explicitly authorized sacrificing more energy accuracy
+and fixed the external convergence energy-error ceiling at `10.0` times the
+step-0 error. This changes only the stopping audit; the training protocol,
+network, joint E/G/F/H weights, shared AdamW state, learning rate, calibration,
+and all other convergence thresholds remain unchanged. Because PID `1142709`
+had already loaded the old `1.10x` assessor into memory, it was stopped at
+cumulative step 539 before any new checkpoint existed. That partial output is
+preserved under
+`convergence_monitor_20260812a/superseded_energygate1p1_partial_s520to539_20260813a`
+and is excluded from the trusted lineage. Training restarted from the unchanged
+step-520 checkpoint under PID/PGID `1153409`. The active script SHA256 is
+`57638b5d3ce666445917d2c742e465084817914942afaa10e5d963d444bfddd0`,
+and `status.json` records `energy_regression_ratio_max=10.0`.
+
+### Mainline reset: PyTorch-only automatic differentiation (2026-08-05; ten-step formal run completed)
+
+The JAX/PySCFAD v8 branch is abandoned as the project mainline. No v8
+checkpoint or calibration is reused by the replacement. The model and physical
+definition do not change: the released 18,692,586-parameter scalar Graphformer
+still consumes nuclear coordinates `R` and density coefficients `c`; E is the
+Structures25 `T_s+E_xc` scalar label, G is its density-coefficient derivative,
+and complete-total relaxed F/H come from the same scalar owner and constrained
+model-self-consistent density. There is still no independent force or Hessian
+head.
+
+The new frozen protocol is
+`configs/audit/qm9_graphformer_egfh_torch_autograd_relaxed_hvp_v9.yaml`.
+Its primary derivative backend is `torch_autograd_dqc_libcint`: a pinned DQC
+integral subset exposes libcint overlap, Coulomb and nuclear-attraction values
+as `torch.autograd.Function` tensors, while PyTorch owns geometry derivatives,
+the Graphformer, scalar total energy, KKT density response, HVP and optimizer
+parameter gradients. Both coordinate-displacement steps are exactly zero.
+Runtime records must show `jax_module_loaded=false`,
+`jax_primary_path_used=false`, and
+`finite_difference_primary_path_used=false`, otherwise the run fails closed.
+PySCF remains only as a frozen-basis parser/reference-value utility; it owns no
+training geometry derivative.
+
+The isolated dependency overlay on node01 is
+`/home/shenwei01/xzh_node02_20260724/envs/dqc-torch-integrals-0fe821fc`,
+binding DQC commit `0fe821fc92cb3457fb14f6dff0c223641c514ddb`, dqclibs
+0.1.1 wheel SHA256
+`912a0103f2157a89a1117f8b2a432a9fd32ceb020e1cdcb89948ae4fac2da083`,
+and the existing PyTorch 2.4.1 environment. JAX is neither imported nor placed
+on `PYTHONPATH`. CPU execution is restricted to 16 cores with JAX/BLAS-style
+thread fan-out replaced by OMP/MKL/OpenBLAS limits of four threads.
+
+On the real train-only molecule `0003374` (13 atoms, 904 auxiliary AOs), the
+Torch values agree with the existing PySCF reference to maximum absolute errors
+of `4.38e-14` for overlap, `6.39e-14` for Coulomb,
+`1.61e-13` for nuclear attraction and `1.47e-14` for normalization. A direct
+classical-energy coordinate gradient and HVP are finite; the isolated HVP took
+about `0.34 s`. The focused integration/training suite passes `77/77`, including
+normalization first/second derivatives and the exact Coulomb HVP-to-model-
+parameter backward path.
+
+Two fail-closed calibration attempts exposed and fixed migration-only bugs.
+Suffix `a` reached the fixed-KS E/G replay after the cold density solve, then
+failed because that replay still read the detached legacy `bundle.values`;
+it now reads the direct Torch integral tensors. Suffix `b` successfully built
+the complete HVP but `loss.backward()` also requested an irrelevant gradient
+for the nuclear-coordinate leaf, causing DQC to ask its libcint for one extra
+third-coordinate derivative not needed by the optimizer. Training now uses
+`torch.autograd.grad(loss, model_parameters)` and assigns only optimizer
+parameter gradients. A focused reproduction proves that the HVP parameter
+gradient remains finite while `positions.grad` remains unrequested. This is
+the correct mixed derivative needed for training and avoids neither model nor
+density response.
+
+The valid one-step, zero-learning-rate v9 calibration completed on node01 GPU
+0 with exit status zero at
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_torch_autograd_relaxed_hvp_v9/node01_calibration_torch_v9_20260805c`.
+It records the observed backends `torch_autograd_dqc_libcint` and
+`torch_autograd_double_backward`, no JAX/finite-difference primary access, and
+all validation/Test100 access disabled. The cold density solve dominates at
+about `398 s`; within the training step, the center graph took `0.98 s`, HVP
+assembly `1.43 s`, dense KKT solve `25.46 s`, and model-parameter backward
+`41.57 s`. Wall time was `551.25 s`, peak GPU allocation `52,867.53 MiB`, and
+maximum RSS `5,964.71 MiB`. Analytic response stationarity/constraint residuals
+were `5.96e-13`/`4.14e-14`, and the center electron-number residual was
+`3.62e-13`. The same-protocol calibration chose
+`lambda_H=0.2647199267010593`; calibration, summary and curve SHA256 values are
+`8be094f55ad3a989b9122af32a3507cf42f4e00f3a8ce53204283dd453c8e691`,
+`0799208f45bf0141b68fccd63b3f584faebd05847a43156a73074a3d52756f02`
+and `7ed54d3a3fab6d53bb53eee0f3a2ce3c67e119ea019f62857d37d2bb96e92ef`.
+
+The fresh ten-step v9 formal run completed normally on node01 GPU 0 at
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_torch_autograd_relaxed_hvp_v9/node01_formal_torch_v9_s10_20260805a`.
+It starts again from the untouched released article weights, uses fresh
+optimizer and density-transition state, and is cryptographically bound to the
+v9 calibration above. All eight H updates and two E/G/F replay updates
+completed, followed by a second complete 33-direction internal Hessian.
+Relative Frobenius changed `1.9225740831 -> 1.8941365720` (`-1.479%`), Hessian
+MAE `0.0569526388 -> 0.0561079182` (`-1.483%`), RMSE
+`0.1364506043 -> 0.1344323125` (`-1.479%`), and force MAE
+`0.0288113297 -> 0.0286619340 Hartree/Bohr` (`-0.519%`). Total-energy absolute
+error regressed `0.0007336005 -> 0.0007731578 Hartree` (`+5.392%`) but remains
+inside the frozen 1.10 relative-regression gate. The final Relative Frobenius
+remains far above the required `0.90`, so `stage1_gate_passed=false`; this is a
+real but modest capacity improvement, not a successful stage transition.
+
+The step-0 and step-10 complete Hessian evaluations took `781.40 s` and
+`739.30 s`; their dense KKT solves took `705.61 s` and `672.50 s`. The run wall
+time was `3004.51 s`, peak GPU allocation `53,544.48 MiB`, and maximum RSS
+`5,997.05 MiB`. Every post-update density transition used the fast path: 104
+cycles total, maximum 16, zero fallback, median trust scale `0.25`. Density,
+energy/force regression, response, finiteness and symmetry gates passed. JAX
+and finite-difference primary paths were not accessed; Validation and Test100
+remained inaccessible. The final checkpoint, summary, curve and full-Hessian
+metric SHA256 values are
+`50fe6cd747db8d336dd0186ccb47f9248edb99bd6128c8532a3d507facf735ca`,
+`4efd16e77d0733ba0202380dcabe302c46ce405118e57bbce4c2bd51916318bb`,
+`ffbab6235d0ace4c5f0a3d681ca1e1b631499b23b16e0cb964c9fac988927770`
+and `2b2485119ace026c34600c131b5cbc0cf11f78fa8e0682dbe09227339065abc1`.
+
+### Historical automatic-differentiation v8/JAX branch (2026-08-05; superseded and stopped)
+
+The project mainline is reset from finite-difference-first to automatic-
+differentiation-first, effective immediately. Numerical coordinate differences
+are removed from training, formal HVP/Hessian evaluation, checkpoint selection,
+and stage-gate metrics. They remain permitted only as a separately executed,
+low-frequency correctness oracle and can never silently become the primary
+path. This is a change of derivative backend, not a change of model identity:
+the released 18,692,586-parameter scalar Graphformer still consumes nuclear
+coordinates `R` and density coefficients `c`, and there is still one scalar
+energy owner with no independent force or Hessian head.
+
+The audit found that the previous so-called analytic relaxed-HVP path was in
+fact hybrid. PyTorch differentiated the Graphformer, total-energy expression,
+KKT density response and model parameters, but the PySCF/libcint boundary
+supplied several nuclear-coordinate integral derivatives through central
+differences, including a finite difference of first derivatives for directional
+second response. Thus the old path did not satisfy the stronger meaning of
+"全面采用自动求导" and is now a legacy reference branch.
+
+Protocol v8 replaces that boundary with PySCFAD/JAX custom differentiation of
+the overlap, Coulomb, nuclear-attraction, normalization/electron-number and
+nuclear-repulsion terms. Complete coordinate Jacobians are produced with
+`jax.jacfwd`; directional second response is obtained by differentiating the
+integral directional-JVP with `jax.jacfwd`. PyTorch then owns the differentiable scalar total energy, constrained KKT
+response and parameter backward graph. Both numerical displacement steps are
+frozen to zero. Runtime/protocol backend mismatches, nonzero steps, missing
+PySCFAD, or attempted numerical fallback are fail-closed errors.
+
+One PySCFAD 0.3.2 limitation is handled explicitly rather than hidden:
+its direct nested custom JVP for the flat-Gaussian `int1e_nuc` vector omits the
+second response of the moving nuclear `rinv` centre. V8 therefore writes the
+same nuclear attraction exactly as `-sum_A Z_A int1e_rinv(R_A)` using
+PySCFAD MoleLite, so every `rinv` origin is an explicit JAX coordinate. This
+uses nested analytic custom JVPs and evaluates no displaced geometry; the
+independent finite-difference oracle is used only to verify the rule.
+
+The same-protocol calibration artifact binds SHA256 fingerprints of the
+runner, complete-total training helper, geometry-integral AD provider,
+conservative-force assembly, implicit-response solver, functional factory,
+basis-integral helper and normative physical-definition document. Formal v8
+training refuses a calibration generated by any different implementation.
+
+The implementation is in
+`mldft/ofdft/geometry_integrals.py` and
+`scripts/qm9_complete_total_capacity_train.py`; the frozen protocol is
+`configs/audit/qm9_graphformer_egfh_autodiff_relaxed_hvp_v8.yaml`, and node02
+launch support is in
+`scripts/launch_qm9_graphformer_implicit_relaxed_hvp_pilot_node02.sh`.
+The dependency is isolated at
+`/home/shenwei01/xzh_node02_20260724/envs/pyscfad-0.3.2-overlay` rather than
+mutating the established PyTorch environment. It currently binds PySCFAD
+`0.3.2` and JAX `0.10.2` to the original PySCF `2.4.0` installation.
+
+The H2/STO-3G primitive preflight now verifies values, complete first coordinate
+Jacobians, and directional second response. The automatic-differentiation
+classical-energy curvature agrees with a separately evaluated scalar central-
+difference oracle, and the nuclear-attraction value and first derivative agree
+with the independent historical PySCF provider. The focused regression suite
+passed 79/79 tests; two additional fail-closed observed-backend tests then
+passed 2/2. JAX integral differentiation currently runs on CPU while the
+Graphformer remains on GPU, which is acceptable for correctness preflight but
+must be costed before scale-up.
+
+At the user's request, execution moved from node02 to node01 on 2026-08-05.
+The active node02 calibration `c` and its continuation watcher were terminated
+before an optimizer update or valid calibration artifact. The complete runtime
+was copied node-locally to node01: Python/venv, PySCFAD overlay, QM9 dataset,
+single-molecule rebuilt label, train-only Hessian/direction assets, article
+checkpoint and model run. The historical absolute root name
+`/home/shenwei01/xzh_node02_20260724` is intentionally preserved on node01 so
+the immutable manifests, protocol paths and virtual environment remain
+byte-compatible; `QM9_EXECUTION_HOST=node01` in the launch log records the
+actual compute host. Checkpoint, manifest, code and protocol SHA256 values all
+match node02. Four focused AD/backend tests passed on node01.
+
+The final one-step zero-learning-rate end-to-end Graphformer E/G/F/H calibration
+is now active on node01 GPU 0, train-only molecule `0003374`, from the untouched
+released article weights. The training PID was `2479436` at launch. Its output
+is
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_autodiff_relaxed_hvp_v8/node01_calibration_0003374_20260805_b`.
+The preceding node01 suffix `a` stopped before training because the rebuilt
+single-molecule label had not yet been copied; the label was then transferred
+and verified against manifest SHA256
+`1c3daae3871cfc6be45ca7f2f8e4bbd496584bc8ea7e2ccb72ccf281b0e433a1`.
+
+A node01 fail-closed continuation process (PID `2479596` at launch) waits on
+the complete calibration launcher. It requires nonempty `calibration.json`,
+`summary.json`, and `training_curve.csv`, computes the calibration SHA256, and
+then lets the formal launcher revalidate protocol, code provenance and the
+calibrated weight. Only if all checks pass will it create the fresh ten-step
+formal output
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_autodiff_relaxed_hvp_v8/node01_formal_0003374_s10_20260805_a`.
+If calibration fails or any artifact/gate is missing, it exits without starting
+formal training. Validation and Test100 remain inaccessible.
+
+### Small-molecule cyclic-orthogonal K=3 v5 formal run (2026-08-04; completed/rejected)
+
+The 50-step formal run on train-only molecule `0003374` completed normally on
+node02 with exit status zero. The immutable official run directory is
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_small_multidirection_v5/0003374_k3_formal_s50_20260803_a`.
+It starts from the untouched released article Graphformer weights (SHA256
+`9759da26660c619de9c3bbf4c2dc164343ee90e08e22b3fcdcc9682dacb9bd09`),
+uses all 18,692,586 scalar-model parameters, and initializes fresh replay/H
+optimizer and density-transition states. Validation and Test100 were not
+accessed.
+
+The molecule has 13 atoms, 39 Cartesian coordinates and 33 internal
+directions. Forty H-only optimizer updates used deterministic cyclic blocks of
+three scaled orthogonal internal directions; ten E/G/F replay updates occurred
+at every fifth step. The run therefore performed 120 HVP parameter-backward
+evaluations: three complete 33-direction cycles plus 21 directions of a fourth
+cycle. All 33 basis indices were covered, with no held-out direction. The first
+to second and second to third complete sweeps improved all 11 matched blocks;
+the available third-to-fourth comparison improved all seven matched blocks.
+Mean matched-block H-loss reductions were `4.47%`, `4.49%` and `4.75%`,
+respectively. This is valid within-parent optimization evidence, not a
+direction-generalization result.
+
+The complete internal-Hessian trajectory is:
+
+| step | Relative Frobenius | Hessian MAE | Hessian RMSE | force MAE | total-energy absolute error |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 1.92257316 | 0.05695261 | 0.13645054 | 0.02881133 | 0.00073360 |
+| 10 | 1.89614521 | 0.05608034 | 0.13457487 | 0.02860111 | 0.00077184 |
+| 20 | 1.86917288 | 0.05522795 | 0.13266057 | 0.02842233 | 0.00080495 |
+| 30 | 1.84218223 | 0.05439994 | 0.13074496 | 0.02825265 | 0.00083472 |
+| 40 | 1.81585658 | 0.05363444 | 0.12887656 | 0.02808659 | 0.00085910 |
+| 50 | 1.78965230 | 0.05290119 | 0.12701676 | 0.02792617 | 0.00087958 |
+
+From step 0 to 50, Relative Frobenius improves `6.91%`, Hessian MAE
+`7.11%`, RMSE `6.91%`, and force MAE `3.07%`; total-energy absolute error
+regresses `19.90%`. The endpoint fails the frozen stage-1 gate for two
+independent reasons: Relative Frobenius is `1.78965`, above the required
+`0.90`, and the energy-error ratio is `1.19899`, above the permitted `1.10`.
+The force-regression, density, symmetry and implicit-response gates pass, but
+`stage1_gate_passed=false`. Extending the same optimizer trajectory is not
+justified by this result.
+
+Frequency post-processing used both the canonical projected training reference
+and the raw physical PBE Hessian. Canonical-reference frequency MAE changes
+`747.05 -> 713.22 cm^-1` and RMSE `1170.43 -> 1080.50 cm^-1`. Raw-PBE
+frequency MAE changes `767.76 -> 711.67 cm^-1` and RMSE
+`1169.20 -> 1083.08 cm^-1`. However, raw-PBE mean mode overlap worsens
+`0.6582 -> 0.6508`, and the model retains three imaginary modes versus one in
+the reference at every evaluated checkpoint. The raw-to-canonical projection
+floor is only `1.60 cm^-1` MAE, so the approximately `712 cm^-1` endpoint
+error is a model error rather than a projection-reference artifact. IR
+intensities were not evaluated.
+
+All recorded training values are finite, the canonical E/G/F closure passes,
+and the maximum implicit-response stationarity, constraint and center-electron
+residuals are `1.369e-12`, `2.842e-14` and `6.537e-13`. The initial cold
+density solve required 10,194 cycles including fallback. In contrast, all 50
+post-update transitions used the fast path, totaling 483 cycles with maximum
+15 cycles and no fallback; their median accepted trust scale was nevertheless
+`0.25`. Every optimizer update had pre-clip norm above one and every accepted
+parameter transition used this same `0.25` scale, so optimizer/trust coupling
+remains a material confound. The strict Cartesian relaxed-force finite-
+difference Hessian closure remains explicitly `not_run`.
+
+Wall time was `86,112.45 s` (23h55m12s), peak PyTorch GPU allocation was
+`52,989.99 MiB`, and maximum process RSS was `11,973.04 MiB`. The final
+complete Hessian evaluation alone took `825.59 s`, of which the direct KKT
+solve took `630.80 s`. This confirms that the current single-molecule path is
+not yet low cost; factorization reuse/multi-RHS response and direction- and
+molecule-level parallelism remain prerequisites before scaling.
+
+The final checkpoint SHA256 is
+`c4fc11c4a7e8edf010381c430de968ee56400077b22caf1044850f44e32e4433`;
+the formal summary, training curve and full-Hessian metrics are bound by
+SHA256 values `b2c3a0dc98c9d169dfe3fe1b949820dabb0719cb7d44391641daa840b4128dc0`,
+`c96b97a0511d6aab0290528eca2d6f7cc3d8d1392f3cd4661141c0aad89aecaa`
+and `51365e0ad6d42b69b43cfd3ae93dc535674b5a677acedb85119d5eada6586b0c`.
+Post-processing was written outside the official run directory at
+`/home/shenwei01/xzh_node02_20260724/postprocess/qm9_graphformer_egfh_implicit_relaxed_hvp_small_multidirection_v5/0003374_k3_formal_s50_20260803_a_final_20260804`
+and synchronized locally to
+`/Users/xia/Documents/Codex/2026-07-28/yue/audits/qm9_v5_0003374_k3_s50_final_20260804`.
+
+### Gradient-clipping ablation v7 (2026-08-04; completed/rejected as cause)
+
+The completed v6 run showed that every formal update saturated the shared
+global clip threshold: weighted H gradients were `164--699` before
+`clip=1`, while E/G/F replay gradients were about `1269--1272`. Because H and
+replay have separate AdamW states, clipping both to unit norm also removes the
+pre-clip `lambda_H`/EGF magnitude ratio as a direct update-scale control. This
+is a material optimizer confound, although Adam's approximate invariance to a
+uniform gradient rescaling means clipping cannot be declared causal without a
+paired trajectory.
+
+Protocol
+`qm9_graphformer_egfh_implicit_relaxed_hvp_gradient_clip_ablation_v7`
+therefore freezes a three-arm comparison on the same parent `0016298`, released
+article weights, fresh optimizer/density states, seed, 64-probe full-rank
+Rademacher pool, four probes per H update, calibrated `lambda_H`, learning
+rates, trust/corrector settings, and ten-step schedule. The sole formal arm
+variable is global clipping: `clip1=1`, `clip100=100`, and `no_clip=0`, where
+zero explicitly disables clipping. Each arm performs eight H updates and two
+EGF replay updates and evaluates the complete internal Hessian at steps 0 and
+10. New diagnostics record exact pre/post-clip norm, applied clip scale,
+raw AdamW parameter displacement, the accepted density-trust displacement,
+and per-module raw update norms/fractions.
+
+The node05 focused suite passes `77/77`. A shared zero-LR same-protocol
+calibration completed with `lambda_H=0.3729486384167322`, and the three fresh
+formal arms ran concurrently on GPUs 0/1/2. All three trainers completed
+10/10 steps with exit status zero in about 1h47m per arm. The pipeline root is
+`/home/shenwei01/xzh_node05_20260803/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_gradient_clip_ablation_v7`,
+with timestamp `20260804_104500`.
+
+The formal endpoints are effectively identical:
+
+| arm | final Relative Frobenius | change | Hessian MAE | force MAE | energy absolute error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| clip1 | 1.80781787 | -0.56745% | 0.05844225 | 0.07714371 | 0.00041239 |
+| clip100 | 1.80781393 | -0.56766% | 0.05844217 | 0.07714341 | 0.00041239 |
+| no clip | 1.80826687 | -0.54275% | 0.05846547 | 0.07714351 | 0.00041175 |
+
+Relative to `clip1`, `clip100` changes the final Relative Frobenius by only
+`-3.94e-6` (`-0.000218%`), while no clipping is slightly worse by
+`+4.49e-4` (`+0.02484%`). Canonical projected-reference frequency MAE is
+`955.737/955.736/955.898 cm-1` for clip1/clip100/no-clip; all retain 12 model
+imaginary modes versus PBE's two. Mean raw H-step norms are
+`3.2088e-4/3.2286e-4/3.1360e-4`, and mean accepted H-step norms are
+`8.0220e-5/8.0715e-5/7.8399e-5`; every H transition is further accepted at
+the same density-trust scale `0.25`. Thus changing the gradient norm by two
+orders of magnitude or removing clipping barely changes the actual AdamW
+trajectory. Global clipping is not the Hessian bottleneck under this optimizer.
+
+The launcher originally reported arm status 1 only because the post-training
+summarizer treated the new text field `gradient_clip_arm` as numeric. Training
+summaries, checkpoints and final Hessians were already complete and valid.
+The text-field allowlist was fixed, its focused suite passes `5/5`, and all
+three `pilot_summary.json` files were regenerated without retraining. The
+next optimizer experiment should manipulate a quantity that survives Adam's
+scale normalization, such as H/replay learning-rate ratio or a common mixed
+EGF+H gradient and shared optimizer state; do not extend the clipping arms.
+
+### Full-rank Rademacher direction-coverage successor v6 (2026-08-03; completed/rejected)
+
+The completed canonical-v4 K=1 run below is retained as the controlled
+single-probe baseline. The active successor changes only the within-parent H
+sampling/accumulation schedule while keeping parent `0016298`, the released
+18,692,586-parameter scalar Graphformer weights, canonical E/G/F/H semantics,
+fresh replay/H AdamW states, learning rates, clipping, and the PBE/internal
+reference assets fixed.
+
+Protocol `qm9_graphformer_egfh_implicit_relaxed_hvp_rademacher64_k4_v6`
+freezes one deterministic pool of 64 unnormalized internal-coordinate
+Rademacher probes. The `64 x 39` sign matrix must have rank 39 and condition
+number at most 10. Four probes are evaluated sequentially and their H-loss
+parameter gradients are averaged before each H optimizer step; each higher-
+order graph is released before constructing the next one. With 20 formal
+steps, replay at every fifth step gives 16 H updates and exactly 64
+backpropagated probe evaluations, i.e. one complete pool cycle. Training-parent
+direction holdout is not an advancement gate for this branch; the intended
+next gate is full-Hessian transfer to wholly unseen parents after the
+within-parent schedule is frozen.
+
+The focused canonical/multidirection suite passes `75/75` both in the isolated
+node02 test copy and in the node05 local environment. The node05 calibration
+and formal pipeline completed successfully at `2026-08-03T21:55:18+08:00`.
+No v4 optimizer or density-transition state was loaded; validation and Test100
+remain untouched. The 64-probe pool has rank 39 and condition number `6.447`,
+and the formal run completes exactly one pool cycle with 16 H and four replay
+updates.
+
+Node05 code:
+`/home/shenwei01/xzh_node05_20260803/work/structures25_rademacher64_k4_v6`.
+Pipeline log:
+`/home/shenwei01/xzh_node05_20260803/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_rademacher64_k4_v6/pipeline_20260803_164500.log`.
+Calibration/formal directories are respectively
+`0016298_calibration_20260803_164500` and
+`0016298_formal_s20_20260803_164500` under that run family. Relative Frobenius
+changes `1.81813482 -> 1.80781787 -> 1.79678672` at steps `0/10/20`, only
+`-1.174%` overall; Hessian MAE improves `0.813%` and force MAE `0.923%`, while
+the total-energy absolute error regresses `21.27%`. Canonical projected-
+reference frequency MAE is `978.34/955.74/968.47 cm-1`, RMSE is
+`1331.93/1292.60/1333.48 cm-1`, mode overlap slightly worsens, and imaginary
+modes remain `12` versus PBE's `2`. At matched step 10 K=4 does not beat the
+canonical-v4 K=1 Relative Frobenius (`1.80782` versus `1.80432`). Thus more
+directions under the current strongly clipped optimizer do not resolve the
+bottleneck; `stage1_gate_passed=false`. The clipping confound motivates v7.
+
+### Canonical semantics remediation and first v4 formal result (2026-08-03)
+
+The active E/G/F/H definitions have been audited and frozen in
+`docs/qm9_ofdft_canonical_physical_definitions_v1.md`. The canonical contract
+keeps one scalar owner, uses the direct Structures25 `kin_plus_xc` energy and
+projected density-gradient labels at the common PBE label density, and defines
+physical F/H from the same complete-total model-self-consistent relaxed PES.
+Stochastic H supervision and full-Hessian evaluation both use the same
+two-sided internal operator, with `d x d` internal-matrix element MSE
+normalization. Density stationarity and reference Euler closure are separate
+diagnostics/gates and are not G-loss samples.
+
+The Python/config/launcher/evaluator remediation is complete. Canonical runs
+now fail closed on the 18,692,586-parameter scalar Graphformer identity,
+common label index, label and model-center electron-number residuals,
+Structures25 energy/gradient identities, symmetric PBE Hessian, complete
+internal-basis orthonormality/external leakage/projector idempotence, separate
+KKT stationarity and constraint residuals, and protocol/code/calibration
+provenance. The `lambda_H` calibration now differentiates the aggregate
+weighted `E+G+F` loss directly; it no longer substitutes the quadrature of
+three component gradient norms. Formal training independently recomputes the
+calibration from the bound zero-LR CSV before accepting its weight.
+
+Seventy focused tests pass in the isolated node02 copy. A real-asset preflight
+on train parent `0016298` selects common label index 12, finds 39 internal
+directions in 45 Cartesian coordinates, Hessian antisymmetry ratio
+`1.7506e-16`, basis orthonormality/projector-idempotence maxima `4.4409e-16`,
+and internal/external overlap `1.0338e-16`. The separate label-contract audit
+found matched-total energy closure `5.6843e-14 Ha`, reference Euler RMS
+`1.7033e-6` over 1026 coefficients, and label electron-number residual
+`1.0108e-3` electrons, all within the frozen v4 train-only gates.
+
+The first canonical-v4 calibration and ten-step formal run are now complete
+on train parent `0016298`. Both start from the untouched released article
+weights; calibration uses zero learning rate, and formal uses fresh replay/H
+AdamW states rather than any v1--v3 capacity state. Validation and Test100
+remain untouched. The strict Cartesian relaxed-force finite-difference
+closure remains explicitly `not_run`.
+
+The one-step zero-LR calibration computes all E/G/F/H losses and parameter
+gradients. The weighted gradient norms are E `35.8337`, G `101.4198`, F
+`1272.4950`, H `8.18731` at `lambda_H=0.01`, and directly differentiated
+aggregate EGF `1272.4932`. The component-norm quadrature is `1277.0331` and is
+not used. The frozen rule therefore gives
+`lambda_H=0.38855636154257495`, for an exactly recomputed initial H/EGF
+gradient ratio of `0.25`. Seventy-three manual checks pass: every component
+and every Graphformer parameter group has a finite nonzero gradient; all
+label, basis, stationarity, electron-number, KKT, correction-fraction, and
+cancellation gates pass; and the 95 normalized model state entries are
+bit-identical to the released checkpoint after the LR-zero step. Calibration
+wall time is 7m37s. Artifact SHA256 is
+`f65a4abfd3cefc621600ac8d215fe70e76c9008da143c30e8e316a7d2a73ee77`.
+
+The formal run computes E/G/F/H on every step, backpropagates eight H-only
+updates and two EGF replay updates, and evaluates all 39 internal Hessian
+directions at steps 0 and 10. All ten transition densities converge strictly:
+maximum transition cost is 12 cycles, total cost is 100 cycles, full fallback
+count is zero, median trust scale is `0.5`, maximum refresh residual is
+`4.256e-9`, and maximum training-graph residual is `5.017e-9`. The maximum
+analytic-response stationarity/constraint/center-electron residuals are
+`2.734e-12`, `1.599e-14`, and `8.384e-13`; maximum correction fraction and
+cancellation index are `0.8404` and `2.5537`. All recorded values are finite.
+Peak PyTorch GPU allocation is `77,655.8 MiB`; maximum process RSS is
+`73,632,860 kB`; wall time is 1h56m22s.
+
+| canonical-v4 metric | step 0 | step 10 | relative change |
+| --- | ---: | ---: | ---: |
+| Relative Frobenius | 1.81813482 | 1.80432067 | -0.760% |
+| symmetric Relative Frobenius | 1.81813482 | 1.80432067 | -0.760% |
+| Hessian MAE (Ha/Bohr^2) | 0.05864775 | 0.05851903 | -0.219% |
+| Hessian RMSE (Ha/Bohr^2) | 0.15435100 | 0.15317825 | -0.760% |
+| direction-HVP median relative error | 1.860450 | 1.845266 | -0.816% |
+| direction-HVP P90 relative error | 2.617930 | 2.602739 | -0.580% |
+| direction-HVP maximum relative error | 5.206214 | 5.197642 | -0.165% |
+| complete-total force MAE (Ha/Bohr) | 0.07749919 | 0.07713652 | -0.468% |
+| total-energy absolute error (Ha) | 0.00036958 | 0.00037514 | +1.503% |
+
+The canonical projected-reference vibrational diagnostic also remains very
+poor. Frequency MAE/RMSE change from `978.34/1331.93` to
+`952.15/1294.58 cm^-1`; maximum error changes from `3465.22` to
+`3451.15 cm^-1`; and the model still has 12 imaginary modes versus 2 in the
+reference. The existing generic vibration script uses the raw PBE Hessian,
+whereas the canonical Hessian objective uses `P H_PBE P`. Their projection
+floor on this molecule is already `1.822 cm^-1` MAE, `3.193 cm^-1` RMSE, and
+`10.575 cm^-1` maximum, so raw- and projected-reference results must remain
+separately labelled.
+
+Decision: numerical/semantic validity is established, but
+`stage1_gate_passed=false`. Relative Frobenius remains `1.804 >> 0.90`, the
+ten-step gain is below 1%, and the frequency spectrum is qualitatively wrong.
+Do not scale molecule count or claim usable Hessian/frequency accuracy from
+this branch. The result rejects the hypothesis that definition repair plus
+gradient-calibrated H weighting alone resolves the bottleneck; it does not by
+itself prove a Graphformer capacity ceiling. Before another expensive formal
+run, audit H-probe variance and parameter-group signal, then test a more
+informative deterministic/batched internal-direction schedule or a rigorously
+controlled full-network capacity ablation.
+
+Calibration directory:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v4/0016298_canonical_v4_calibration_20260803_1305`.
+Formal directory:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v4/0016298_canonical_v4_formal_s10_20260803_132703`.
+Final checkpoint SHA256:
+`3c9ac2b10ef20c8feaa4ce26c372860415c08fd45cce47b87790f644d60329f2`.
+Formal summary/training-curve/full-Hessian CSV SHA256 values are respectively
+`7e9fe82ca98f294e9eac68dfe03dab2cf3ccc29d13db19215297c8bdf9651906`,
+`7457ee608796b3a8ff2fbfb4be3b882326c53b2b78b6ba761229da2d1af94568`,
+and `65fcc7160093a80cab85162aea74c80bb7ec623dd2d9198bfb236e83be0c713f`.
+
+All v1--v3 artifacts and reported numbers below remain immutable legacy
+evidence under their original semantics.
+
+### Model-self-consistent implicit relaxed-HVP pilot (2026-07-31)
+
+The first train-only implicit relaxed-HVP pilot is complete on node02 for
+train parent `0016298`. It keeps the released, unmodified
+18,692,586-parameter scalar Graphformer and initializes from the released
+article checkpoint. No force or Hessian output head was added. E/G/F replay
+uses the frozen PBE/KS label density, while H supervision uses the model's own
+strictly self-consistent density:
+
+`H_relaxed v = E_RR v - E_Rc E_cc^-1 E_cR v`.
+
+Each H step samples one fresh, unnormalized Rademacher probe in the complete
+39-dimensional internal orthonormal basis. Two independent AdamW states
+alternate eight H-only updates and two E/G/F replay updates at learning rate
+`1e-7`. The density solver target is `5e-9`; the independently recomputed
+training-graph stationarity gate remains `1e-8`. Response residual,
+response/relaxed norm fraction, and partial/response cancellation are
+fail-closed at `1e-8`, `5`, and `10`, respectively. Validation and Test100
+were not accessed.
+
+The preliminary zero-learning-rate gradient audit showed why joint updates
+were rejected. At `lambda_H=0.01`, the weighted H gradient norm was `7.096`,
+versus `52041.8` for aggregate E/G/F. Matching 25% of the E/G/F norm would
+require `lambda_H=18.34`, beyond the frozen cap of 1.0. The same audit
+verified a well-behaved model-self-consistent response: density-response norm
+`17.229`, correction/relaxed fraction `0.401`, cancellation index `1.752`,
+partial/response cosine `-0.910`, and response residual `1.51e-12`.
+
+The formal run completed 10 optimizer steps, with a step-5 checkpoint/resume.
+The first process exhausted the 79.25 GiB GPU while constructing step 6 after
+the initial full 39-direction Hessian and five higher-order training graphs.
+No training data were lost. The resume path restores both optimizer states,
+reuses the frozen step-0 metrics, and explicitly releases higher-order
+autograd graphs before the next step or final Hessian. Fourteen focused tests
+pass. Peak per-step memory after the fix is `76.7--77.3 GiB`.
+
+All density and implicit-response numerical gates pass over the full
+trajectory:
+
+- maximum training-graph density gradient: `4.48e-9`;
+- maximum strict-refresh gradient: `3.76e-9`;
+- maximum strict-refresh cost: 10,270 cycles;
+- maximum response residual: `2.74e-12`;
+- maximum response/relaxed norm fraction: `0.848`;
+- maximum cancellation index: `2.570`;
+- all recorded training values are finite.
+
+The complete internal-Hessian comparison is:
+
+| metric | step 0 | step 10 | relative change |
+| --- | ---: | ---: | ---: |
+| Relative Frobenius | 1.81813482 | 1.78874982 | -1.616% |
+| symmetric Relative Frobenius | 1.81813482 | 1.78874982 | -1.616% |
+| MAE (Ha/Bohr^2) | 0.05864775 | 0.05840789 | -0.409% |
+| RMSE (Ha/Bohr^2) | 0.15435100 | 0.15185635 | -1.616% |
+| direction-HVP median relative error | 1.860450 | 1.827301 | -1.782% |
+| direction-HVP P90 relative error | 2.617930 | 2.592008 | -0.990% |
+| direction-HVP maximum relative error | 5.206214 | 5.212822 | +0.127% |
+| complete-total force MAE (Ha/Bohr) | 0.07749919 | 0.07747370 | -0.033% |
+| total-energy absolute error (Ha) | 0.00036958 | 0.00041337 | +11.848% |
+
+The frequency diagnostic uses the analytic complete relaxed Hessians at both
+steps, symmetrizes them numerically, mass weights, removes translation and
+rotation, and matches modes to PBE by maximum absolute overlap:
+
+| metric | step 0 | step 10 | change |
+| --- | ---: | ---: | ---: |
+| frequency MAE (cm^-1) | 959.535 | 936.711 | -2.38% |
+| frequency RMSE (cm^-1) | 1306.385 | 1295.790 | -0.81% |
+| maximum frequency error (cm^-1) | 3465.189 | 3429.364 | -1.03% |
+| mean mode overlap | 0.594695 | 0.586853 | -1.32% |
+| model/PBE imaginary modes | 12 / 2 | 11 / 2 | one fewer model imaginary mode |
+
+Decision: the implicit self-consistent branch is numerically valid and moves
+Hessian/frequency metrics in the desired direction, but the effect after
+eight H updates is only `1--2%`, absolute errors remain unacceptable, mode
+overlap worsens, and energy error exceeds the frozen 10% regression allowance
+at `+11.85%`. Therefore `stage1_gate_passed=false`. Freeze this as a
+proof-of-semantics/cost pilot; do not immediately scale molecule count or run
+the expensive Cartesian force-difference closure. The next small ablation
+should reduce the density-solve cost and energy-gradient domination before
+more data: preserve alternating optimizers, test a smaller replay learning
+rate or replay trust-region, and evaluate whether response-solver
+preconditioning can avoid the recurring 10k-cycle refreshes.
+
+Formal resumed run:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v2/0016298_alternating_resume_s5to10_tightsolve_cleanup_v2_20260731`.
+Final checkpoint SHA256:
+`16936269d0f961af099cb1a23826446b657f6e81c78bd4b4a8ff5a5a335ea37f`.
+Combined audit summary:
+`combined_audit_summary.json`.
+Protocol SHA256:
+`709a7e47a8a3f62e8577cadbf612ae153f681c8365a3d1ec82b51791e2ab7bd2`.
+Analytic vibration comparison:
+`vibrational_analytic_comparison/summary.json`.
+
+### Density-stationarity trust/corrector screen (2026-07-31)
+
+The registered four-HVP-update v3 density-cost screen is complete on the same
+train parent `0016298`, from the same released article checkpoint and with the
+same seed/probe sequence as v2. A post-hoc trajectory audit first ruled out
+replay LR as the cause of the density cost: all three `~10k` refreshes occurred
+after HVP updates, while the two replay transitions required only 13 and 16
+cycles. The v3 P0 therefore keeps replay and HVP LR at `1e-7` and changes only
+the density/parameter transition:
+
+1. solve the linearized constrained KKT parameter response to obtain a
+   first-order density prediction;
+2. backtrack the AdamW parameter step over powers of two until the predicted
+   density has projected KKT gradient below `5e-6` under the new model;
+3. send the trusted point directly to LBFGS and the existing eight-probe
+   Jacobi-preconditioned Newton-PCG corrector;
+4. restart the untouched legacy Adam chain if the fast corrector fails;
+5. persist per-stage solver counts and explicitly certified versus predicted
+   center-density checkpoint state.
+
+The screen passes every preregistered density-cost gate:
+
+| parameter step | v2 refresh cycles | v3 refresh cycles | trust scale | fallback cycles | final projected gradient |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 11 | 8 | 1.0 | 0 | 2.29e-10 |
+| 2 | 10,100 | 9 | 0.5 | 0 | 1.86e-10 |
+| 3 | 10,160 | 9 | 0.25 | 0 | 3.17e-9 |
+| 4 | 10,132 | 12 | 0.25 | 0 | 3.91e-9 |
+
+The four transition refreshes fall from 30,403 to 38 total cycles, an
+approximately 800-fold reduction. All four corrector-first attempts succeed;
+no fallback iteration runs, maximum cycles are 12, median trust scale is
+`0.375`, and every final density is below the strict `5e-9` solver target.
+Peak GPU allocation is `77.07 GiB`, below the v2 maximum, and wall time is
+773.1 s including the one-time article-checkpoint density solve and four HVP
+training graphs. The self-consistent energy absolute error improves from
+approximately `3.70e-4` to `3.57e-4 Ha` over the screen. No validation or
+Test100 data were accessed, and no full Hessian was computed in this cost-only
+screen.
+
+Decision: the recurring 10k refreshes were caused by the parameter-update
+amplitude together with the legacy density-transition path, not by an audited
+failure of the scalar Graphformer to admit a self-consistent density. Promote
+the identical trust/corrector settings to one 10-step
+train-only run with initial/final full-39 evaluation. Keep replay LR unchanged
+for that causal comparison; assess lower replay LR only later as a one-update
+energy/Hessian ablation.
+
+Interpretation limit: this is not a fixed-parameter-step solver-only speedup.
+Trust scaling accepted only about 54.7% of the aggregate raw AdamW step-norm
+over the four updates (`1, 0.5, 0.25, 0.25`), so part of the density-cost gain
+comes from taking smaller model steps. The screen contains HVP updates only and
+does not evaluate a full Hessian, force regression, frequencies, or the two
+replay transitions. The 10-step full run must decide whether the cost control
+preserves useful Hessian learning; `energy_force_regression_gate_passed=false`
+in the screen summary means "not evaluated", not a measured physical failure.
+
+Screen directory:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3/0016298_hvp_trust_screen_s4_v3_20260731`.
+Final checkpoint SHA256:
+`8274bae8feae7704f57a8863d4d4172dd5680d89818c0b4b0131db060ff591c8`.
+Protocol SHA256:
+`05388f09d09121106c02fab28a7b0d21979fb9c2ea42633b170463c7a090d72b`.
+Summary/training/density CSV SHA256 values are respectively
+`0622a82c...538b661`, `f5f36998...564641`, and `d11c07fc...d2fb`.
+
+### Density-stationarity trust/corrector formal result (2026-07-31)
+
+The registered v3 ten-step formal run is complete on train parent `0016298`.
+It starts again from the untouched released article checkpoint, uses the same
+seed and probe sequence as v2, retains replay/HVP learning rates of `1e-7`,
+and computes complete 39-direction analytic relaxed Hessians at steps 0 and
+10. The step-0 metrics reproduce v2 to numerical precision, so the comparison
+isolates the density/parameter transition change. Validation and Test100 were
+not accessed.
+
+All ten parameter transitions pass the density-cost gates. The trust scales
+are `1, 0.5, 0.25, 0.25, 1, 0.5, 0.5, 0.5, 0.5, 1`; both replay updates accept
+the full step. Refresh cycles are `8, 10, 7, 9, 9, 14, 11, 8, 9, 10`. Thus:
+
+- total transition cycles fall from v2's 30,781 to 95, a 99.691% reduction
+  (approximately 324-fold);
+- maximum transition cost is 14 cycles, versus 10,160 for the paired v2
+  parameter transitions; the separately reported 10,270-cycle v2 refresh was
+  an initial strict-center refresh in the resume process and is not a paired
+  optimizer transition;
+- all ten corrector-first attempts succeed and full fallback count is zero;
+- median trust scale is `0.5`, above the frozen `0.25` gate;
+- the ten final projected density gradients are below `5e-9`;
+- the correctors use 61 LBFGS closures, 34 Newton energy evaluations, and
+  2,796 total PCG iterations, taking 63.08 s at the refreshed points;
+- the one-time article-checkpoint initialization takes 621 cycles and is
+  reported separately rather than counted as a parameter transition.
+
+The run completes without the v2 step-6 OOM. Peak allocated GPU memory is
+77,341 MiB, maximum RSS is 71,515 MiB, and total wall time including both
+full-39 evaluations is 4,039.9 s. The step-5 checkpoint contains its center
+density and the run crosses the old interruption point without a resume.
+
+The physical comparison is:
+
+| metric | step 0 | v2 step 10 | v3 trust step 10 | v3 relative change |
+| --- | ---: | ---: | ---: | ---: |
+| Relative Frobenius | 1.81813482 | 1.78874982 | 1.80479003 | -0.734% |
+| MAE (Ha/Bohr^2) | 0.05864775 | 0.05840789 | 0.05853407 | -0.194% |
+| RMSE (Ha/Bohr^2) | 0.15435100 | 0.15185635 | 0.15321809 | -0.734% |
+| direction-HVP median relative error | 1.860450 | 1.827301 | 1.846205 | -0.766% |
+| direction-HVP P90 relative error | 2.617930 | 2.592008 | 2.602074 | -0.606% |
+| direction-HVP maximum relative error | 5.206214 | 5.212822 | 5.208959 | +0.053% |
+| complete-total force MAE (Ha/Bohr) | 0.07749919 | 0.07747370 | 0.07748614 | -0.017% |
+| total-energy absolute error (Ha) | 0.00036958 | 0.00041337 | 0.00038320 | +3.684% |
+
+The complete Hessian is 39/39, its base projected density gradient is
+`1.03e-10`, maximum response residual is `7.47e-13`, and raw symmetry maximum
+absolute error remains `4.62e-6`. The density-cost and E/F regression gates
+both pass. The aggregate Stage-1 gate remains false because its frozen
+absolute Hessian requirement is Relative Frobenius `<=0.90`, not because of a
+density, E/F, response, completeness, or finiteness failure.
+
+Same-definition vibrational postprocessing gives:
+
+| metric | step 0 | v2 step 10 | v3 trust step 10 | v3 relative change |
+| --- | ---: | ---: | ---: | ---: |
+| frequency MAE (cm^-1) | 959.535 | 936.711 | 951.245 | -0.864% |
+| frequency RMSE (cm^-1) | 1306.385 | 1295.790 | 1302.414 | -0.304% |
+| maximum frequency error (cm^-1) | 3465.189 | 3429.364 | 3449.649 | -0.448% |
+| mean mode overlap | 0.594695 | 0.586853 | 0.594179 | -0.087% |
+| model/PBE imaginary modes | 12 / 2 | 11 / 2 | 12 / 2 | unchanged |
+
+Decision: retain the KKT density predictor, stationarity checks,
+corrector-first Newton-PCG path, checkpoint density state, and fail-closed
+cost accounting. They remove the recurring 10k refresh bottleneck and restore
+the energy gate. Do not lower replay LR next: both replay steps accepted
+`alpha=1` and refreshed in 9/10 cycles, so replay is not the cause. However,
+do not scale the current hard-threshold trust rule yet. The accepted parameter
+step norms sum to about 65.5% of the raw AdamW step norms, while the Relative
+Frobenius improvement is only 45.4% of v2's improvement. The method preserves
+the direction of Hessian/frequency learning but is too conservative and the
+absolute errors remain far from acceptable.
+
+The next P0 should preserve the density preconditioner but replace permanent
+step truncation with bounded continuation/substeps toward the full AdamW
+update. Each substep must satisfy the same stationarity/corrector and
+`<=500`-cycle gates. First compare this on the same four-HVP trajectory, with
+all rejected trust candidates persisted; only then run another ten-step
+full-39 formal. A small trust-threshold sensitivity check is a secondary
+option. Do not access validation or Test100 and do not expand molecule count
+before the one-parent comparison preserves materially more of v2's Hessian
+gain.
+
+Formal directory:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh_implicit_relaxed_hvp_pilot_v3/0016298_hvp_trust_formal_s10_v3_20260731`.
+Final checkpoint SHA256:
+`6cede865a50749d77e39724f368638266dee9c5dd074b7bfde61361ad0882665`.
+Summary/training/density/final-Hessian SHA256 values are respectively
+`89151fbe...e345a6`, `05f40a8f...b71620`, `6e510def...679c7`, and
+`9602b5f1...578ba6`. The analytic vibrational summary SHA256 is
+`02328b2f...505970`.
+
+### Six-direction Rademacher EGFH result (2026-07-31)
+
+The ten-parent, six-direction Rademacher EGFH experiment and its one-molecule
+full-Hessian audit are complete on node02. The run used the unmodified
+18.7M-parameter scalar Graphformer and was initialized from the released
+article weights; it was not a scratch run. Validation and Test100 were not
+accessed.
+
+The dataset is
+`/home/shenwei01/xzh_node02_20260724/data/QM9PBEForceEGFH10Rademacher6V1`.
+Each parent has one center and six symmetric displacement pairs, for 13
+geometries per parent and 130 geometries total. The displacement is
+coordinatewise i.i.d. Rademacher,
+`delta_R[i,alpha] = 0.01 Angstrom * xi[i,alpha]`,
+`xi[i,alpha] in {-1,+1}`, without translation removal. All 130 Kohn-Sham
+checkpoints and all 130 label archives completed successfully.
+
+Training used the four conservative objectives:
+
+- `E`: learned `kin_plus_xc` energy;
+- `G`: particle-number-projected density-coefficient gradient;
+- `F`: complete PBE force target versus the scalar-derived model force;
+- `H`: normalized central force secant against the complete-PBE force secant.
+
+The E/G/F/H weights were `0.1/0.8/1.0/0.01`. Physical batch size was 12,
+containing three complete displacement pairs per optimizer step, with no
+gradient accumulation. The article-warm-start trajectory reached optimizer
+step 2000 and met the frozen convergence rule: the last two adjacent 50-step
+mean-total-loss changes were `-0.001348` and `-0.008557`, both below the 2%
+absolute-relative-change threshold. Final 50-step means were:
+
+| loss | mean over steps 1950--1999 |
+| --- | ---: |
+| weighted total | 0.00383380 |
+| E | 0.00586487 |
+| G | 0.00214408 |
+| F | 0.00063810 |
+| H | 0.08939497 |
+
+Final checkpoint:
+`/home/shenwei01/xzh_node02_20260724/models/train/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_article_warmstart_convergence_s2000_v1/checkpoints/last.ckpt`.
+SHA256:
+`1efe4746c815989499ebe0ad82a386e2cff56d8f2019309ca1284770d0988fe8`.
+The dataset manifest SHA256 is
+`1c228592c7c1ba0674cddf34fe208e3b3b6919391956dc25a1ece30a66131d5e`.
+
+The final physical audit evaluated train parent `0016298`, sample 0. It
+independently optimized the learned density at the base and at both sides of
+all 45 Cartesian coordinates, used transform autograd for the complete
+scalar-derived force, and formed the density-relaxed total-OFDFT Hessian by
+centered force differences at `1e-4 Bohr`. The 45/45 calculation completed
+successfully in `1:50:49` wall time.
+
+| metric | six-direction step-2000 result |
+| --- | ---: |
+| Hessian relative Frobenius | 0.90693667 |
+| symmetrized relative Frobenius | 0.90693667 |
+| Hessian MAE (Ha/Bohr^2) | 0.03318204 |
+| Hessian RMSE (Ha/Bohr^2) | 0.07699469 |
+| maximum absolute Hessian error | 0.95983654 |
+| antisymmetric/symmetric Frobenius | 3.9416e-5 |
+| frequency MAE (cm^-1) | 1304.8024 |
+| frequency RMSE (cm^-1) | 1558.9091 |
+| mean mode overlap | 0.594750 |
+| model/PBE imaginary modes | 22 / 2 |
+
+Relative to the earlier one-direction article-warm-start step-100 control,
+relative Frobenius improved by `27.75%`, frequency MAE by `19.28%`, and
+frequency RMSE by `17.31%`. These are trend improvements only: the absolute
+Hessian and vibrational errors remain unacceptable.
+
+The formal strict-density caveat is material. Only `40/90` displaced points
+met projected density gradient `<1e-8`; the maximum displaced gradient was
+`3.48e-7` and mean displaced optimization cost was 2772 cycles. The Hessian
+is finite and nearly symmetric, but this run does not pass the strict
+self-consistency gate.
+
+Decision: freeze this checkpoint and result as the multi-direction
+fixed-KS-endpoint control. Do not infer that the low training `H` loss is a
+physical Hessian error and do not scale the same objective. The force-secant
+training branch uses displaced KS-density configurations, whereas physical
+evaluation differentiates after minimizing the learned scalar functional
+with respect to its own density coefficients. The next small experiment
+should supervise randomized internal-space relaxed HVPs on the model's own
+self-consistent density branch and explicitly gate `E_cc` conditioning,
+response residual/norm, cancellation, and endpoint density convergence.
+
+Audit directory:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_graphformer_egfh10_rademacher6_effbatch12_total_hessian_vibration_converged_s2000_v1`.
+Per-molecule summary:
+`per_molecule/0016298/summary.json`.
+
+### EGFH P0 density-response audit (2026-07-31)
+
+The no-training Schur-complement audit is complete on train parent `0016298`,
+internal direction 0, for the released article, EGFH step-100, and EGFH
+step-1300 checkpoints. No validation or Test100 data were accessed.
+
+The analytic relaxed HVP is numerically verified against strict reoptimized
+force differences at three displacements. At `h=1e-4 Bohr`, relative
+analytic-versus-FD errors are `4.45e-7`, `1.52e-6`, and `3.98e-7`; all
+18 endpoints pass projected density gradient `<1e-8`. Thus the following
+diagnosis is not a loose-density or finite-difference artifact.
+
+| checkpoint | `||E_RR v||` | `||response||` | `||H_relaxed v||` | response/relaxed | relaxed vs PBE rel-L2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| article | 1.6390 | 0.8471 | 1.2648 | 0.670 | 2.3130 |
+| step 100 | 58.0518 | 57.7933 | 0.7905 | 73.106 | **1.3052** |
+| step 1300 | 13.3439 | 13.4743 | 1.0497 | 12.837 | 2.0640 |
+
+Step 100 obtains its directional improvement through near-exact cancellation:
+the partial/response cosine is `-0.999917` and the cancellation index is
+`146.54`. Step 1300 is `58.1%` worse than step 100 on the same direction and
+still has cosine `-0.996983` and cancellation index `25.55`. Center density
+optimization rises from 660 article cycles to `10475/10273` at steps
+100/1300. All projected `E_cc` matrices remain positive definite but highly
+conditioned (`3.05e6--4.88e6`), while the smallest eigenvalue falls from
+`2.047e-4` to `1.186e-4`.
+
+Decision: do not scale or extend the present ten-parent fixed-KS-endpoint EGFH
+objective. Retain the scalar `(R,c) -> Graphformer -> E_total` owner and move
+the next small pilot to randomized internal-space implicit relaxed-HVP
+supervision on the model's own self-consistent density branch. Log and gate
+density curvature, response residual/norm, and cancellation rather than
+selecting by total training loss alone.
+
+Detailed report:
+`docs/qm9_egfh_p0_density_response_audit_20260731.md`.
+Formal summary:
+`/home/shenwei01/xzh_node02_20260724/runs/qm9_egfh_p0_density_response_audit_v1/0016298_d0_preflight_v2_20260731/summary.json`.
+SHA256:
+`6f343b83ecd789468271c91539aca7e8df6dc6bfbe4cb6dee2a95a9985bac241`.
+
+### Hessian-training literature review and mainline decision (2026-07-31)
+
+A direct web literature review now covers peer-reviewed and recent preprint
+work on full-Hessian training, stochastic HVP supervision, direct equivariant
+Hessian heads, smooth higher-order MLIPs, molecular vibrational/IR prediction,
+OFDFT functional derivatives, density response, and density-optimization
+stability. The full review is
+`docs/hessian_training_literature_review_20260731.md`.
+
+The leading recommendation is to retain the scalar
+`(R, c) -> Graphformer -> E_total` mainline and replace the present fixed
+endpoint force-secant emphasis with randomized, internal-space,
+density-relaxed HVP supervision. A new density-response module may predict
+`dc*/dR v` and precondition the response solve, but final force and Hessian
+must remain derivatives of the same scalar energy.
+
+The immediate prerequisite is a no-training Schur-complement audit comparing
+the article checkpoint, warm-start step 100, and final step 1300:
+
+- fixed-density curvature `E_RR`;
+- density-response correction `-E_Rc E_cc^-1 E_cR`;
+- projected `E_cc` spectrum/conditioning and response residual;
+- implicit relaxed HVP versus strict force differences over multiple
+  displacement sizes;
+- density-optimization convergence and cost.
+
+Do not continue the same ten-parent step-1300 objective solely to lower its
+training loss. Do not promote an independent force or Hessian head as the
+physical owner of derivatives.
+
 ## Current Scope
 
 Active scope is still the P1-410 early pilot plus a remote random1000 8-GPU training validation:
 
 - dataset: 410 QM9 molecules, 1640 labels;
 - models: EG baseline and EGF lambda=1.0 are the main comparison;
-- force must be derived from scalar model energy: `F_pred = -dE_pred/dR`;
-- no independent force head;
+- promotable force must be derived from scalar model energy:
+  `F_pred = -dE_pred/dR`;
+- one independent structured force-head diagnostic has now been run, but it
+  failed the source-force transfer gate and is not a promotable model;
 - random1000 labels have been generated and used for a 10-epoch EG/EGF training validation;
 - do not delete existing labels, checkpoints, cached labels, or Hessian references.
 
@@ -23,6 +1186,107 @@ Current Hessian conclusions do not yet generalize to final P1/P2.
 
 Full-scale training code preparation has started, but the full 133,885-molecule QM9 force-label
 dataset has not been generated and no full-QM9 EG/EGF training job has been launched.
+
+### Graphformer-preserving derivative-head pilots (2026-07-29)
+
+Three train-only pilots now delimit what can and cannot be learned by adding
+structured derivative readouts while keeping the main OFDFT work isolated from
+validation and Test100.
+
+#### Structured Hessian/density head
+
+The first pilot is an independent, small structured Hessian control rather than
+a replacement mainline model. It assembles equivariant `3 x 3` Cartesian
+blocks, enforces exact symmetry, and projects out rigid translations and
+rotations. Five-fold parent-isolated evaluation uses the 20 clean train
+parents, sample 0 only.
+
+| Variant | Parameters | fit median relF | held median relF | held P90 | held max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| geometry only | 11,979 | 0.225775 | 0.249269 | 0.283948 | 0.324290 |
+| geometry + density summary | 13,515 | 0.225658 | 0.247198 | 0.288309 | 0.319053 |
+
+The six-scalar-per-atom density summary improves held median by only `0.8309%`,
+below the frozen `5%` gate, with 11 parent wins and 9 losses. Both variants
+beat a zero Hessian on all 20 held parents and satisfy the exact structural
+constraints, so structured direct Hessian output is feasible, but the current
+density-value summary does not establish useful density-response information.
+It is neither a Schur-complement response head nor a conservative
+total-energy Hessian.
+
+Artifact:
+`/home/shenwei01/xzh_node02_20260724/artifacts/structured_density_hessian_head_pilot_v1_20260729`.
+Formal summary SHA256:
+`f4769f2ac5a90016be023e7e4e3a818f1a4e6ab47fef5111f0fec060afec1f73`.
+Detailed report:
+`docs/qm9_structured_density_hessian_head_pilot_v1.md`.
+
+#### Frozen Graphformer Hessian attention head
+
+The corrected architecture preserves the complete `(R,c) -> Graphformer`
+backbone and adds an eight-head distance-biased structured Hessian readout from
+the final 768-dimensional atom states. All 18,692,586 backbone parameters,
+the scalar energy head, and the initial-density head remain unchanged and
+frozen; the new head has 446,403 parameters.
+
+On fold 0, 800 training steps reduce fit median relF to `0.174962`, but held
+median is `0.250678` versus `0.254864` for the matched geometry-only control:
+only a `1.64%` improvement. It wins 1 of 4 held parents, while held P90 and
+maximum error worsen to `0.292512/0.303243`. The remaining four folds and
+Graphformer unfreezing are therefore not authorized.
+
+Artifact:
+`/home/shenwei01/xzh_node02_20260724/artifacts/graphformer_frozen_hessian_attention_head_fold0_s800_v1_20260729`.
+Formal summary SHA256:
+`873f5e00a2cf4187aa225139fa058eb485f90aa235612b526c2e3b9ee25982c8`.
+Detailed report:
+`docs/qm9_graphformer_frozen_hessian_attention_head_pilot_v1.md`.
+
+#### Frozen Graphformer force attention head
+
+The force-first pilot keeps the same frozen Graphformer but adds a 443,593
+parameter equivariant attention head. It forms symmetric atom-pair scalars and
+equal-and-opposite scalar-times-unit-direction contributions, giving exact
+permutation/rotation covariance, translation invariance, zero net force, and
+zero net torque. Focused implementation tests pass `5/5`.
+
+The formal train800-only experiment deterministically selects 128 parents:
+96 fit and 32 held, with four geometries per parent (512 samples total). It
+uses 1,000 fixed steps without held checkpoint selection and reads neither
+validation nor Test100.
+
+| Split/model | component MAE (Ha/Bohr) | global relF |
+| --- | ---: | ---: |
+| fit: new force head | 0.005046 | 0.84969 |
+| fit: source energy derivative | 0.002375 | 0.42469 |
+| fit: zero force | 0.006196 | 1.00000 |
+| held: new force head | 0.005382 | 0.86199 |
+| held: source energy derivative | 0.002353 | 0.38434 |
+| held: zero force | 0.006486 | 1.00000 |
+
+The head improves held MAE over zero force by `17.02%`, but is `2.29x` worse
+than the existing source energy derivative. At parent level it is 0/32
+against the source and 31/32 against zero. Fit and held errors are close while
+fit itself remains poor, identifying representation/readout underfitting
+rather than conventional overfitting.
+
+This force checkpoint must not initialize the Hessian/response head. Longer
+training, Graphformer unfreezing, and validation/Test100 access are not
+authorized from this result. A successor must expose intermediate G3D edge
+messages, attention values, or explicit vector channels rather than relying
+only on the final invariant atom state. Density response should read the
+density branch before it is summed with element and distance embeddings.
+
+Artifact:
+`/home/shenwei01/xzh_node02_20260724/artifacts/graphformer_frozen_force_attention_pilot_v1_20260729`.
+Formal summary SHA256:
+`67fc46cc85338097a5da6e9a8ad1aa77694dbb711bdeb9d454e67ebca6ef4886`.
+Checkpoint SHA256:
+`aef7e09a86005e53f07b2d6011fc566780835770235d72cb1f83041b4b2b0eec`.
+Detailed report:
+`docs/qm9_graphformer_frozen_force_attention_pilot_v1.md`.
+GitHub backup commit:
+`2925904f65c294570cdefd59a9628ffc26ec867f`.
 
 ### Graphformer single-parent capacity-only branch (2026-07-27 22:08)
 
@@ -73,21 +1337,28 @@ Frobenius `2.575980`, MAE `0.074523`, RMSE `0.226372`, symmetry max
 `1.21e-5`, density residual `1.19e-10`, and response residual `2.17e-12`.
 This reproduces the old untouched baseline and remains above the 5% gate.
 
-The sequential capacity supervisor remains active on node02 as PID `3028160`;
-the first independent arm is still `energy_readout + AdamW` (child PID
-`3028168`). Through update 18, relative Frobenius fell from `2.5759803325` to
-`0.8735228965`; the best evaluated checkpoint is update 17 at `0.8665426540`.
-The corresponding best MAE/RMSE are `0.0324138950/0.0761501030`. This is a
-66.36% baseline reduction but remains 17.33 times above the 5% capacity gate.
-Update 18 is 0.81% worse than update 17, so it is not a new best. Density
-residuals remain about `1e-10`, response residuals about `1e-12`, and symmetry
-max abs about `2e-5`; the strict numerical path remains healthy.
+The sequential capacity supervisor remains active on node02 as PID `3028160`.
+The independent `energy_readout + AdamW` arm completed all 40 configured
+updates. Its final and best relative Frobenius is `0.5790032917`, with
+MAE/RMSE `0.0239202258/0.0508816965`. This is a 77.52% baseline reduction but
+is still 11.58 times above the 5% capacity gate. It closed fail-closed with
+`capacity_passed=false` and `status=max_updates`.
 
-The durable update-18 checkpoint SHA256 is
-`5589cf31d43fdc9e8919c6acca0b7e0fa848a9097809b9439643378e9d14fdd0`.
-At 2026-07-28 15:57 Asia/Singapore, update 19 was accumulating direction 2/39.
-No `CAPACITY_PASSED_FROZEN.json` exists. Stable5, train20, held directions,
-validation and Test100 remain locked.
+The final AdamW checkpoint SHA256 is
+`cf3a86db4fc3b71d9d209b72128a2785b83808c737dc0b906bc36aadd6392a53`;
+summary SHA256 is
+`4b2c465dd37e3d3b9960e55257c09ec75de174fad4870db7afe8bcda02a2ff50`.
+Total wall time was 42.34 h, peak GPU allocation was 62172.97 MiB, and maximum
+RSS was 75668.78 MiB.
+
+The supervisor independently restarted `energy_readout + L-BFGS` from the
+fresh checkpoint. At 2026-07-30 10:44 Asia/Singapore it had completed update
+8 with relative Frobenius `0.8579292655` and MAE/RMSE
+`0.0324695286/0.0753931750`; update 9 was at direction 28/39. L-BFGS is 15.03%
+better than AdamW at equal update 8 but has not exceeded the completed AdamW
+arm. Numerical residuals remain strict. No `CAPACITY_PASSED_FROZEN.json`
+exists. Stable5, train20, held directions, validation and Test100 remain
+locked.
 
 Detailed protocol and current hashes:
 `docs/qm9_graphformer_0028399_full39_capacity_only.md`.
@@ -2885,6 +4156,9 @@ Read these for full context:
 - `docs/qm9_random1000_total_ofdft_hessian_model_optimization.md`
 - `docs/qm9_random1000_hvp100_curvature_supervision.md`
 - `docs/qm9_random1000_hvp_curvature_improvement_v1.md`
+- `docs/qm9_structured_density_hessian_head_pilot_v1.md`
+- `docs/qm9_graphformer_frozen_hessian_attention_head_pilot_v1.md`
+- `docs/qm9_graphformer_frozen_force_attention_pilot_v1.md`
 
 ## Complete-Total Capacity Update
 
@@ -3861,6 +5135,12 @@ tests/test_qm9_complete_total_compare_geometry_mlp_runs.py
 
 ## Known Limits
 
+- The six-direction Rademacher EGFH step-2000 result is a train-parent
+  diagnostic, not a promotable Hessian model. Its `0.90694` relative
+  Frobenius and `1304.8 cm^-1` frequency MAE remain poor, and only 40/90
+  displaced density optimizations meet the strict `1e-8` gate. Its
+  fixed-KS-density force-secant training target is not the same branch as the
+  model-density-relaxed Hessian used for physical evaluation.
 - P1-410 is an early pilot only.
 - Historical density-relaxed Hessian metrics use finite difference of the incomplete learned-energy
   force. New `qm9_total_ofdft_hessian_audit.py` results use strict finite difference of the complete
@@ -3906,6 +5186,15 @@ tests/test_qm9_complete_total_compare_geometry_mlp_runs.py
   transfer claims must use the remaining 15 train20 parents.
 - The stable5 v9 coefficient vector fails that unseen15 audit by two to four orders of magnitude.
   It must not initialize or regularize another Stage-2 fit.
+- The structured density Hessian head proves that exact equivariant block assembly and rigid-mode
+  projection are trainable, but its six-value density summary improves held median by only 0.83%.
+  It is a direct matrix predictor, not a conservative total-energy Hessian or a density-response
+  Schur complement.
+- The frozen final-state Graphformer Hessian attention head improves its matched fold-0 held
+  median by only 1.64%, wins only 1/4 parents, and worsens the held tail. The frozen final-state
+  force attention head is 2.29 times worse than the existing energy-derived force and wins 0/32
+  held parents against it. Neither checkpoint is eligible for Hessian initialization, backbone
+  unfreezing, validation, or Test100.
 - The bounded `l<=1` equivariant model is finite and trainable but fails the completed full-batch
   and one-parent LBFGS ceilings by a wide margin. E2/E4 Adam runs and the `l=2` tensor smoke remain
   capacity diagnostics only; no train20 or generalization claim is authorized until every stable5
@@ -3983,6 +5272,19 @@ tests/test_qm9_complete_total_compare_geometry_mlp_runs.py
    completed cross-parent CV proves that hard clipping is not a physical or accurate fix. A new
    representation must pass median `<=0.10`, at least 80% parents `<=0.15`, P90 `<=0.20`, and the
    frequency/imaginary-mode checks before the seven validation parents may be read again.
+14. For the Graphformer-preserving derivative-head line, freeze both final-state attention heads
+   as failed controls. The next small test should expose intermediate G3D edge messages or
+   explicit vector channels and first perform fit-only distillation against the existing
+   energy-derived force. Only a readout that can recover information already present in the
+   backbone should proceed to clean PBE force labels.
+15. A density-response successor must expose the pre-summation density branch or
+   coefficient-level response tokens and preserve one scalar-energy owner. Do not treat more
+   attention width or more steps on the final invariant atom state as a response model.
+16. Freeze the six-direction Rademacher step-2000 checkpoint as the
+   fixed-KS-endpoint control. The next EGFH-scale pilot must replace its H
+   objective with model-density-relaxed internal-space HVP supervision and
+   must pass endpoint projected-gradient, response-residual, conditioning,
+   and cancellation gates before adding parents or directions.
 
 ## Update Rule
 

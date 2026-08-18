@@ -233,34 +233,102 @@ update 0 checkpoint SHA256:
 ca8ef66b769f3efe1e8a4c7dbbb867c983f990e5575b1a64792a0c54f0a82120
 ```
 
-The same arm remained healthy through update 18 on 2026-07-28 15:55
+The same arm remained healthy through its final configured update 40 on
+2026-07-29 16:27
 Asia/Singapore. It completed one exact 39-direction gradient accumulation and
 one full39 evaluation per update:
 
 ```text
-                           update 0       best/update 17   latest/update 18
-full39 relative Frobenius  2.5759803325   0.8665426540     0.8735228965
-full39 MAE                 0.0745226257   0.0324138950     0.0328187421
-full39 RMSE                0.2263722007   0.0761501030     0.0767635133
-gradient norm              n/a            13.727111        10.293410
-update norm                n/a            0.022799532      0.021125553
-density residual           1.09e-10       1.18e-10         1.20e-10
-maximum response residual  1.84e-12       1.46e-12         1.82e-12
-symmetry max abs           1.21e-5        2.05e-5          2.11e-5
+                           update 0       update 39        final/best update 40
+full39 relative Frobenius  2.5759803325   0.5805735697     0.5790032917
+full39 MAE                 0.0745226257   0.0236841692     0.0239202258
+full39 RMSE                0.2263722007   0.0510196895     0.0508816965
+gradient norm              n/a            13.719945        9.370700
+update norm                n/a            0.011533226      0.010710857
+density residual           1.09e-10       7.42e-11         7.00e-11
+maximum response residual  1.84e-12       2.41e-12         2.02e-12
+symmetry max abs           1.21e-5        1.86e-5          1.86e-5
 ```
 
-The latest result is a 66.09% reduction from the fresh relative Frobenius
-baseline, while the best evaluated result is a 66.36% reduction. Update 18 is
-0.81% worse than update 17, so this is a local oscillation rather than a new
-best checkpoint. The best error remains 17.33 times above the 0.05 capacity
-gate. No capacity freeze marker exists and no capacity conclusion is
-authorized.
+The final AdamW result is the best relative-Frobenius result for that arm: a
+77.52% reduction from the fresh baseline. Its MAE is slightly worse than at
+update 39, so the two elementwise and norm-based metrics are not strictly
+monotonic together. The final error remains 11.58 times above the 0.05
+capacity gate. AdamW therefore closed with `capacity_passed=false` and
+`status=max_updates`; no capacity conclusion is authorized.
 
-The durable update-18 checkpoint SHA256 is
-`5589cf31d43fdc9e8919c6acca0b7e0fa848a9097809b9439643378e9d14fdd0`.
-At 15:57, update 19 was in the gradient phase at direction 2/39. The process
-was active on node02 GPU 0 with about 53 GiB GPU memory and 76 GiB host RSS.
+The final AdamW checkpoint SHA256 is
+`cf3a86db4fc3b71d9d209b72128a2785b83808c737dc0b906bc36aadd6392a53`;
+its summary SHA256 is
+`4b2c465dd37e3d3b9960e55257c09ec75de174fad4870db7afe8bcda02a2ff50`.
+Total AdamW wall time was 152425.21 s (42.34 h), peak GPU allocation was
+62172.97 MiB, and maximum RSS was 75668.78 MiB.
+
+The supervisor then started an independent `energy_readout + L-BFGS` arm from
+the same fresh checkpoint. At 2026-07-30 14:34 Asia/Singapore it had completed
+update 10:
+
+```text
+                           fresh/update 0  update 8          latest update 10
+full39 relative Frobenius  2.5759803326    0.8579292655      0.8315123461
+full39 MAE                 0.0745226257    0.0324695286      0.0313209124
+full39 RMSE                0.2263722007    0.0753931750      0.0730717069
+density residual           1.19e-10        9.19e-11          9.80e-11
+maximum response residual  1.71e-12        1.39e-12          1.38e-12
+symmetry max abs           1.21e-5         1.70e-5           1.77e-5
+```
+
+L-BFGS is 19.32% better than AdamW at equal update 10, but update 10 remains
+43.61% worse than the completed AdamW arm.
+
+At 2026-07-30 18:00 Asia/Singapore the L-BFGS worker and its sequential
+supervisor were no longer running. The last durable checkpoint is update 10
+(SHA256
+`4fb530526a890fb6e8776e3cc1562a894dd17044cdd441e92c40d6a5655702ca`);
+update 11 stopped during exact gradient accumulation at direction 27/39 and
+did not produce a parameter update or metric row. `run_state.json` still says
+`running`, and there is no final summary, traceback, new `failure.json`, or
+capacity marker. The Python log ends after update 10. The node did not reboot,
+but kernel OOM records are not readable by this account. The evidence
+therefore supports only `externally terminated, cause unverified`; it does not
+support an optimizer or numerical failure claim. No automatic resume was
+performed during this result check.
+
 Stable5, train20, held directions, validation and Test100 remain locked.
+
+## Concurrent Full-Network Smoke
+
+A separate, non-formal one-update diagnostic was observed on node02 GPU 7 on
+2026-07-30. It is registered as
+`qm9_graphformer_0028399_full_network_capacity_smoke_v3`, uses only
+`0028399/sample0`, and explicitly forbids an insufficient-capacity conclusion.
+It is not part of the v2 sequential supervisor and must not be mixed into its
+formal optimizer comparison.
+
+The pretrained full-Graphformer arm completed its single AdamW update:
+
+```text
+                           update 0       update 1
+full39 relative Frobenius  2.5759803326   2.1593988786
+full39 MAE                 0.0745226257   0.0646721668
+full39 RMSE                0.2263722007   0.1897638232
+density residual           1.19e-10       1.12e-10
+maximum response residual  2.22e-12       1.64e-12
+```
+
+This finite step improves relative Frobenius by 16.17% but remains far above
+the 0.05 gate; one update cannot diagnose full-network capacity. Its checkpoint
+SHA256 is
+`aa5ba27dcce86c95b518240428db8a6e7cc82328504da865c62cfcfaaa5b7489`.
+
+The deterministic scratch arm completed only its untrained update-0 evaluation
+with relative Frobenius `15.4981179048`. Its worker also disappeared at about
+14:44 while accumulating the one formal update at direction 5/39. No
+parameter update, final metric, traceback, failure record, or capacity marker
+was produced. The durable update-0 checkpoint SHA256 is
+`04f6240351d91c93e1397cd157cf90d1693a0be164fffc50bed6b93421e85dde`.
+This termination is also classified as external and unverified. Neither smoke
+arm accessed stable5, train20, held directions, validation or Test100.
 
 ## Commands
 

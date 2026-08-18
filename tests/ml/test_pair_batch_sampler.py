@@ -91,6 +91,39 @@ def test_parent_pair_batch_sampler_shards_whole_batches_across_ranks(tmp_path):
     assert set(rank_batches[0]).isdisjoint(rank_batches[1])
 
 
+def test_parent_pair_batch_sampler_can_place_three_pairs_in_one_batch(tmp_path):
+    paths = []
+    expected_pairs = []
+    for source in range(6):
+        pair = []
+        for sign in (-1, 1):
+            path = tmp_path / f"{source}_{sign}.zarr"
+            _write_reference(path, source=source, pair_id=1, sign=sign)
+            paths.append(path)
+            pair.append(3 * (len(paths) - 1) + 2)
+        expected_pairs.append(set(pair))
+    _add_ordinary_paths(tmp_path, paths, count=4)
+    sampler = ParentPairBatchSampler(
+        _Dataset(paths),
+        batch_size=12,
+        pairs_per_batch=3,
+        shuffle=False,
+        num_replicas=1,
+        rank=0,
+    )
+
+    batches = [set(batch) for batch in sampler]
+
+    assert len(batches) == 2
+    assert all(len(batch) == 12 for batch in batches)
+    assert all(
+        sum(pair <= batch for pair in expected_pairs) == 3 for batch in batches
+    )
+    assert all(
+        sum(pair <= batch for batch in batches) == 1 for pair in expected_pairs
+    )
+
+
 def test_parent_pair_batch_sampler_can_infer_verified_filename_convention(tmp_path):
     source = tmp_path / "QM9PBEForceRandom1000PairedTrain"
     paths = [
@@ -107,6 +140,27 @@ def test_parent_pair_batch_sampler_can_infer_verified_filename_convention(tmp_pa
     )
 
     assert [set(batch) for batch in sampler] == [{2, 5}]
+
+
+def test_parent_pair_batch_sampler_ignores_reference_sample_in_filename_inference(
+    tmp_path,
+):
+    source = tmp_path / "QM9PBEForceEGFH10ScratchV1"
+    paths = [
+        source / f"0000042.{sample_id:07d}.zarr.zip"
+        for sample_id in (0, 1, 2)
+    ]
+    dataset = _Dataset(paths)
+    sampler = ParentPairBatchSampler(
+        dataset,
+        batch_size=2,
+        shuffle=False,
+        pair_source_markers=["QM9PBEForceEGFH10ScratchV1"],
+        infer_pair_metadata_from_filename=True,
+    )
+
+    assert sampler.pairs == [(8, 5)]
+    assert sampler.other_indices == [0, 1, 2]
 
 
 def test_parent_pair_batch_sampler_exposes_epoch_aware_sampler(tmp_path):

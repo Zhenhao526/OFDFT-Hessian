@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
+import math
 import resource
 import time
 from pathlib import Path
@@ -112,6 +114,9 @@ def _evaluate_point(
         initialization_mode_override=initialization_mode_override,
     )
     optimization_started = time.perf_counter()
+    tensor_energies = None
+    refinement = None
+    newton = None
     legacy_energies, final_coeffs, metadata, trace = _optimize_density(
         context, sample, args, initialization, initialization_mode
     )
@@ -196,6 +201,93 @@ def _evaluate_point(
                 "newton_energy_evaluations": 0,
             }
         )
+    if metadata.get("response_predictor_fast_path_used"):
+        fast_path_succeeded = bool(metadata.get("converged")) and math.isfinite(
+            float(metadata.get("final_gradient_norm", math.inf))
+        )
+        metadata["response_predictor_fast_path_succeeded"] = fast_path_succeeded
+        if not fast_path_succeeded:
+            failed_fast_metadata = dict(metadata)
+            failed_fast_cycles = int(metadata.get("cycles", 0))
+            failed_fast_point_elapsed_s = time.perf_counter() - point_started
+            failed_fast_optimization_elapsed_s = (
+                time.perf_counter() - optimization_started
+            )
+            fallback_reason = (
+                "fast_refiners_failed_strict_stationarity: "
+                f"final_gradient_norm={metadata.get('final_gradient_norm')}"
+            )
+            fallback_args = argparse.Namespace(**vars(args))
+            fallback_args.response_predictor_fast_refine = False
+
+            # The 80-GiB training path cannot retain a failed model graph while
+            # constructing the legacy fallback graph. Preserve scalar metadata,
+            # then explicitly release all failed-path tensor owners first.
+            sample.coeffs = sample.coeffs.detach()
+            tensor_energies = None
+            refinement = None
+            newton = None
+            legacy_energies = None
+            final_coeffs = None
+            trace = None
+            sample = None
+            metadata = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            fallback = _evaluate_point(
+                context,
+                atomic_numbers,
+                positions_bohr,
+                charge,
+                fallback_args,
+                base_coeffs=base_coeffs,
+                need_force=need_force,
+                initial_coeffs=initial_coeffs,
+                initialization_mode_override=initialization_mode_override,
+            )
+            fallback_metadata = fallback["optimization_metadata"]
+            fallback_metadata["cycles"] = (
+                int(fallback_metadata.get("cycles", 0)) + failed_fast_cycles
+            )
+            fallback_metadata.update(
+                {
+                    "response_predictor_fast_path_attempted": True,
+                    "response_predictor_fast_path_used": True,
+                    "response_predictor_fast_path_succeeded": False,
+                    "response_predictor_fast_path_fallback_reason": fallback_reason,
+                    "response_predictor_fast_path_initial_gradient_norm": failed_fast_metadata.get(
+                        "response_predictor_fast_path_initial_gradient_norm"
+                    ),
+                    "response_predictor_fast_path_lbfgs_final_gradient_norm": failed_fast_metadata.get(
+                        "lbfgs_final_gradient_norm"
+                    ),
+                    "response_predictor_fast_path_newton_final_gradient_norm": failed_fast_metadata.get(
+                        "newton_final_gradient_norm"
+                    ),
+                    "response_predictor_fast_path_failed_cycles": failed_fast_cycles,
+                    "response_predictor_fast_path_failed_lbfgs_closure_evaluations": failed_fast_metadata.get(
+                        "lbfgs_closure_evaluations", 0
+                    ),
+                    "response_predictor_fast_path_failed_newton_energy_evaluations": failed_fast_metadata.get(
+                        "newton_energy_evaluations", 0
+                    ),
+                    "response_predictor_fast_path_failed_newton_krylov_iterations": failed_fast_metadata.get(
+                        "newton_krylov_iterations", []
+                    ),
+                    "response_predictor_fast_path_failed_point_elapsed_s": (
+                        failed_fast_point_elapsed_s
+                    ),
+                }
+            )
+            fallback["total_point_elapsed_s"] = float(
+                fallback["total_point_elapsed_s"] + failed_fast_point_elapsed_s
+            )
+            fallback["density_optimization_elapsed_s"] = float(
+                fallback["density_optimization_elapsed_s"]
+                + failed_fast_optimization_elapsed_s
+            )
+            return fallback
     density_optimization_elapsed_s = time.perf_counter() - optimization_started
     result: dict[str, Any] = {
         "legacy_total_energy": float(legacy_energies.total_energy),

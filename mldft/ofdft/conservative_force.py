@@ -29,6 +29,7 @@ from mldft.ofdft.geometry_integrals import (
     GeometryIntegralBundle,
     integral_tensor_from_bundle,
 )
+from mldft.ofdft.torch_integrals import TorchAutogradLibcintIntegralProvider
 
 
 @dataclass
@@ -38,7 +39,12 @@ class DifferentiableGeometry:
     sample: OFData
     positions: torch.Tensor
     coeffs: torch.Tensor
-    bundle: GeometryIntegralBundle
+    bundle: GeometryIntegralBundle | None
+    normalization_untransformed: torch.Tensor | None = None
+    coulomb_untransformed: torch.Tensor | None = None
+    nuclear_attraction_untransformed: torch.Tensor | None = None
+    integral_derivative_backend: str | None = None
+    integral_directional_second_backend: str | None = None
 
 
 @dataclass
@@ -119,6 +125,7 @@ def prepare_differentiable_geometry(
     coeffs_untransformed: np.ndarray | torch.Tensor,
     integral_provider: FiniteDifferencePySCFIntegralProvider | None = None,
     integral_bundle: GeometryIntegralBundle | None = None,
+    torch_integral_provider: TorchAutogradLibcintIntegralProvider | None = None,
     integral_derivative_step_bohr: float = 1e-4,
     charge: int = 0,
     require_coefficient_grad: bool = True,
@@ -139,14 +146,19 @@ def prepare_differentiable_geometry(
         positions_bohr.detach().cpu() if isinstance(positions_bohr, torch.Tensor) else positions_bohr,
         dtype=np.float64,
     )
-    if integral_provider is None:
+    if integral_bundle is not None and torch_integral_provider is not None:
+        raise ValueError(
+            "integral_bundle and torch_integral_provider are mutually exclusive"
+        )
+    if integral_provider is None and torch_integral_provider is None:
         integral_provider = FiniteDifferencePySCFIntegralProvider(
             atomic_numbers=atomic_numbers_np,
             basis=sample_generator.basis_info.basis_dict,
             charge=charge,
             derivative_step_bohr=integral_derivative_step_bohr,
         )
-    if integral_bundle is None:
+    if integral_bundle is None and torch_integral_provider is None:
+        assert integral_provider is not None
         integral_bundle = integral_provider.evaluate_with_derivatives(positions_np)
 
     # The configured transforms may begin on CPU and move the finished sample to the model device.
@@ -159,45 +171,57 @@ def prepare_differentiable_geometry(
         coeffs = coeffs.to(device=positions.device, dtype=torch.float64)
     if require_coefficient_grad and not coeffs.requires_grad:
         coeffs.requires_grad_(True)
-    values = integral_bundle.values
-    derivatives = integral_bundle.derivatives
-    directional = integral_bundle.directional_second_derivatives
-    normalization = integral_tensor_from_bundle(
-        values.normalization,
-        derivatives.normalization,
-        positions,
-        integral_bundle,
-        directional_second_derivative=(
-            None if directional is None else directional.normalization
-        ),
-    )
-    overlap = integral_tensor_from_bundle(
-        values.overlap,
-        derivatives.overlap,
-        positions,
-        integral_bundle,
-        directional_second_derivative=(
-            None if directional is None else directional.overlap
-        ),
-    )
-    coulomb = integral_tensor_from_bundle(
-        values.coulomb,
-        derivatives.coulomb,
-        positions,
-        integral_bundle,
-        directional_second_derivative=(
-            None if directional is None else directional.coulomb
-        ),
-    )
-    attraction = integral_tensor_from_bundle(
-        values.nuclear_attraction,
-        derivatives.nuclear_attraction,
-        positions,
-        integral_bundle,
-        directional_second_derivative=(
-            None if directional is None else directional.nuclear_attraction
-        ),
-    )
+    if torch_integral_provider is not None:
+        torch_values = torch_integral_provider.evaluate(positions)
+        normalization = torch_values.normalization
+        overlap = torch_values.overlap
+        coulomb = torch_values.coulomb
+        attraction = torch_values.nuclear_attraction
+        derivative_backend = torch_values.derivative_backend
+        directional_second_backend = torch_values.directional_second_backend
+    else:
+        assert integral_bundle is not None
+        values = integral_bundle.values
+        derivatives = integral_bundle.derivatives
+        directional = integral_bundle.directional_second_derivatives
+        normalization = integral_tensor_from_bundle(
+            values.normalization,
+            derivatives.normalization,
+            positions,
+            integral_bundle,
+            directional_second_derivative=(
+                None if directional is None else directional.normalization
+            ),
+        )
+        overlap = integral_tensor_from_bundle(
+            values.overlap,
+            derivatives.overlap,
+            positions,
+            integral_bundle,
+            directional_second_derivative=(
+                None if directional is None else directional.overlap
+            ),
+        )
+        coulomb = integral_tensor_from_bundle(
+            values.coulomb,
+            derivatives.coulomb,
+            positions,
+            integral_bundle,
+            directional_second_derivative=(
+                None if directional is None else directional.coulomb
+            ),
+        )
+        attraction = integral_tensor_from_bundle(
+            values.nuclear_attraction,
+            derivatives.nuclear_attraction,
+            positions,
+            integral_bundle,
+            directional_second_derivative=(
+                None if directional is None else directional.nuclear_attraction
+            ),
+        )
+        derivative_backend = integral_bundle.derivative_backend
+        directional_second_backend = integral_bundle.directional_second_backend
 
     sample = OFData.construct_new(
         basis_info=sample_generator.basis_info,
@@ -221,6 +245,32 @@ def prepare_differentiable_geometry(
         positions=positions,
         coeffs=coeffs,
         bundle=integral_bundle,
+        normalization_untransformed=normalization,
+        coulomb_untransformed=coulomb,
+        nuclear_attraction_untransformed=attraction,
+        integral_derivative_backend=derivative_backend,
+        integral_directional_second_backend=directional_second_backend,
+    )
+
+
+def _untransformed_integral_tensor(
+    geometry: DifferentiableGeometry,
+    field: str,
+) -> torch.Tensor:
+    direct = getattr(geometry, f"{field}_untransformed")
+    if direct is not None:
+        return direct
+    if geometry.bundle is None:
+        raise RuntimeError(f"geometry lacks an untransformed {field} tensor")
+    directional = geometry.bundle.directional_second_derivatives
+    return integral_tensor_from_bundle(
+        getattr(geometry.bundle.values, field),
+        getattr(geometry.bundle.derivatives, field),
+        geometry.positions,
+        geometry.bundle,
+        directional_second_derivative=(
+            None if directional is None else getattr(directional, field)
+        ),
     )
 
 
@@ -356,31 +406,16 @@ def evaluate_total_ofdft_force(
             device=reference_energy.device, dtype=reference_energy.dtype
         )
 
-    directional = geometry.bundle.directional_second_derivatives
     if "hartree" in energies.energies_dict:
-        coulomb_untransformed = integral_tensor_from_bundle(
-            geometry.bundle.values.coulomb,
-            geometry.bundle.derivatives.coulomb,
-            geometry.positions,
-            geometry.bundle,
-            directional_second_derivative=(
-                None if directional is None else directional.coulomb
-            ),
+        coulomb_untransformed = _untransformed_integral_tensor(
+            geometry, "coulomb"
         )
         energies["hartree"] = to_energy_device(
             hartree_energy_tensor(geometry.coeffs, coulomb_untransformed)
         )
     if "nuclear_attraction" in energies.energies_dict:
-        attraction_untransformed = integral_tensor_from_bundle(
-            geometry.bundle.values.nuclear_attraction,
-            geometry.bundle.derivatives.nuclear_attraction,
-            geometry.positions,
-            geometry.bundle,
-            directional_second_derivative=(
-                None
-                if directional is None
-                else directional.nuclear_attraction
-            ),
+        attraction_untransformed = _untransformed_integral_tensor(
+            geometry, "nuclear_attraction"
         )
         energies["nuclear_attraction"] = to_energy_device(
             nuclear_attraction_energy_tensor(
@@ -427,14 +462,8 @@ def evaluate_total_ofdft_force(
             f"h={model_geometry_fd_step_bohr:g} Bohr"
             + (" with Richardson h/2" if model_geometry_fd_richardson else "")
         )
-    normalization_untransformed = integral_tensor_from_bundle(
-        geometry.bundle.values.normalization,
-        geometry.bundle.derivatives.normalization,
-        geometry.positions,
-        geometry.bundle,
-        directional_second_derivative=(
-            None if directional is None else directional.normalization
-        ),
+    normalization_untransformed = _untransformed_integral_tensor(
+        geometry, "normalization"
     )
     _, multiplier, projected_norm = _stationarity_diagnostics(
         energies.total_energy,

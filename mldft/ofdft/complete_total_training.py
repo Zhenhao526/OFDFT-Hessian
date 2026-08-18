@@ -43,6 +43,31 @@ def alternating_update_kind(
     return "hvp" if cumulative_step % hvp_update_period == 0 else "replay"
 
 
+def assign_parameter_only_gradients(
+    loss: torch.Tensor,
+    parameters: Iterable[torch.nn.Parameter],
+) -> tuple[torch.Tensor | None, ...]:
+    """Differentiate a training loss only with respect to optimizer parameters.
+
+    ``loss.backward()`` also requests gradients for unrelated leaf tensors such
+    as nuclear coordinates.  For an HVP loss that asks an integral backend for
+    one unnecessary additional coordinate derivative.  Optimizer semantics
+    require only model-parameter gradients, so explicitly target that set and
+    leave all other leaves untouched.
+    """
+    parameter_list = list(parameters)
+    if not parameter_list:
+        raise ValueError("parameter-only backward requires at least one parameter")
+    gradients = torch.autograd.grad(
+        loss,
+        parameter_list,
+        allow_unused=True,
+    )
+    for parameter, gradient in zip(parameter_list, gradients, strict=True):
+        parameter.grad = None if gradient is None else gradient.detach()
+    return gradients
+
+
 def assign_two_task_pcgrad(
     first_loss: torch.Tensor,
     second_loss: torch.Tensor,
@@ -480,7 +505,8 @@ def implicit_stationary_density_parameter_response(
 
     The forward value is unchanged. During backward, a matrix-free constrained coefficient-Hessian
     solve supplies ``dc_star/dtheta`` through the implicit-function theorem. This handles parameter
-    response only; geometry response remains represented by strict force secants at ``R +/- h v``.
+    response only; the caller must supply its separately defined geometry-response
+    path (the canonical v4 branch uses the constrained analytic KKT response).
     """
     if (
         tolerance <= 0
@@ -789,6 +815,133 @@ def hutchinson_internal_frobenius_squared_loss(
     )
 
 
+def electron_number_tangent_projection(
+    vector: torch.Tensor,
+    normalization: torch.Tensor,
+) -> torch.Tensor:
+    """Project one coefficient-space vector onto the fixed-electron-number tangent space.
+
+    ``normalization`` is the coefficient-space gradient of the electron-number
+    constraint ``q.T @ c = N``.  The operation is deliberately defined here,
+    rather than reconstructed independently by each E/G/F/H caller, so label
+    gradient training and density-stationarity diagnostics use the same gauge.
+    """
+    if vector.ndim != 1 or normalization.ndim != 1:
+        raise ValueError("vector and normalization must be one-dimensional")
+    if vector.shape != normalization.shape:
+        raise ValueError(
+            f"vector shape {vector.shape} != normalization shape {normalization.shape}"
+        )
+    normalization = normalization.to(device=vector.device, dtype=vector.dtype)
+    if not bool(torch.isfinite(vector.detach()).all().cpu()) or not bool(
+        torch.isfinite(normalization.detach()).all().cpu()
+    ):
+        raise ValueError("vector and normalization must be finite")
+    norm_squared = torch.dot(normalization, normalization)
+    if bool((norm_squared <= 0).detach().cpu()):
+        raise ValueError("normalization must be nonzero")
+    return vector - normalization * (
+        torch.dot(normalization, vector) / norm_squared
+    )
+
+
+def structures25_projected_gradient_mse(
+    predicted_kin_plus_xc_gradient: torch.Tensor,
+    target_kin_plus_xc_gradient: torch.Tensor,
+    normalization: torch.Tensor,
+    *,
+    absolute_scale: float,
+) -> torch.Tensor:
+    """Match the canonical Structures25 ``kin_plus_xc`` derivative modulo chemical potential.
+
+    Both gradients are derivatives with respect to the same untransformed
+    auxiliary-density coefficients.  Only their electron-number-tangent
+    difference is observable under ``q.T @ c = N``.  The mean-square reduction
+    makes the loss independent of the number of auxiliary coefficients.
+    """
+    if predicted_kin_plus_xc_gradient.shape != target_kin_plus_xc_gradient.shape:
+        raise ValueError(
+            "predicted and target kin_plus_xc gradient shapes differ: "
+            f"{predicted_kin_plus_xc_gradient.shape} versus "
+            f"{target_kin_plus_xc_gradient.shape}"
+        )
+    if absolute_scale <= 0:
+        raise ValueError("absolute_scale must be positive")
+    target = target_kin_plus_xc_gradient.to(
+        device=predicted_kin_plus_xc_gradient.device,
+        dtype=predicted_kin_plus_xc_gradient.dtype,
+    )
+    projected_error = electron_number_tangent_projection(
+        predicted_kin_plus_xc_gradient - target,
+        normalization,
+    )
+    return torch.mean((projected_error / absolute_scale) ** 2)
+
+
+def hutchinson_internal_projected_frobenius_squared_loss(
+    prediction_hvp: torch.Tensor,
+    target_hvp: torch.Tensor,
+    internal_basis: torch.Tensor,
+    *,
+    reduction: str = "sum",
+) -> torch.Tensor:
+    """Return a Hutchinson estimator aligned with the two-sided internal Hessian.
+
+    The rows of ``internal_basis`` are an orthonormal Cartesian internal basis
+    ``B`` and both HVPs use ``v = B.T @ z``.  Projecting the output with ``B``
+    gives ``B (H_pred-H_ref) B.T z``.  Its expected squared norm is exactly the
+    Frobenius-square error of the internal matrix used by final evaluation.
+    """
+    if prediction_hvp.shape != target_hvp.shape:
+        raise ValueError(
+            f"prediction shape {prediction_hvp.shape} != target shape {target_hvp.shape}"
+        )
+    if prediction_hvp.numel() == 0:
+        raise ValueError("prediction and target must be non-empty")
+    if internal_basis.ndim != 2:
+        raise ValueError("internal_basis must be a rank-two tensor")
+    if internal_basis.shape[1] != prediction_hvp.numel():
+        raise ValueError(
+            "internal basis Cartesian dimension does not match the HVP: "
+            f"{internal_basis.shape[1]} != {prediction_hvp.numel()}"
+        )
+    if internal_basis.shape[0] <= 0:
+        raise ValueError("internal_basis must contain at least one direction")
+    basis = internal_basis.to(device=prediction_hvp.device, dtype=prediction_hvp.dtype)
+    target = target_hvp.to(device=prediction_hvp.device, dtype=prediction_hvp.dtype)
+    if (
+        not bool(torch.isfinite(prediction_hvp.detach()).all().cpu())
+        or not bool(torch.isfinite(target.detach()).all().cpu())
+        or not bool(torch.isfinite(basis.detach()).all().cpu())
+    ):
+        raise ValueError("prediction, target, and internal_basis must be finite")
+    gram = basis @ basis.T
+    identity = torch.eye(gram.shape[0], dtype=gram.dtype, device=gram.device)
+    orthonormal_tolerance = (
+        1.0e-10 if gram.dtype == torch.float64 else 1.0e-5
+    )
+    if not bool(
+        torch.allclose(
+            gram,
+            identity,
+            atol=orthonormal_tolerance,
+            rtol=orthonormal_tolerance,
+        )
+    ):
+        raise ValueError("internal_basis rows must be orthonormal")
+    internal_error = basis @ (prediction_hvp - target).reshape(-1)
+    squared_error = torch.sum(internal_error**2)
+    if reduction == "sum":
+        return squared_error
+    if reduction == "mean_internal_matrix":
+        internal_dimension = float(basis.shape[0])
+        return squared_error / (internal_dimension * internal_dimension)
+    raise ValueError(
+        "reduction must be 'sum' or 'mean_internal_matrix', "
+        f"got {reduction!r}"
+    )
+
+
 def normalized_energy_l1(
     prediction: torch.Tensor,
     target: torch.Tensor | float,
@@ -890,12 +1043,17 @@ def parameter_gradient_diagnostics(
     parameters: Iterable[torch.nn.Parameter],
     *,
     parameter_names: Iterable[str] | None = None,
+    precomputed_gradients: Mapping[
+        str, Iterable[torch.Tensor | None]
+    ] | None = None,
 ) -> dict[str, float]:
     """Measure per-loss gradient norms, module contributions, and cosine conflicts.
 
     The caller must invoke this before the final backward pass. Graphs are retained and parameter
-    ``.grad`` buffers are not modified. When names are supplied, the first dotted name component
-    defines a module group and its squared-norm fraction is reported without another autograd pass.
+    ``.grad`` buffers are not modified. ``precomputed_gradients`` accepts memory-safe
+    microbatch gradients after their individual graphs have been released. When names are
+    supplied, the first dotted name component defines a module group and its squared-norm
+    fraction is reported without another autograd pass.
     """
     parameter_list = list(parameters)
     if parameter_names is None:
@@ -924,14 +1082,44 @@ def parameter_gradient_diagnostics(
             allow_unused=True,
         )
         gradients[name] = values
-        squared = loss.new_zeros(())
+
+    for name, supplied in (precomputed_gradients or {}).items():
+        if name in gradients:
+            raise ValueError(
+                f"gradient diagnostics received duplicate task {name!r}"
+            )
+        values = tuple(supplied)
+        if len(values) != len(trainable):
+            raise ValueError(
+                "precomputed gradient tuples must align with trainable parameters"
+            )
+        gradients[name] = values
+
+    if not gradients:
+        return {}
+    reference = next(iter(losses.values()), None)
+    if reference is None:
+        reference = next(
+            (
+                value
+                for values in gradients.values()
+                for value in values
+                if value is not None
+            ),
+            None,
+        )
+    if reference is None:
+        raise ValueError("gradient diagnostics require at least one tensor")
+
+    for name, values in gradients.items():
+        squared = reference.new_zeros(())
         group_squared: dict[str, torch.Tensor] = {}
         for group, value in zip(groups, values):
             if value is not None:
                 contribution = torch.sum(value.detach() ** 2)
                 squared = squared + contribution
                 group_squared[group] = group_squared.get(
-                    group, loss.new_zeros(())
+                    group, reference.new_zeros(())
                 ) + contribution
         norm = torch.sqrt(squared)
         norms[name] = norm
@@ -946,8 +1134,8 @@ def parameter_gradient_diagnostics(
                     (contribution / denominator).detach().cpu()
                 )
 
-    for left, right in itertools.combinations(losses, 2):
-        dot = losses[left].new_zeros(())
+    for left, right in itertools.combinations(gradients, 2):
+        dot = reference.new_zeros(())
         for left_gradient, right_gradient in zip(gradients[left], gradients[right]):
             if left_gradient is not None and right_gradient is not None:
                 dot = dot + torch.sum(left_gradient.detach() * right_gradient.detach())

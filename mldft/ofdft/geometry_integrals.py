@@ -9,6 +9,7 @@ future analytic integral derivative implementations.
 
 from __future__ import annotations
 
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,7 @@ import torch
 from pyscf import gto
 
 from mldft.ofdft.basis_integrals import (
+    FLAT_GAUSSIAN_CORRECTION,
     get_coulomb_matrix,
     get_normalization_vector,
     get_nuclear_attraction_vector,
@@ -59,6 +61,8 @@ class GeometryIntegralBundle:
     directional_second_derivatives: GeometryIntegralDerivatives | None = None
     direction: np.ndarray | None = None
     directional_second_step_bohr: float | None = None
+    derivative_backend: str = "finite_difference_pyscf"
+    directional_second_backend: str | None = None
 
 
 class FiniteDifferencePySCFIntegralProvider:
@@ -231,6 +235,7 @@ class FiniteDifferencePySCFIntegralProvider:
             derivatives=derivatives,
             positions_bohr=positions_bohr.copy(),
             derivative_step_bohr=step,
+            derivative_backend="finite_difference_pyscf",
         )
 
     def evaluate_with_directional_second_derivatives(
@@ -293,6 +298,316 @@ class FiniteDifferencePySCFIntegralProvider:
             ),
             direction=direction_np.copy(),
             directional_second_step_bohr=step,
+            derivative_backend="finite_difference_pyscf",
+            directional_second_backend="finite_difference_of_first_derivatives",
+        )
+
+
+class AutodiffPySCFIntegralProvider(FiniteDifferencePySCFIntegralProvider):
+    """PySCFAD/JAX nuclear-coordinate derivatives for the OFDFT integral bundle.
+
+    PySCFAD supplies custom automatic-differentiation rules for libcint.  This
+    provider evaluates integral values, their complete coordinate Jacobians,
+    and directional derivatives of those Jacobians without nuclear-coordinate
+    finite differences.  The resulting arrays are injected into the torch
+    scalar-energy graph as a custom differentiable primitive; Graphformer,
+    density-response, and parameter derivatives therefore retain their native
+    torch autograd path.
+
+    PySCFAD is an optional, isolated runtime dependency.  Import failure is
+    fatal when this provider is selected and never falls back to the numerical
+    reference provider.
+    """
+
+    backend_name = "pyscfad_jax_autodiff"
+
+    def __init__(
+        self,
+        atomic_numbers: np.ndarray | torch.Tensor,
+        basis: str | dict[str, Any],
+        charge: int = 0,
+        spin: int | None = None,
+        derivative_step_bohr: float = 0.0,
+        analytic_overlap_derivative: bool = True,
+        derivative_workers: int = 1,
+    ) -> None:
+        if derivative_step_bohr != 0.0:
+            raise ValueError(
+                "pyscfad_autodiff requires derivative_step_bohr=0; "
+                "nuclear-coordinate finite differences are forbidden"
+            )
+        atomic_numbers_array = np.asarray(atomic_numbers, dtype=np.int64)
+        if atomic_numbers_array.ndim != 1:
+            raise ValueError("atomic_numbers must be one-dimensional")
+        if derivative_workers <= 0:
+            raise ValueError("derivative_workers must be positive")
+        self.atomic_numbers = atomic_numbers_array
+        self.basis = basis
+        self.charge = int(charge)
+        nelectron = int(np.sum(atomic_numbers_array) - charge)
+        self.spin = nelectron % 2 if spin is None else int(spin)
+        self.derivative_step_bohr = 0.0
+        self.analytic_overlap_derivative = bool(analytic_overlap_derivative)
+        self.derivative_workers = int(derivative_workers)
+
+    @staticmethod
+    def _autodiff_modules() -> tuple[Any, Any, Any, Any]:
+        try:
+            import jax
+            import jax.numpy as jnp
+            from pyscfad import gto as ad_gto
+            from pyscfad.gto import moleintor as ad_moleintor
+        except ImportError as error:  # pragma: no cover - exercised on the remote runtime
+            raise RuntimeError(
+                "pyscfad_autodiff integral derivatives require the isolated "
+                "PySCFAD/JAX runtime; numerical fallback is forbidden"
+            ) from error
+        jax.config.update("jax_enable_x64", True)
+        return jax, jnp, ad_gto, ad_moleintor
+
+    def _build_autodiff_molecule(self, positions_bohr: np.ndarray) -> Any:
+        _, _, ad_gto, _ = self._autodiff_modules()
+        positions_bohr = np.asarray(positions_bohr, dtype=np.float64)
+        expected_shape = (self.atomic_numbers.size, 3)
+        if positions_bohr.shape != expected_shape:
+            raise ValueError(
+                f"positions_bohr must have shape {expected_shape}, got {positions_bohr.shape}"
+            )
+        molecule = ad_gto.Mole()
+        molecule.atom = [
+            (int(charge), tuple(float(value) for value in position))
+            for charge, position in zip(self.atomic_numbers, positions_bohr)
+        ]
+        molecule.unit = "Bohr"
+        molecule.charge = self.charge
+        molecule.spin = self.spin
+        molecule.basis = self.basis
+        molecule.verbose = 0
+        molecule.build(
+            trace_coords=True,
+            trace_exp=False,
+            trace_ctr_coeff=False,
+        )
+        return molecule
+
+    @staticmethod
+    def _one_center_vector(molecule: Any, intor_name: str, jnp: Any, ad_moleintor: Any) -> Any:
+        """Evaluate ``<aux|operator|1>`` with the historical flat Gaussian."""
+        local = copy.copy(molecule)
+        environment = jnp.append(
+            local._env,
+            jnp.asarray([0.0, 1.0], dtype=local._env.dtype),
+        )
+        basis = np.zeros(
+            (local._bas.shape[0] + 1, local._bas.shape[1]), dtype=np.int32
+        )
+        basis[:-1] = local._bas
+        basis[-1] = [
+            local._atm.shape[0] - 1,
+            0,
+            1,
+            1,
+            0,
+            environment.size - 2,
+            environment.size - 1,
+            0,
+        ]
+        local._bas = basis
+        local._env = environment
+        shell_count = basis.shape[0]
+        value = ad_moleintor.intor(
+            local,
+            local._add_suffix(intor_name),
+            shls_slice=(0, shell_count - 1, shell_count - 1, shell_count),
+        )
+        return jnp.squeeze(value, axis=-1) * FLAT_GAUSSIAN_CORRECTION
+
+    @staticmethod
+    def _lite_one_center_vector(
+        molecule: Any, intor_name: str, jnp: Any
+    ) -> Any:
+        """MoleLite counterpart with a traceable ``rinv`` origin."""
+        local = molecule.copy(deep=True)
+        environment = jnp.append(
+            local._env,
+            jnp.asarray([0.0, 1.0], dtype=local._env.dtype),
+        )
+        basis = np.zeros(
+            (local._bas.shape[0] + 1, local._bas.shape[1]), dtype=np.int32
+        )
+        basis[:-1] = local._bas
+        basis[-1] = [
+            local._atm.shape[0] - 1,
+            0,
+            1,
+            1,
+            0,
+            environment.size - 2,
+            environment.size - 1,
+            0,
+        ]
+        local._bas = basis
+        local._env = environment
+        shell_count = basis.shape[0]
+        value = local.intor(
+            intor_name,
+            shls_slice=(0, shell_count - 1, shell_count - 1, shell_count),
+        )
+        return jnp.squeeze(value, axis=-1) * FLAT_GAUSSIAN_CORRECTION
+
+    def _nuclear_attraction_vector(self, coordinates: Any, jnp: Any) -> Any:
+        """Evaluate ``-sum_A Z_A <aux|1/r_A|1>`` with traceable centres."""
+        from pyscfad.gto.mole_lite import MoleLite
+
+        molecule = MoleLite(
+            numbers=tuple(int(value) for value in self.atomic_numbers),
+            coords=coordinates,
+            basis=self.basis,
+            charge=self.charge,
+            spin=self.spin,
+            verbose=0,
+            trace_coords=True,
+            trace_basis=False,
+        )
+        result = None
+        for atom_index, charge in enumerate(self.atomic_numbers):
+            with molecule.with_rinv_origin(coordinates[atom_index]):
+                contribution = -float(charge) * self._lite_one_center_vector(
+                    molecule, "int1e_rinv", jnp
+                )
+            result = contribution if result is None else result + contribution
+        if result is None:
+            raise ValueError("nuclear attraction requires at least one atom")
+        return result
+
+    def _field_function(self, molecule: Any) -> tuple[Any, Any]:
+        _, jnp, _, ad_moleintor = self._autodiff_modules()
+
+        def fields(coordinates: Any) -> tuple[Any, Any, Any, Any, Any]:
+            local = copy.copy(molecule)
+            local.coords = coordinates
+            return (
+                self._one_center_vector(
+                    local, "int1e_ovlp", jnp, ad_moleintor
+                ),
+                local.intor("int1e_ovlp"),
+                local.intor("int2c2e"),
+                self._nuclear_attraction_vector(coordinates, jnp),
+                local.energy_nuc(),
+            )
+
+        return fields, jnp
+
+    @staticmethod
+    def _coordinate_leading(value: Any) -> np.ndarray:
+        array = np.asarray(value, dtype=np.float64)
+        if array.ndim < 2:
+            raise ValueError("autodiff coordinate derivative lacks nuclear axes")
+        return np.moveaxis(array, (-2, -1), (0, 1)).reshape(
+            (-1,) + array.shape[:-2]
+        )
+
+    @staticmethod
+    def _values_from_tuple(values: tuple[Any, Any, Any, Any, Any]) -> GeometryIntegralValues:
+        normalization, overlap, coulomb, attraction, nuclear_repulsion = values
+        return GeometryIntegralValues(
+            normalization=np.asarray(normalization, dtype=np.float64),
+            overlap=np.asarray(overlap, dtype=np.float64),
+            coulomb=np.asarray(coulomb, dtype=np.float64),
+            nuclear_attraction=np.asarray(attraction, dtype=np.float64),
+            nuclear_repulsion=float(np.asarray(nuclear_repulsion)),
+        )
+
+    def _derivatives_from_tuple(
+        self, derivatives: tuple[Any, Any, Any, Any, Any]
+    ) -> GeometryIntegralDerivatives:
+        normalization, overlap, coulomb, attraction, nuclear_repulsion = derivatives
+        return GeometryIntegralDerivatives(
+            normalization=self._coordinate_leading(normalization),
+            overlap=self._coordinate_leading(overlap),
+            coulomb=self._coordinate_leading(coulomb),
+            nuclear_attraction=self._coordinate_leading(attraction),
+            nuclear_repulsion=self._coordinate_leading(nuclear_repulsion),
+        )
+
+    def evaluate(self, positions_bohr: np.ndarray) -> GeometryIntegralValues:
+        molecule = self._build_autodiff_molecule(positions_bohr)
+        fields, _ = self._field_function(molecule)
+        return self._values_from_tuple(fields(molecule.coords))
+
+    def evaluate_with_derivatives(
+        self, positions_bohr: np.ndarray
+    ) -> GeometryIntegralBundle:
+        jax, _, _, _ = self._autodiff_modules()
+        positions_bohr = np.asarray(positions_bohr, dtype=np.float64)
+        molecule = self._build_autodiff_molecule(positions_bohr)
+        fields, _ = self._field_function(molecule)
+        values = fields(molecule.coords)
+        derivatives = jax.jacfwd(fields)(molecule.coords)
+        return GeometryIntegralBundle(
+            values=self._values_from_tuple(values),
+            derivatives=self._derivatives_from_tuple(derivatives),
+            positions_bohr=positions_bohr.copy(),
+            derivative_step_bohr=0.0,
+            derivative_backend=self.backend_name,
+        )
+
+    def evaluate_with_directional_second_derivatives(
+        self,
+        positions_bohr: np.ndarray,
+        direction: np.ndarray | torch.Tensor,
+        *,
+        directional_step_bohr: float | None = None,
+    ) -> GeometryIntegralBundle:
+        """Return AD Jacobians and their exact JVP along ``direction``."""
+        if directional_step_bohr not in (None, 0.0):
+            raise ValueError(
+                "pyscfad_autodiff forbids a finite directional displacement"
+            )
+        jax, jnp, _, _ = self._autodiff_modules()
+        positions_bohr = np.asarray(positions_bohr, dtype=np.float64)
+        direction_np = np.asarray(
+            direction.detach().cpu()
+            if isinstance(direction, torch.Tensor)
+            else direction,
+            dtype=np.float64,
+        )
+        if direction_np.shape != positions_bohr.shape:
+            raise ValueError(
+                f"direction must have shape {positions_bohr.shape}, got {direction_np.shape}"
+            )
+        if not np.all(np.isfinite(direction_np)):
+            raise ValueError("direction must be finite")
+        if float(np.linalg.norm(direction_np)) == 0.0:
+            raise ValueError("direction must be nonzero")
+
+        molecule = self._build_autodiff_molecule(positions_bohr)
+        fields, _ = self._field_function(molecule)
+        values = fields(molecule.coords)
+        jacobian_function = jax.jacfwd(fields)
+        derivatives = jacobian_function(molecule.coords)
+        direction_ad = jnp.asarray(direction_np, dtype=molecule.coords.dtype)
+
+        def directional_first(coordinates: Any) -> tuple[Any, Any, Any, Any, Any]:
+            return jax.jvp(
+                fields,
+                (coordinates,),
+                (direction_ad,),
+            )[1]
+
+        directional_second = self._derivatives_from_tuple(
+            jax.jacfwd(directional_first)(molecule.coords)
+        )
+        return GeometryIntegralBundle(
+            values=self._values_from_tuple(values),
+            derivatives=self._derivatives_from_tuple(derivatives),
+            positions_bohr=positions_bohr.copy(),
+            derivative_step_bohr=0.0,
+            directional_second_derivatives=directional_second,
+            direction=direction_np.copy(),
+            directional_second_step_bohr=0.0,
+            derivative_backend=self.backend_name,
+            directional_second_backend="pyscfad_jacfwd_of_jvp_with_traceable_rinv",
         )
 
 

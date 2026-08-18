@@ -18,7 +18,13 @@ def _write_qm9_xyz(path):
     )
 
 
-def _dataset(tmp_path, num_perturbations=2, paired_perturbations=False):
+def _dataset(
+    tmp_path,
+    num_perturbations=2,
+    paired_perturbations=False,
+    perturbation_distribution="gaussian",
+    remove_translation=True,
+):
     raw_data_dir = tmp_path / "raw"
     raw_data_dir.mkdir()
     _write_qm9_xyz(raw_data_dir / "dsgdb9nsd_000001.xyz")
@@ -29,8 +35,10 @@ def _dataset(tmp_path, num_perturbations=2, paired_perturbations=False):
         filename="qm9_geom_test",
         num_perturbations=num_perturbations,
         perturbation_std=0.01,
+        perturbation_distribution=perturbation_distribution,
         max_displacement=0.05,
         random_seed=7,
+        remove_translation=remove_translation,
         paired_perturbations=paired_perturbations,
         name="QM9GeometryPerturbedTest",
     )
@@ -91,3 +99,25 @@ def test_qm9_paired_geometry_perturbations_are_exact_opposites(tmp_path):
 def test_qm9_paired_geometry_perturbations_require_even_count(tmp_path):
     with np.testing.assert_raises_regex(ValueError, "even num_perturbations"):
         _dataset(tmp_path, num_perturbations=3, paired_perturbations=True)
+
+
+def test_qm9_rademacher_perturbations_are_coordinatewise_sign_vectors(tmp_path):
+    dataset = _dataset(
+        tmp_path,
+        num_perturbations=4,
+        paired_perturbations=True,
+        perturbation_distribution="rademacher",
+        remove_translation=False,
+    )
+
+    _, reference, _, _ = dataset.load_sample(1, 0)
+    _, plus_1, _, _ = dataset.load_sample(1, 1)
+    _, minus_1, _, _ = dataset.load_sample(1, 2)
+    _, plus_2, _, _ = dataset.load_sample(1, 3)
+
+    displacement_1 = plus_1 - reference
+    displacement_2 = plus_2 - reference
+    np.testing.assert_allclose(np.abs(displacement_1), 0.01, atol=1e-14)
+    np.testing.assert_allclose(np.abs(displacement_2), 0.01, atol=1e-14)
+    np.testing.assert_allclose(displacement_1, -(minus_1 - reference), atol=1e-14)
+    assert not np.array_equal(displacement_1, displacement_2)
