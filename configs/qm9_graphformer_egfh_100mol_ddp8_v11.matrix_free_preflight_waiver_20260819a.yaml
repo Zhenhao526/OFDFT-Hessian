@@ -1,0 +1,40 @@
+waiver_id: qm9_v11_matrix_free_large_real_residual_20260819a
+waiver_status: approved_by_user
+created_at: 2026-08-19
+base_protocol:
+  path: /home/shenwei01/xzh_node02_20260724/work/qm9_graphformer_egfh_100mol_ddp8_v11/configs/qm9_graphformer_egfh_100mol_ddp8_v11.matrix_free_preflight.yaml
+  sha256: 2f1cbd8e911a6ab2509621a6a784657f993007f67c01b03cf269fca3279f707f
+waived_gate:
+  name: matrix_free_geometry_response.relative_residual
+  registered_tolerance: 1.0e-10
+  waived_observed_relative_residual: 5.583e-9
+  observed_iterations: 10000
+  observed_residual_replacements: 4048
+  observed_breakdown: maximum_total_iterations
+  probe_molecule_id: "0099964"
+  source_attempt: matrix_free_real_probe_0099964_20260818i
+  source_launcher_log: runs/qm9_graphformer_egfh_100mol_ddp8_v11/matrix_free_real_probe_0099964_20260818i.launcher.log
+scope:
+  applies_to: large_real_matrix_free_probe_only
+  exploratory_continuation: true
+  formal_calibration: false
+  formal_training: false
+non_waived_gates:
+  - canonical_implicit_response_tolerance_1e-10
+  - canonical_namespace_46_field_completeness
+  - density_and_kkt_residuals
+  - response_solver_success
+  - ddp_single_card_eight_card_consistency
+  - force_and_full_hessian_physical_error
+  - validation_only_model_selection
+  - test10_single_final_evaluation
+implementation_constraints:
+  original_failed_attempt_is_immutable: true
+  no_checkpoint_or_optimizer_reuse: true
+  no_silent_tolerance_change: true
+  no_calibration_or_training_autostart: true
+  test_accessed: false
+decision:
+  allow_recording_as_explicitly_waived_preflight: true
+  allow_downstream_formal_run: false
+  requires_new_protocol_and_observable_sensitivity_audit: true
